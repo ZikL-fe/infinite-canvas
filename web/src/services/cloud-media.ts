@@ -6,11 +6,44 @@ import { useConfigStore } from "@/stores/use-config-store";
 import { useUserStore } from "@/stores/use-user-store";
 
 type CloudKind = "image" | "video" | "audio" | "file";
+export type WorkspaceChangeScope = "canvas" | "image" | "video" | "assets" | "media" | "all";
+export const WORKSPACE_CHANGED_EVENT = "infinite-canvas:workspace-data-changed";
 
 const inFlightUrls = new Map<string, Promise<string>>();
 const inFlightBlobs = new Map<string, Promise<Blob | null>>();
+const TAB_INSTANCE_ID = Math.random().toString(36).slice(2);
+let syncChannel: BroadcastChannel | null = null;
 let cloudSyncHydrated = false;
 let lastQuotaWarningAt = 0;
+
+function getSyncChannel() {
+    if (typeof BroadcastChannel === "undefined") return null;
+    if (!syncChannel) syncChannel = new BroadcastChannel("infinite-canvas:sync");
+    return syncChannel;
+}
+
+/** 广播工作区/媒体数据变更到当前页面与同浏览器其他标签页。 */
+export function notifyCloudWorkspaceChanged(scope: WorkspaceChangeScope = "all", options?: { sync?: boolean }) {
+    if (typeof window === "undefined") return;
+    const sync = options?.sync !== false;
+    window.dispatchEvent(new CustomEvent(WORKSPACE_CHANGED_EVENT, { detail: { scope, sync } }));
+    try {
+        getSyncChannel()?.postMessage({ type: "workspace-data-changed", scope, sync, senderId: TAB_INSTANCE_ID });
+    } catch {
+        // ignore BroadcastChannel error
+    }
+}
+
+/** 订阅来自其他浏览器标签页的工作区变更广播。 */
+export function initWorkspaceBroadcastChannel(onRemoteChange: (scope: WorkspaceChangeScope, sync: boolean) => void) {
+    const ch = getSyncChannel();
+    if (!ch) return;
+    ch.onmessage = (event: MessageEvent<{ type?: string; scope?: WorkspaceChangeScope; sync?: boolean; senderId?: string }>) => {
+        const data = event.data;
+        if (!data || data.type !== "workspace-data-changed" || data.senderId === TAB_INSTANCE_ID) return;
+        onRemoteChange(data.scope || "all", data.sync !== false);
+    };
+}
 
 export function isCloudAuthenticated() {
     return Boolean(useUserStore.getState().accessToken);
@@ -156,11 +189,20 @@ export async function fetchCloudMediaBlob(storageKey: string, cacheLocal: (blob:
 
     const promise = (async () => {
         try {
+            let blob: Blob | null = null;
             const url = await resolveCloudMediaUrl(storageKey);
-            if (!url) return null;
-            const res = await fetch(url);
-            if (!res.ok) return null;
-            const blob = await res.blob();
+            if (url) {
+                try {
+                    const res = await fetch(url);
+                    if (res.ok) blob = await res.blob();
+                } catch {
+                    // 对象存储未开启 GET CORS 时降级走服务端同源下载接口
+                }
+            }
+            if (!blob) {
+                blob = await storageApi.downloadBlob(storageKey);
+            }
+            if (!blob || !blob.size) return null;
             await cacheLocal(blob);
             return blob;
         } catch {

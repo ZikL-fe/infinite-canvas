@@ -1,6 +1,6 @@
 /** 后台管理与个人后台入口页：采用左侧导航菜单与全宽内容区，管理员支持平台全局管控与个人中心切换。 */
 import { useCallback, useEffect, useState, type ReactNode } from "react";
-import { Alert, App, Button, Card, Col, DatePicker, Descriptions, Drawer, Form, Image, Input, InputNumber, Menu, Modal, Progress, Radio, Result, Row, Select, Space, Statistic, Switch, Table, Tag, Typography, Upload, theme as antdTheme } from "antd";
+import { Alert, App, Button, Card, Col, DatePicker, Descriptions, Drawer, Form, Image, Input, InputNumber, Menu, Modal, Progress, Radio, Result, Row, Select, Space, Statistic, Switch, Table, Tabs, Tag, Typography, Upload, theme as antdTheme } from "antd";
 import type { MenuProps, UploadProps } from "antd";
 import dayjs, { type Dayjs } from "dayjs";
 import { AudioLines, Copy, Coins, Cpu, Database, Download, FileIcon, FolderKanban, Gift, HardDrive, ImageIcon, LayoutDashboard, Megaphone, Menu as MenuIcon, Plus, RefreshCw, ScrollText, Shield, Sliders, UploadCloud, UserCheck, Users, Video, Wifi } from "lucide-react";
@@ -8,7 +8,7 @@ import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 
 import { ChannelEditorDrawer } from "@/components/layout/channel-editor-drawer";
 import { ADMIN_TABLE_CLASS, ADMIN_TABLE_SCROLL, TableRowActions } from "@/pages/admin/components/table-row-actions";
-import { AnnouncementsCard, ConsumptionTrendCard, MyMediaPanel, MyWalletPanel, ProfileSecurityPanel, UsageLogsPanel, UserOverviewPanel } from "@/pages/admin/user-panels";
+import { AnnouncementsCard, ConsumptionTrendCard, MEDIA_MODULE_OPTIONS, MediaModuleTags, MyMediaPanel, MyWalletPanel, ProfileSecurityPanel, UsageLogsPanel, UserOverviewPanel, WorkspaceSizeCell } from "@/pages/admin/user-panels";
 import { useCopyText } from "@/hooks/use-copy-text";
 import {
     adminApi,
@@ -21,8 +21,10 @@ import {
     type RedeemCodeItem,
     type S3Provider,
     type S3StorageConfigForm,
+    type WorkspaceDataItem,
 } from "@/services/api/server";
-import { syncRuntimeSettings } from "@/services/cloud-sync";
+import { notifyCloudWorkspaceChanged, WORKSPACE_CHANGED_EVENT } from "@/services/cloud-media";
+import { syncCloudWorkspace, syncRuntimeSettings } from "@/services/cloud-sync";
 import { createModelChannel, type ModelChannel } from "@/stores/use-config-store";
 import { useUserStore } from "@/stores/use-user-store";
 
@@ -174,12 +176,20 @@ export default function AdminPage() {
     const [webdavSaving, setWebdavSaving] = useState(false);
     const [webdavTesting, setWebdavTesting] = useState(false);
 
+    const [mediaSubTab, setMediaSubTab] = useState<"media" | "canvas" | "image_workbench" | "video_workbench">("media");
     const [mediaItems, setMediaItems] = useState<MediaItem[]>([]);
     const [mediaTotal, setMediaTotal] = useState(0);
     const [mediaFilteredBytes, setMediaFilteredBytes] = useState<number | null>(null);
     const [mediaPage, setMediaPage] = useState(1);
     const [mediaQuery, setMediaQuery] = useState("");
     const [mediaKindFilter, setMediaKindFilter] = useState("");
+    const [mediaModuleFilter, setMediaModuleFilter] = useState("");
+    const [mediaWorkspaceStats, setMediaWorkspaceStats] = useState({ canvasProjects: 0, imageLogs: 0, videoLogs: 0 });
+    const [workspaceDataItems, setWorkspaceDataItems] = useState<WorkspaceDataItem[]>([]);
+    const [workspaceDataTotal, setWorkspaceDataTotal] = useState(0);
+    const [workspaceDataPage, setWorkspaceDataPage] = useState(1);
+    const [workspaceDataQuery, setWorkspaceDataQuery] = useState("");
+    const [workspaceDataLoading, setWorkspaceDataLoading] = useState(false);
     const [mediaLoading, setMediaLoading] = useState(false);
     const [uploadingTest, setUploadingTest] = useState(false);
     const [previewMediaItem, setPreviewMediaItem] = useState<MediaItem | null>(null);
@@ -278,20 +288,38 @@ export default function AdminPage() {
     }, [message, storageForm]);
 
     const loadMedia = useCallback(
-        async (page = mediaPage, q = mediaQuery, kind = mediaKindFilter) => {
+        async (page = mediaPage, q = mediaQuery, kind = mediaKindFilter, mod = mediaModuleFilter) => {
             setMediaLoading(true);
             try {
-                const res = await adminApi.listMedia({ page, pageSize: 12, q, kind });
+                const res = await adminApi.listMedia({ page, pageSize: 12, q, kind, module: mod });
                 setMediaItems(res.items);
                 setMediaTotal(res.total);
                 setMediaFilteredBytes(typeof res.filteredBytes === "number" ? res.filteredBytes : null);
+                if (res.workspaceStats) setMediaWorkspaceStats(res.workspaceStats);
             } catch (error) {
                 message.error(error instanceof Error ? error.message : "加载媒体列表失败");
             } finally {
                 setMediaLoading(false);
             }
         },
-        [mediaKindFilter, mediaPage, mediaQuery, message],
+        [mediaKindFilter, mediaModuleFilter, mediaPage, mediaQuery, message],
+    );
+
+    const loadWorkspaceData = useCallback(
+        async (kind = mediaSubTab, page = workspaceDataPage, q = workspaceDataQuery) => {
+            if (kind === "media") return;
+            setWorkspaceDataLoading(true);
+            try {
+                const res = await adminApi.listWorkspaceData({ kind, page, pageSize: 12, q });
+                setWorkspaceDataItems(res.items);
+                setWorkspaceDataTotal(res.total);
+            } catch (error) {
+                message.error(error instanceof Error ? error.message : "加载业务云端数据失败");
+            } finally {
+                setWorkspaceDataLoading(false);
+            }
+        },
+        [mediaSubTab, message, workspaceDataPage, workspaceDataQuery],
     );
 
     const loadAuthAndWebdavSettings = useCallback(async () => {
@@ -359,8 +387,30 @@ export default function AdminPage() {
 
     useEffect(() => {
         if (!isAdmin || (activeTab !== "media" && activeTab !== "storage")) return;
-        void loadMedia(mediaPage, mediaQuery, mediaKindFilter);
-    }, [activeTab, isAdmin, loadMedia, mediaKindFilter, mediaPage, mediaQuery]);
+        void loadMedia(mediaPage, mediaQuery, mediaKindFilter, mediaModuleFilter);
+    }, [activeTab, isAdmin, loadMedia, mediaKindFilter, mediaModuleFilter, mediaPage, mediaQuery]);
+
+    useEffect(() => {
+        if (!isAdmin || activeTab !== "media" || mediaSubTab === "media") return;
+        void loadWorkspaceData(mediaSubTab, workspaceDataPage, workspaceDataQuery);
+    }, [activeTab, isAdmin, loadWorkspaceData, mediaSubTab, workspaceDataPage, workspaceDataQuery]);
+
+    useEffect(() => {
+        if (!isAdmin || activeTab !== "media") return;
+        const handleChanged = () => {
+            void loadMedia(mediaPage, mediaQuery, mediaKindFilter, mediaModuleFilter);
+            void loadOverview(overviewDays);
+            if (mediaSubTab !== "media") {
+                void loadWorkspaceData(mediaSubTab, workspaceDataPage, workspaceDataQuery);
+            }
+        };
+        window.addEventListener(WORKSPACE_CHANGED_EVENT, handleChanged);
+        window.addEventListener("infinite-canvas:cloud-workspace-synced", handleChanged);
+        return () => {
+            window.removeEventListener(WORKSPACE_CHANGED_EVENT, handleChanged);
+            window.removeEventListener("infinite-canvas:cloud-workspace-synced", handleChanged);
+        };
+    }, [activeTab, isAdmin, loadMedia, loadOverview, loadWorkspaceData, mediaKindFilter, mediaModuleFilter, mediaPage, mediaQuery, mediaSubTab, overviewDays, workspaceDataPage, workspaceDataQuery]);
 
     useEffect(() => {
         if (!isAdmin || activeTab !== "redeem-codes") return;
@@ -704,6 +754,7 @@ export default function AdminPage() {
     const handleDeleteMedia = async (mediaId: string) => {
         try {
             await adminApi.deleteMedia(mediaId);
+            notifyCloudWorkspaceChanged("media", { sync: false });
             message.success("媒体文件已删除并释放用户存储空间");
             void loadMedia();
             void loadOverview();
@@ -1610,124 +1661,255 @@ export default function AdminPage() {
                             children: (
                                 <Card
                                     title={
-                                        mediaQuery || mediaKindFilter
-                                            ? `云端媒体文件监控（筛选命中 ${mediaTotal} 个，合计 ${formatBytes(mediaFilteredBytes ?? 0)} / 全站总计 ${formatBytes(totalStorageBytes)}）`
-                                            : `云端媒体文件监控（共 ${mediaTotal} 个，总计 ${formatBytes(mediaFilteredBytes ?? totalStorageBytes)}）`
+                                        mediaSubTab !== "media"
+                                            ? `云端业务数据监控（画布 ${mediaWorkspaceStats.canvasProjects} · 生图 ${mediaWorkspaceStats.imageLogs} · 视频 ${mediaWorkspaceStats.videoLogs}）`
+                                            : mediaQuery || mediaKindFilter || mediaModuleFilter
+                                              ? `云端媒体文件监控（筛选命中 ${mediaTotal} 个，合计 ${formatBytes(mediaFilteredBytes ?? 0)} / 全站总计 ${formatBytes(totalStorageBytes)}）`
+                                              : `云端媒体文件监控（共 ${mediaTotal} 个，总计 ${formatBytes(mediaFilteredBytes ?? totalStorageBytes)}）`
                                     }
                                     extra={
-                                        <Space wrap>
-                                            <Select
-                                                value={mediaKindFilter}
-                                                style={{ width: 120 }}
-                                                onChange={(value) => {
-                                                    setMediaPage(1);
-                                                    setMediaKindFilter(value);
-                                                }}
-                                                options={[
-                                                    { value: "", label: "全部类型" },
-                                                    { value: "image", label: "图片" },
-                                                    { value: "video", label: "视频" },
-                                                    { value: "audio", label: "音频" },
-                                                    { value: "file", label: "其他文件" },
-                                                ]}
-                                            />
-                                            <Input.Search
-                                                allowClear
-                                                placeholder="搜索路径或用户名"
-                                                style={{ width: 220 }}
-                                                onSearch={(value) => {
-                                                    setMediaPage(1);
-                                                    setMediaQuery(value.trim());
-                                                }}
-                                            />
-                                            <Button icon={<RefreshCw className="size-4" />} onClick={() => void loadMedia()}>
-                                                刷新
-                                            </Button>
-                                        </Space>
+                                        mediaSubTab === "media" ? (
+                                            <Space wrap>
+                                                <Select
+                                                    value={mediaModuleFilter}
+                                                    style={{ width: 130 }}
+                                                    onChange={(value) => {
+                                                        setMediaPage(1);
+                                                        setMediaModuleFilter(value);
+                                                    }}
+                                                    options={MEDIA_MODULE_OPTIONS}
+                                                />
+                                                <Select
+                                                    value={mediaKindFilter}
+                                                    style={{ width: 120 }}
+                                                    onChange={(value) => {
+                                                        setMediaPage(1);
+                                                        setMediaKindFilter(value);
+                                                    }}
+                                                    options={[
+                                                        { value: "", label: "全部类型" },
+                                                        { value: "image", label: "图片" },
+                                                        { value: "video", label: "视频" },
+                                                        { value: "audio", label: "音频" },
+                                                        { value: "file", label: "其他文件" },
+                                                    ]}
+                                                />
+                                                <Input.Search
+                                                    allowClear
+                                                    placeholder="搜索路径或用户名"
+                                                    style={{ width: 220 }}
+                                                    onSearch={(value) => {
+                                                        setMediaPage(1);
+                                                        setMediaQuery(value.trim());
+                                                    }}
+                                                />
+                                                <Button icon={<RefreshCw className="size-4" />} onClick={() => void loadMedia()}>
+                                                    刷新
+                                                </Button>
+                                            </Space>
+                                        ) : (
+                                            <Space wrap>
+                                                <Input.Search
+                                                    allowClear
+                                                    placeholder="搜索标题、提示词或用户名"
+                                                    style={{ width: 220 }}
+                                                    onSearch={(value) => {
+                                                        setWorkspaceDataPage(1);
+                                                        setWorkspaceDataQuery(value.trim());
+                                                    }}
+                                                />
+                                                <Button icon={<RefreshCw className="size-4" />} onClick={() => void loadWorkspaceData()}>
+                                                    刷新
+                                                </Button>
+                                            </Space>
+                                        )
                                     }
                                 >
-                                    <Table<MediaItem>
-                                        rowKey="id"
-                                        className={ADMIN_TABLE_CLASS}
-                                        scroll={ADMIN_TABLE_SCROLL}
-                                        loading={mediaLoading}
-                                        dataSource={mediaItems}
-                                        pagination={{
-                                            current: mediaPage,
-                                            pageSize: 12,
-                                            total: mediaTotal,
-                                            onChange: (page) => setMediaPage(page),
+                                    <Tabs
+                                        activeKey={mediaSubTab}
+                                        onChange={(key) => {
+                                            setMediaSubTab(key as "media" | "canvas" | "image_workbench" | "video_workbench");
+                                            setWorkspaceDataPage(1);
                                         }}
-                                        columns={[
+                                        items={[
                                             {
-                                                title: "预览 / 对象路径",
-                                                key: "preview",
-                                                width: 320,
-                                                render: (_, record) => (
-                                                    <div className="flex max-w-[300px] items-center gap-3">
-                                                        {record.thumbnailUrl ? (
-                                                            <img src={record.thumbnailUrl} alt={record.objectKey} className="size-10 shrink-0 rounded object-cover" />
-                                                        ) : (
-                                                            <div className="flex size-10 shrink-0 items-center justify-center rounded bg-black/5 text-stone-400 dark:bg-white/10">
-                                                                {record.kind === "video" ? <Video className="size-4" /> : record.kind === "audio" ? <AudioLines className="size-4" /> : record.kind === "image" ? <ImageIcon className="size-4" /> : <FileIcon className="size-4" />}
-                                                            </div>
-                                                        )}
-                                                        <div className="min-w-0">
-                                                            <div className="truncate font-mono text-xs">{record.objectKey}</div>
-                                                            <Typography.Text type="secondary" className="block truncate text-xs">
-                                                                {record.mimeType}
-                                                            </Typography.Text>
-                                                        </div>
-                                                    </div>
-                                                ),
-                                            },
-                                            { title: "所属用户", dataIndex: "username", width: 120 },
-                                            {
-                                                title: "类型",
-                                                dataIndex: "kind",
-                                                width: 85,
-                                                render: (kind: string) => <Tag>{kindLabels[kind] || kind}</Tag>,
-                                            },
-                                            {
-                                                title: "大小",
-                                                dataIndex: "bytes",
-                                                width: 100,
-                                                render: (bytes: number) => formatBytes(bytes),
-                                            },
-                                            {
-                                                title: "上传时间",
-                                                dataIndex: "createdAt",
-                                                width: 170,
-                                                render: (value: string) => new Date(value).toLocaleString("zh-CN"),
-                                            },
-                                            {
-                                                title: "操作",
-                                                key: "actions",
-                                                fixed: "right",
-                                                width: 100,
-                                                render: (_, record) => (
-                                                    <TableRowActions
-                                                        items={[
-                                                            ...(record.url
-                                                                ? [
-                                                                      {
-                                                                          key: "view",
-                                                                          label: "查看",
-                                                                          onClick: () => setPreviewMediaItem(record),
-                                                                      },
-                                                                  ]
-                                                                : []),
+                                                key: "media",
+                                                label: `云端媒体文件 (${mediaTotal})`,
+                                                children: (
+                                                    <Table<MediaItem>
+                                                        rowKey="id"
+                                                        className={ADMIN_TABLE_CLASS}
+                                                        scroll={ADMIN_TABLE_SCROLL}
+                                                        loading={mediaLoading}
+                                                        dataSource={mediaItems}
+                                                        pagination={{
+                                                            current: mediaPage,
+                                                            pageSize: 12,
+                                                            total: mediaTotal,
+                                                            onChange: (page) => setMediaPage(page),
+                                                        }}
+                                                        columns={[
                                                             {
-                                                                key: "delete",
-                                                                label: "删除",
-                                                                danger: true,
-                                                                confirm: "确定从对象存储中删除该文件并扣减用户已用容量吗？",
-                                                                onClick: () => void handleDeleteMedia(record.id),
+                                                                title: "预览 / 对象路径",
+                                                                key: "preview",
+                                                                width: 300,
+                                                                render: (_, record) => (
+                                                                    <div className="flex max-w-[280px] items-center gap-3">
+                                                                        {record.thumbnailUrl ? (
+                                                                            <img src={record.thumbnailUrl} alt={record.objectKey} className="size-10 shrink-0 rounded object-cover" />
+                                                                        ) : (
+                                                                            <div className="flex size-10 shrink-0 items-center justify-center rounded bg-black/5 text-stone-400 dark:bg-white/10">
+                                                                                {record.kind === "video" ? <Video className="size-4" /> : record.kind === "audio" ? <AudioLines className="size-4" /> : record.kind === "image" ? <ImageIcon className="size-4" /> : <FileIcon className="size-4" />}
+                                                                            </div>
+                                                                        )}
+                                                                        <div className="min-w-0">
+                                                                            <div className="truncate font-mono text-xs">{record.objectKey}</div>
+                                                                            <Typography.Text type="secondary" className="block truncate text-xs">
+                                                                                {record.mimeType}
+                                                                            </Typography.Text>
+                                                                        </div>
+                                                                    </div>
+                                                                ),
+                                                            },
+                                                            { title: "所属用户", dataIndex: "username", width: 120 },
+                                                            {
+                                                                title: "所属模块",
+                                                                key: "modules",
+                                                                width: 170,
+                                                                render: (_, record) => <MediaModuleTags modules={record.modules} />,
+                                                            },
+                                                            {
+                                                                title: "类型",
+                                                                dataIndex: "kind",
+                                                                width: 85,
+                                                                render: (kind: string) => <Tag>{kindLabels[kind] || kind}</Tag>,
+                                                            },
+                                                            {
+                                                                title: "大小",
+                                                                dataIndex: "bytes",
+                                                                width: 100,
+                                                                render: (bytes: number) => formatBytes(bytes),
+                                                            },
+                                                            {
+                                                                title: "上传时间",
+                                                                dataIndex: "createdAt",
+                                                                width: 170,
+                                                                render: (value: string) => new Date(value).toLocaleString("zh-CN"),
+                                                            },
+                                                            {
+                                                                title: "操作",
+                                                                key: "actions",
+                                                                fixed: "right",
+                                                                width: 100,
+                                                                render: (_, record) => (
+                                                                    <TableRowActions
+                                                                        items={[
+                                                                            ...(record.url
+                                                                                ? [
+                                                                                      {
+                                                                                          key: "view",
+                                                                                          label: "查看",
+                                                                                          onClick: () => setPreviewMediaItem(record),
+                                                                                      },
+                                                                                  ]
+                                                                                : []),
+                                                                            {
+                                                                                key: "delete",
+                                                                                label: "删除",
+                                                                                danger: true,
+                                                                                confirm: "确定从对象存储中删除该文件并扣减用户已用容量吗？",
+                                                                                onClick: () => void handleDeleteMedia(record.id),
+                                                                            },
+                                                                        ]}
+                                                                    />
+                                                                ),
                                                             },
                                                         ]}
                                                     />
                                                 ),
                                             },
+                                            ...(
+                                                [
+                                                    { key: "canvas", label: `无限画布 (${mediaWorkspaceStats.canvasProjects})` },
+                                                    { key: "image_workbench", label: `生图工作台 (${mediaWorkspaceStats.imageLogs})` },
+                                                    { key: "video_workbench", label: `视频工作台 (${mediaWorkspaceStats.videoLogs})` },
+                                                ] as const
+                                            ).map((tabCfg) => ({
+                                                key: tabCfg.key,
+                                                label: tabCfg.label,
+                                                children: (
+                                                    <Table<WorkspaceDataItem>
+                                                        rowKey="id"
+                                                        className={ADMIN_TABLE_CLASS}
+                                                        scroll={ADMIN_TABLE_SCROLL}
+                                                        loading={workspaceDataLoading}
+                                                        dataSource={workspaceDataItems}
+                                                        pagination={{
+                                                            current: workspaceDataPage,
+                                                            pageSize: 12,
+                                                            total: workspaceDataTotal,
+                                                            onChange: (page) => setWorkspaceDataPage(page),
+                                                        }}
+                                                        columns={[
+                                                            {
+                                                                title: tabCfg.key === "canvas" ? "画布名称" : "标题 / 提示词",
+                                                                key: "title",
+                                                                width: 280,
+                                                                render: (_, rec) => (
+                                                                    <div className="max-w-[260px] truncate" title={rec.prompt || rec.title}>
+                                                                        {rec.prompt || rec.title}
+                                                                    </div>
+                                                                ),
+                                                            },
+                                                            { title: "所属用户", dataIndex: "username", width: 120 },
+                                                            tabCfg.key === "canvas"
+                                                                ? { title: "节点数", dataIndex: "nodeCount", width: 90 }
+                                                                : { title: "模型", dataIndex: "model", width: 170, ellipsis: true },
+                                                            { title: "关联媒体", dataIndex: "mediaCount", width: 95, render: (v: number) => `${v ?? 0} 个` },
+                                                            {
+                                                                title: "数据大小",
+                                                                key: "mediaBytes",
+                                                                width: 150,
+                                                                render: (_, rec) => <WorkspaceSizeCell mediaBytes={rec.mediaBytes} dataBytes={rec.dataBytes} />,
+                                                            },
+                                                            { title: "更新时间", dataIndex: "updatedAt", width: 170, render: (v: string) => new Date(v).toLocaleString("zh-CN") },
+                                                            {
+                                                                title: "操作",
+                                                                key: "actions",
+                                                                fixed: "right",
+                                                                width: 85,
+                                                                render: (_, rec) => (
+                                                                    <TableRowActions
+                                                                        items={[
+                                                                            {
+                                                                                key: "delete",
+                                                                                label: "删除",
+                                                                                danger: true,
+                                                                                confirm: "确定删除该云端记录并清理孤立媒体文件吗？",
+                                                                                onClick: () =>
+                                                                                    void adminApi.deleteWorkspaceData(rec.kind, rec.id).then(() => {
+                                                                                        message.success("已删除云端记录");
+                                                                                        const scope =
+                                                                                            rec.kind === "canvas"
+                                                                                                ? "canvas"
+                                                                                                : rec.kind === "image_workbench"
+                                                                                                  ? "image"
+                                                                                                  : "video";
+                                                                                        notifyCloudWorkspaceChanged(scope, { sync: true });
+                                                                                        void syncCloudWorkspace();
+                                                                                        void loadWorkspaceData();
+                                                                                        void loadMedia();
+                                                                                        void loadOverview(overviewDays);
+                                                                                    }),
+                                                                            },
+                                                                        ]}
+                                                                    />
+                                                                ),
+                                                            },
+                                                        ]}
+                                                    />
+                                                ),
+                                            })),
                                         ]}
                                     />
                                 </Card>

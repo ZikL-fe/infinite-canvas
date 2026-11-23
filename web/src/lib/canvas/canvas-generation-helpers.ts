@@ -2,7 +2,7 @@ import { defaultConfig, resolveModelForCapability, type AiConfig } from "@/store
 import i18n from "@/i18n";
 import { storageApi } from "@/services/api/server";
 import { isCloudAuthenticated } from "@/services/cloud-media";
-import { ensureImagePreview, resolveImageUrl, uploadImage } from "@/services/image-storage";
+import { ensureImagePreview, getImageBlob, resolveImageUrl, uploadImage } from "@/services/image-storage";
 import { resolveMediaUrl } from "@/services/file-storage";
 import { imageMetadata, referenceUrl } from "@/lib/canvas/canvas-node-factory";
 import { fitNodeSize } from "@/lib/canvas/canvas-node-size";
@@ -49,19 +49,48 @@ export async function hydrateCanvasImages(nodes: CanvasNodeData[]) {
     return Promise.all(
         nodes.map(async (node) => {
             const metadata = node.metadata;
-            const content = metadata?.content;
-            if ((node.type === CanvasNodeType.Video || node.type === CanvasNodeType.Audio) && metadata?.storageKey) return { ...node, metadata: { ...metadata, content: await resolveMediaUrl(metadata.storageKey, content) } };
-            if (node.type !== CanvasNodeType.Image || !metadata || !content) return node;
-            const images = await Promise.all(
-                (metadata.images || []).map(async (image) => {
-                    if (!image.content) return image;
-                    void ensureImagePreview(image.storageKey);
-                    return { ...image, content: await resolveImageUrl(image.storageKey, image.content) };
-                }),
-            );
+            const content = metadata?.content || "";
+            if ((node.type === CanvasNodeType.Video || node.type === CanvasNodeType.Audio) && metadata?.storageKey) {
+                return { ...node, metadata: { ...metadata, content: await resolveMediaUrl(metadata.storageKey, content) } };
+            }
+            if (node.type !== CanvasNodeType.Image || !metadata) return node;
+
+            const images = metadata.images?.length
+                ? await Promise.all(
+                      metadata.images.map(async (image) => {
+                          if (image.storageKey) {
+                              void ensureImagePreview(image.storageKey);
+                              return { ...image, content: await resolveImageUrl(image.storageKey, image.content || "") };
+                          }
+                          if (!image.content) return image;
+                          return image;
+                      }),
+                  )
+                : undefined;
+
+            const primarySlot = images?.find((img) => img.id === metadata.primaryImageId) || images?.find((img) => img.content);
             if (metadata.storageKey) {
                 void ensureImagePreview(metadata.storageKey);
-                return { ...node, metadata: { ...metadata, content: await resolveImageUrl(metadata.storageKey, content), images } };
+                const resolved = await resolveImageUrl(metadata.storageKey, content);
+                return {
+                    ...node,
+                    metadata: {
+                        ...metadata,
+                        content: resolved || primarySlot?.content || content,
+                        ...(images ? { images } : {}),
+                    },
+                };
+            }
+            if (images) {
+                return {
+                    ...node,
+                    metadata: {
+                        ...metadata,
+                        content: content || primarySlot?.content || "",
+                        ...(primarySlot?.storageKey && !metadata.storageKey ? { storageKey: primarySlot.storageKey } : {}),
+                        images,
+                    },
+                };
             }
             if (!content.startsWith("data:image/")) return node;
             return { ...node, metadata: { ...metadata, ...imageMetadata(await uploadImage(content)) } };
@@ -135,10 +164,32 @@ export function collectInterruptedImageTaskIds(nodes: CanvasNodeData[], activeNo
     for (const node of nodes) {
         if (node.type !== CanvasNodeType.Image || node.metadata?.status !== "loading" || activeNodeIds?.has(node.id)) continue;
         const slotIds = (node.metadata.images || []).filter((img) => img.status === "loading").map((img) => img.id);
-        if (slotIds.length) taskIds.push(...slotIds);
-        else taskIds.push(node.id);
+        if (slotIds.length) {
+            taskIds.push(...slotIds);
+        } else {
+            if (node.metadata.primaryImageId) taskIds.push(node.metadata.primaryImageId);
+            taskIds.push(node.id);
+        }
     }
     return Array.from(new Set(taskIds));
+}
+
+async function resolveRecoveredCloudImage(
+    media: { id: string; url?: string; width?: number | null; height?: number | null; bytes?: number; mimeType?: string },
+    fallbackWidth: number,
+    fallbackHeight: number,
+) {
+    const blob = await getImageBlob(media.id).catch(() => null);
+    void ensureImagePreview(media.id);
+    const content = await resolveImageUrl(media.id, media.url || "");
+    return {
+        content: content || media.url || "",
+        storageKey: media.id,
+        naturalWidth: media.width || fallbackWidth,
+        naturalHeight: media.height || fallbackHeight,
+        bytes: blob?.size || media.bytes || 0,
+        mimeType: blob?.type || media.mimeType || "image/png",
+    };
 }
 
 export async function recoverCloudInterruptedImages(
@@ -152,6 +203,7 @@ export async function recoverCloudInterruptedImages(
     try {
         const res = await storageApi.getByTasks(candidateIds);
         const processingSet = new Set(res.processingTaskIds);
+        let anyChanged = false;
         const nextNodes = await Promise.all(
             nodes.map(async (node) => {
                 if (node.type !== CanvasNodeType.Image || node.metadata?.status !== "loading" || activeNodeIds?.has(node.id)) return node;
@@ -163,28 +215,31 @@ export async function recoverCloudInterruptedImages(
                         images.map(async (img) => {
                             if (img.status !== "loading") return img;
                             const media = res.itemsByTask[img.id]?.[0];
-                            if (!media?.url) return img;
+                            if (!media) return img;
+                            const recovered = await resolveRecoveredCloudImage(media, node.width, node.height);
+                            if (!recovered.content) return img;
                             changed = true;
-                            const resolved = await uploadImage(media.url, { existingStorageKey: media.id, sourceType: "ai_generated" }).catch(() => null);
-                            const nextUrl = resolved?.url || media.url;
-                            const width = resolved?.width || media.width || node.width;
-                            const height = resolved?.height || media.height || node.height;
                             return {
                                 id: img.id,
                                 status: "success" as const,
-                                content: nextUrl,
-                                storageKey: media.id,
-                                naturalWidth: width,
-                                naturalHeight: height,
-                                bytes: resolved?.bytes || media.bytes || 0,
-                                mimeType: resolved?.mimeType || media.mimeType || "image/png",
+                                ...recovered,
                             };
                         }),
                     );
-                    if (!changed) return node;
                     const stillLoading = nextImages.some((img) => img.status === "loading" && processingSet.has(img.id));
+                    const hasLoadingSlot = nextImages.some((img) => img.status === "loading");
+                    if (!changed && hasLoadingSlot) return node;
+                    anyChanged = true;
+
                     const hasSuccess = nextImages.some((img) => img.status === "success");
-                    const primaryBuilt = !node.metadata?.primaryImageId ? nextImages.find((img) => img.status === "success" && img.content) : null;
+                    const matchedPrimary = node.metadata?.primaryImageId
+                        ? nextImages.find((img) => img.id === node.metadata?.primaryImageId && img.status === "success" && img.content)
+                        : undefined;
+                    const primaryBuilt =
+                        matchedPrimary ||
+                        (!node.metadata?.primaryImageId || !node.metadata?.content
+                            ? nextImages.find((img) => img.status === "success" && img.content)
+                            : undefined);
                     const primaryPatch = primaryBuilt
                         ? (() => {
                               const imageSize = fitNodeSize(primaryBuilt.naturalWidth || node.width, primaryBuilt.naturalHeight || node.height, node.width, node.height);
@@ -213,35 +268,33 @@ export async function recoverCloudInterruptedImages(
                             ...baseMeta,
                             images: nextImages,
                             status: stillLoading ? ("loading" as const) : hasSuccess ? ("success" as const) : ("error" as const),
+                            errorDetails: hasSuccess ? undefined : baseMeta.errorDetails,
                         },
                     };
                 }
 
-                const media = res.itemsByTask[node.id]?.[0];
-                if (!media?.url) return node;
-                const resolved = await uploadImage(media.url, { existingStorageKey: media.id, sourceType: "ai_generated" }).catch(() => null);
-                const width = resolved?.width || media.width || node.width;
-                const height = resolved?.height || media.height || node.height;
-                const imageSize = fitNodeSize(width, height, node.width, node.height);
+                const media =
+                    (node.metadata.primaryImageId ? res.itemsByTask[node.metadata.primaryImageId]?.[0] : undefined) ||
+                    res.itemsByTask[node.id]?.[0];
+                if (!media) return node;
+                const recovered = await resolveRecoveredCloudImage(media, node.width, node.height);
+                if (!recovered.content) return node;
+                anyChanged = true;
+                const imageSize = fitNodeSize(recovered.naturalWidth, recovered.naturalHeight, node.width, node.height);
                 return {
                     ...node,
                     width: imageSize.width,
                     height: imageSize.height,
                     metadata: {
                         ...node.metadata,
-                        content: resolved?.url || media.url,
-                        storageKey: media.id,
-                        naturalWidth: width,
-                        naturalHeight: height,
-                        bytes: resolved?.bytes || media.bytes || 0,
-                        mimeType: resolved?.mimeType || media.mimeType || "image/png",
+                        ...recovered,
                         status: "success" as const,
                         errorDetails: undefined,
                     },
                 };
             }),
         );
-        return { nodes: nextNodes, processingTaskIds: res.processingTaskIds };
+        return { nodes: anyChanged ? nextNodes : nodes, processingTaskIds: res.processingTaskIds };
     } catch {
         return { nodes, processingTaskIds: [] };
     }
@@ -252,9 +305,21 @@ export function resetInterruptedGeneration(nodes: CanvasNodeData[], activeNodeId
     return nodes.map((node) => {
         if (node.metadata?.status !== "loading") return node;
         if (hasResumableVideoTask(node) || activeNodeIds?.has(node.id)) return node;
+        if (node.type === CanvasNodeType.Config) {
+            return {
+                ...node,
+                metadata: {
+                    ...node.metadata,
+                    status: "idle" as const,
+                    errorDetails: undefined,
+                },
+            };
+        }
         const slotStillProcessing =
             node.type === CanvasNodeType.Image &&
-            (processingSet.has(node.id) || Boolean(node.metadata.images?.some((img) => img.status === "loading" && processingSet.has(img.id))));
+            (processingSet.has(node.id) ||
+                Boolean(node.metadata.primaryImageId && processingSet.has(node.metadata.primaryImageId)) ||
+                Boolean(node.metadata.images?.some((img) => img.status === "loading" && processingSet.has(img.id))));
         if (slotStillProcessing) return node;
         return {
             ...node,

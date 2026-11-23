@@ -30,6 +30,9 @@ export function InfiniteCanvas({ containerRef, viewport, tool, backgroundMode = 
         startedOnBackground: false,
     });
     const scaleRef = useRef(viewport.k);
+    const viewportRef = useRef(viewport);
+    const onViewportChangeRef = useRef(onViewportChange);
+    const onCanvasDeselectRef = useRef(onCanvasDeselect);
     const frameRef = useRef<number | null>(null);
     const nextViewportRef = useRef<ViewportTransform | null>(null);
     const [isSpacePressed, setIsSpacePressed] = useState(false);
@@ -38,7 +41,13 @@ export function InfiniteCanvas({ containerRef, viewport, tool, backgroundMode = 
 
     useEffect(() => {
         scaleRef.current = viewport.k;
-    }, [viewport.k]);
+        viewportRef.current = viewport;
+    }, [viewport]);
+
+    useEffect(() => {
+        onViewportChangeRef.current = onViewportChange;
+        onCanvasDeselectRef.current = onCanvasDeselect;
+    }, [onCanvasDeselect, onViewportChange]);
 
     useEffect(
         () => () => {
@@ -84,22 +93,34 @@ export function InfiniteCanvas({ containerRef, viewport, tool, backgroundMode = 
         };
     }, []);
 
+    const scheduleViewportUpdate = (next: ViewportTransform) => {
+        nextViewportRef.current = next;
+        if (frameRef.current) return;
+        frameRef.current = requestAnimationFrame(() => {
+            frameRef.current = null;
+            const pending = nextViewportRef.current;
+            nextViewportRef.current = null;
+            if (pending) onViewportChangeRef.current(pending);
+        });
+    };
+
     const handleWheel = (event: React.WheelEvent<HTMLDivElement>) => {
         const target = event.target instanceof Element ? event.target : null;
         if (target?.closest("[data-canvas-no-zoom],.ant-modal,.ant-popover,.ant-dropdown,.ant-select-dropdown,.ant-picker-dropdown")) return;
 
+        const base = nextViewportRef.current || viewportRef.current;
         const delta = -event.deltaY;
         const factor = Math.pow(1.1, delta / 100);
-        const newScale = Math.min(Math.max(viewport.k * factor, 0.05), 5);
+        const newScale = Math.min(Math.max(base.k * factor, 0.05), 5);
         const rect = containerRef.current?.getBoundingClientRect();
         if (!rect) return;
 
         const mouseX = event.clientX - rect.left;
         const mouseY = event.clientY - rect.top;
-        const worldX = (mouseX - viewport.x) / viewport.k;
-        const worldY = (mouseY - viewport.y) / viewport.k;
+        const worldX = (mouseX - base.x) / base.k;
+        const worldY = (mouseY - base.y) / base.k;
 
-        onViewportChange({
+        scheduleViewportUpdate({
             x: mouseX - worldX * newScale,
             y: mouseY - worldY * newScale,
             k: newScale,
@@ -155,15 +176,10 @@ export function InfiniteCanvas({ containerRef, viewport, tool, backgroundMode = 
                 panState.current.hasMoved = true;
             }
 
-            nextViewportRef.current = {
+            scheduleViewportUpdate({
                 x: panState.current.initialX + dx,
                 y: panState.current.initialY + dy,
                 k: scaleRef.current,
-            };
-            if (frameRef.current) return;
-            frameRef.current = requestAnimationFrame(() => {
-                frameRef.current = null;
-                if (nextViewportRef.current) onViewportChange(nextViewportRef.current);
             });
         };
 
@@ -171,7 +187,7 @@ export function InfiniteCanvas({ containerRef, viewport, tool, backgroundMode = 
             if (!panState.current.isPanning) return;
 
             if (!panState.current.hasMoved && panState.current.startedOnBackground) {
-                onCanvasDeselect?.();
+                onCanvasDeselectRef.current?.();
             }
             panState.current.isPanning = false;
             setIsPanning(false);
@@ -187,7 +203,7 @@ export function InfiniteCanvas({ containerRef, viewport, tool, backgroundMode = 
             window.removeEventListener("pointercancel", handlePointerUp);
             document.body.style.cursor = "";
         };
-    }, [onCanvasDeselect, onViewportChange]);
+    }, []);
 
     useEffect(() => {
         const container = containerRef.current;
@@ -223,7 +239,8 @@ export function InfiniteCanvas({ containerRef, viewport, tool, backgroundMode = 
             <div
                 className="absolute origin-top-left"
                 style={{
-                    transform: `translate(${viewport.x}px, ${viewport.y}px) scale(${viewport.k})`,
+                    transform: `translate3d(${viewport.x}px, ${viewport.y}px, 0) scale(${viewport.k})`,
+                    willChange: "transform",
                 }}
             >
                 {children}

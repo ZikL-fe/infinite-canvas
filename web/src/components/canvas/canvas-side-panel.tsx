@@ -12,6 +12,7 @@ import { cn } from "@/lib/utils";
 import { PromptDetailDialog } from "@/pages/prompts/components/prompt-detail-dialog";
 import { fetchSourcePrompts, type Prompt } from "@/services/api/prompts";
 import { uploadMediaFile } from "@/services/file-storage";
+import { deleteAssetWithCloud } from "@/services/cloud-sync";
 import { previewUrlFor, subscribeImagePreviews, getImagePreviewRevision, uploadImage } from "@/services/image-storage";
 import { useAssetStore, type Asset, type AssetKind } from "@/stores/use-asset-store";
 import { usePromptSourceStore } from "@/stores/use-prompt-source-store";
@@ -395,7 +396,6 @@ const CanvasAssetsTab = memo(function CanvasAssetsTab({ onInsert, theme }: { onI
     const { t } = useTranslation();
     const assets = useAssetStore((state) => state.assets);
     const addAsset = useAssetStore((state) => state.addAsset);
-    const removeAsset = useAssetStore((state) => state.removeAsset);
     const [keyword, setKeyword] = useState("");
     const [tagFilter, setTagFilter] = useState<string>("all");
     const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
@@ -489,7 +489,20 @@ const CanvasAssetsTab = memo(function CanvasAssetsTab({ onInsert, theme }: { onI
                                     {isCollapsed ? null : (
                                         <div className="grid grid-cols-2 gap-2 px-1 pb-2 pt-1">
                                             {group.items.map((asset) => (
-                                                <AssetCard key={asset.id} asset={asset} theme={theme} onInsert={() => onInsert(buildInsertPayload(asset))} onRemove={() => (removeAsset(asset.id), message.success(t("canvas.sidePanel.assetRemoved")))} />
+                                                <AssetCard
+                                                    key={asset.id}
+                                                    asset={asset}
+                                                    theme={theme}
+                                                    onInsert={() => onInsert(buildInsertPayload(asset))}
+                                                    onRemove={async () => {
+                                                        try {
+                                                            await deleteAssetWithCloud(asset.id);
+                                                            message.success(t("canvas.sidePanel.assetRemoved"));
+                                                        } catch (error) {
+                                                            message.error(error instanceof Error ? error.message : "移除资产失败，请重试");
+                                                        }
+                                                    }}
+                                                />
                                             ))}
                                         </div>
                                     )}
@@ -505,7 +518,7 @@ const CanvasAssetsTab = memo(function CanvasAssetsTab({ onInsert, theme }: { onI
     );
 });
 
-function AssetCard({ asset, theme, onInsert, onRemove }: { asset: Asset; theme: CanvasTheme; onInsert: () => void; onRemove: () => void }) {
+function AssetCard({ asset, theme, onInsert, onRemove }: { asset: Asset; theme: CanvasTheme; onInsert: () => void; onRemove: () => void | Promise<void> }) {
     const { t } = useTranslation();
     return (
         <div className="group relative aspect-square overflow-hidden rounded-xl border transition duration-200 hover:-translate-y-0.5 hover:shadow-lg" style={{ borderColor: theme.node.stroke, background: theme.node.panel }}>

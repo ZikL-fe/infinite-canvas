@@ -8,6 +8,7 @@ import { useNavigate } from "react-router-dom";
 import { useCopyText } from "@/hooks/use-copy-text";
 import { formatBytes, formatStoragePair, readFileAsDataUrl } from "@/lib/image-utils";
 import { getMediaBlob } from "@/services/file-storage";
+import { deleteAssetWithCloud } from "@/services/cloud-sync";
 import { getImageBlob, getImagePreviewRevision, subscribeImagePreviews, uploadImage } from "@/services/image-storage";
 import { cn } from "@/lib/utils";
 import { assetCoverUrl, useAssetStore, type Asset, type AssetKind, type ImageAsset } from "@/stores/use-asset-store";
@@ -41,7 +42,7 @@ export default function AssetsPage() {
     const assets = useAssetStore((state) => state.assets);
     const addAsset = useAssetStore((state) => state.addAsset);
     const updateAsset = useAssetStore((state) => state.updateAsset);
-    const removeAsset = useAssetStore((state) => state.removeAsset);
+    const [deleting, setDeleting] = useState(false);
     const [keyword, setKeyword] = useState("");
     const [kindFilter, setKindFilter] = useState<AssetKind | "all">("all");
     const [page, setPage] = useState(1);
@@ -209,11 +210,18 @@ export default function AssetsPage() {
         }
     };
 
-    const confirmDelete = () => {
-        if (!deletingAsset) return;
-        removeAsset(deletingAsset.id);
-        message.success(t("assets.deleted"));
-        setDeletingAsset(null);
+    const confirmDelete = async () => {
+        if (!deletingAsset || deleting) return;
+        setDeleting(true);
+        try {
+            await deleteAssetWithCloud(deletingAsset.id);
+            message.success(t("assets.deleted"));
+            setDeletingAsset(null);
+        } catch (error) {
+            message.error(error instanceof Error ? error.message : "删除失败，请重试");
+        } finally {
+            setDeleting(false);
+        }
     };
 
     return (
@@ -486,7 +494,19 @@ export default function AssetsPage() {
 
             <input ref={assetInputRef} type="file" accept="application/zip,.zip" className="hidden" onChange={(event) => void importAssetZip(event.target.files?.[0])} />
 
-            <Modal title={t("assets.deleteTitle")} open={Boolean(deletingAsset)} onCancel={() => setDeletingAsset(null)} onOk={confirmDelete} okText={t("common.delete")} okButtonProps={{ danger: true }} cancelText={t("common.cancel")}>
+            <Modal
+                title={t("assets.deleteTitle")}
+                open={Boolean(deletingAsset)}
+                closable={!deleting}
+                maskClosable={!deleting}
+                confirmLoading={deleting}
+                onCancel={() => !deleting && setDeletingAsset(null)}
+                onOk={() => void confirmDelete()}
+                okText={t("common.delete")}
+                okButtonProps={{ danger: true }}
+                cancelButtonProps={{ disabled: deleting }}
+                cancelText={t("common.cancel")}
+            >
                 {t("assets.deleteConfirm", { name: deletingAsset?.title })}
             </Modal>
         </div>

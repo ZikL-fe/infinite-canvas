@@ -6,9 +6,17 @@ import { Hono } from "hono";
 import { nanoid } from "nanoid";
 import { z } from "zod";
 
-import { announcements, canvasProjects, creditWallets, db, mediaObjects, redeemCodes, userAssets, userSessions, users } from "../db/index.ts";
+import { announcements, canvasProjects, creditWallets, db, mediaObjects, redeemCodes, userAssets, userSessions, users, workbenchLogs } from "../db/index.ts";
 import { adjustWalletCredits, queryConsumptionMetrics, queryCreditLedger, roundCredits } from "../lib/billing.ts";
 import { maskSecret } from "../lib/crypto.ts";
+import {
+  cleanupOrphanedUserMedia,
+  collectUserMediaReferences,
+  extractStorageKeys,
+  loadUserMediaByteMap,
+  summarizeWorkspaceMedia,
+  type MediaSourceModule,
+} from "../lib/media-cleanup.ts";
 import { createMediaReadUrl, deleteS3Object, testS3Connection } from "../lib/s3.ts";
 import {
   getAuthPolicy,
@@ -836,13 +844,36 @@ adminRoutes.post("/settings/webdav/test", zValidator("json", platformWebdavSchem
 adminRoutes.get("/media", async (c) => {
   const q = c.req.query("q")?.trim() || "";
   const kind = c.req.query("kind")?.trim() || "";
+  const moduleFilter = c.req.query("module")?.trim() || "";
   const page = Math.max(1, Number(c.req.query("page") || 1));
   const pageSize = Math.min(100, Math.max(1, Number(c.req.query("pageSize") || 20)));
   const offset = (page - 1) * pageSize;
 
+  const [[canvasCount], [imageLogCount], [videoLogCount]] = await Promise.all([
+    db.select({ total: count() }).from(canvasProjects).where(isNull(canvasProjects.deletedAt)),
+    db.select({ total: count() }).from(workbenchLogs).where(and(eq(workbenchLogs.kind, "image"), isNull(workbenchLogs.deletedAt))),
+    db.select({ total: count() }).from(workbenchLogs).where(and(eq(workbenchLogs.kind, "video"), isNull(workbenchLogs.deletedAt))),
+  ]);
+  const workspaceStats = {
+    canvasProjects: Number(canvasCount?.total ?? 0),
+    imageLogs: Number(imageLogCount?.total ?? 0),
+    videoLogs: Number(videoLogCount?.total ?? 0),
+  };
+
   const filters: SQL[] = [eq(mediaObjects.status, "active")];
   if (kind === "image" || kind === "video" || kind === "audio" || kind === "file") {
     filters.push(eq(mediaObjects.kind, kind));
+  }
+  if (moduleFilter === "canvas" || moduleFilter === "image_workbench" || moduleFilter === "video_workbench" || moduleFilter === "assets") {
+    const allUserRows = await db.select({ id: users.id }).from(users);
+    const { moduleMap: allMap } = await collectUserMediaReferences(allUserRows.map((u) => u.id));
+    const matchedIds = Array.from(allMap.entries())
+      .filter(([, mods]) => mods.has(moduleFilter as MediaSourceModule))
+      .map(([id]) => id);
+    if (!matchedIds.length) {
+      return c.json({ items: [], total: 0, filteredBytes: 0, page, pageSize, workspaceStats });
+    }
+    filters.push(inArray(mediaObjects.id, matchedIds));
   }
   if (q) {
     const searchCond = or(ilike(mediaObjects.objectKey, `%${q}%`), ilike(users.username, `%${q}%`));
@@ -882,6 +913,7 @@ adminRoutes.get("/media", async (c) => {
     getS3StorageConfig(),
   ]);
 
+  const { moduleMap } = await collectUserMediaReferences(rows.map((r) => r.userId));
   const items = await Promise.all(
     rows.map(async (row) => {
       const thumbKey = typeof row.meta?.thumbObjectKey === "string" ? row.meta.thumbObjectKey : "";
@@ -891,6 +923,7 @@ adminRoutes.get("/media", async (c) => {
       ]);
       return {
         ...row,
+        modules: Array.from(moduleMap.get(row.id) || []),
         url,
         thumbnailUrl,
       };
@@ -903,7 +936,153 @@ adminRoutes.get("/media", async (c) => {
     filteredBytes: Number(totalRow?.filteredBytes ?? 0),
     page,
     pageSize,
+    workspaceStats,
   });
+});
+
+adminRoutes.get("/workspace-data", async (c) => {
+  const kind = c.req.query("kind")?.trim() || "canvas";
+  const q = c.req.query("q")?.trim() || "";
+  const page = Math.max(1, Number(c.req.query("page") || 1));
+  const pageSize = Math.min(100, Math.max(1, Number(c.req.query("pageSize") || 12)));
+  const offset = (page - 1) * pageSize;
+
+  if (kind === "canvas") {
+    const filters: SQL[] = [isNull(canvasProjects.deletedAt)];
+    if (q) {
+      const cond = or(ilike(canvasProjects.title, `%${q}%`), ilike(users.username, `%${q}%`));
+      if (cond) filters.push(cond);
+    }
+    const whereClause = and(...filters);
+    const [rows, [totalRow]] = await Promise.all([
+      db
+        .select({
+          id: canvasProjects.id,
+          userId: canvasProjects.userId,
+          username: users.username,
+          title: canvasProjects.title,
+          nodes: canvasProjects.nodes,
+          connections: canvasProjects.connections,
+          chatSessions: canvasProjects.chatSessions,
+          updatedAt: canvasProjects.updatedAt,
+          createdAt: canvasProjects.createdAt,
+        })
+        .from(canvasProjects)
+        .leftJoin(users, eq(canvasProjects.userId, users.id))
+        .where(whereClause)
+        .orderBy(desc(canvasProjects.updatedAt))
+        .limit(pageSize)
+        .offset(offset),
+      db
+        .select({ total: count() })
+        .from(canvasProjects)
+        .leftJoin(users, eq(canvasProjects.userId, users.id))
+        .where(whereClause),
+    ]);
+    const byteMap = await loadUserMediaByteMap(rows.map((r) => r.userId));
+    return c.json({
+      items: rows.map((row) => ({
+        id: row.id,
+        kind: "canvas" as const,
+        userId: row.userId,
+        username: row.username || "",
+        title: row.title,
+        nodeCount: Array.isArray(row.nodes) ? row.nodes.length : 0,
+        ...summarizeWorkspaceMedia(row.userId, byteMap, [row.nodes, row.chatSessions], {
+          title: row.title,
+          nodes: row.nodes,
+          connections: row.connections,
+          chatSessions: row.chatSessions,
+        }),
+        updatedAt: row.updatedAt.toISOString(),
+        createdAt: row.createdAt.toISOString(),
+      })),
+      total: Number(totalRow?.total ?? 0),
+      page,
+      pageSize,
+    });
+  }
+
+  const logKind = kind === "video_workbench" ? "video" : "image";
+  const filters: SQL[] = [eq(workbenchLogs.kind, logKind), isNull(workbenchLogs.deletedAt)];
+  if (q) {
+    const cond = or(ilike(workbenchLogs.prompt, `%${q}%`), ilike(workbenchLogs.title, `%${q}%`), ilike(users.username, `%${q}%`));
+    if (cond) filters.push(cond);
+  }
+  const whereClause = and(...filters);
+  const [rows, [totalRow]] = await Promise.all([
+    db
+      .select({
+        id: workbenchLogs.id,
+        userId: workbenchLogs.userId,
+        username: users.username,
+        kind: workbenchLogs.kind,
+        title: workbenchLogs.title,
+        prompt: workbenchLogs.prompt,
+        model: workbenchLogs.model,
+        status: workbenchLogs.status,
+        payload: workbenchLogs.payload,
+        updatedAt: workbenchLogs.updatedAt,
+        createdAt: workbenchLogs.createdAt,
+      })
+      .from(workbenchLogs)
+      .leftJoin(users, eq(workbenchLogs.userId, users.id))
+      .where(whereClause)
+      .orderBy(desc(workbenchLogs.createdAt))
+      .limit(pageSize)
+      .offset(offset),
+    db
+      .select({ total: count() })
+      .from(workbenchLogs)
+      .leftJoin(users, eq(workbenchLogs.userId, users.id))
+      .where(whereClause),
+  ]);
+
+  const byteMap = await loadUserMediaByteMap(rows.map((r) => r.userId));
+  return c.json({
+    items: rows.map((row) => ({
+      id: row.id,
+      kind: row.kind === "video" ? ("video_workbench" as const) : ("image_workbench" as const),
+      userId: row.userId,
+      username: row.username || "",
+      title: row.title || row.prompt.slice(0, 24) || "未命名记录",
+      prompt: row.prompt,
+      model: row.model,
+      status: row.status,
+      ...summarizeWorkspaceMedia(row.userId, byteMap, row.payload, {
+        title: row.title,
+        prompt: row.prompt,
+        payload: row.payload,
+      }),
+      updatedAt: row.updatedAt.toISOString(),
+      createdAt: row.createdAt.toISOString(),
+    })),
+    total: Number(totalRow?.total ?? 0),
+    page,
+    pageSize,
+  });
+});
+
+adminRoutes.delete("/workspace-data/:kind/:id", async (c) => {
+  const kind = c.req.param("kind");
+  const id = c.req.param("id");
+  const now = new Date();
+
+  if (kind === "canvas") {
+    const existing = await db.query.canvasProjects.findFirst({ where: eq(canvasProjects.id, id) });
+    if (!existing || existing.deletedAt) return c.json({ error: "画布记录不存在" }, 404);
+    const candidateKeys = extractStorageKeys([existing.nodes, existing.chatSessions]);
+    await db.update(canvasProjects).set({ deletedAt: now, updatedAt: now }).where(eq(canvasProjects.id, id));
+    const deletedMediaCount = await cleanupOrphanedUserMedia(existing.userId, candidateKeys);
+    return c.json({ ok: true, deletedMediaCount });
+  }
+
+  const existing = await db.query.workbenchLogs.findFirst({ where: eq(workbenchLogs.id, id) });
+  if (!existing || existing.deletedAt) return c.json({ error: "工作台记录不存在" }, 404);
+  const candidateKeys = extractStorageKeys(existing.payload);
+  await db.update(workbenchLogs).set({ deletedAt: now, updatedAt: now }).where(eq(workbenchLogs.id, id));
+  const deletedMediaCount = await cleanupOrphanedUserMedia(existing.userId, candidateKeys);
+  return c.json({ ok: true, deletedMediaCount });
 });
 
 adminRoutes.delete("/media/:id", async (c) => {

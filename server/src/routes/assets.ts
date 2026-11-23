@@ -5,6 +5,7 @@ import { Hono } from "hono";
 import { z } from "zod";
 
 import { db, mediaObjects, userAssets } from "../db/index.ts";
+import { cleanupOrphanedUserMedia, extractStorageKeys } from "../lib/media-cleanup.ts";
 import { requireAuth, type AppEnv } from "../middleware/auth.ts";
 
 const upsertAssetSchema = z.object({
@@ -98,6 +99,8 @@ assetRoutes.put("/:id", zValidator("json", upsertAssetSchema), async (c) => {
       createdAt,
       updatedAt,
     });
+  } else if (existing.deletedAt) {
+    return c.json({ ok: true, skippedDeleted: true });
   } else {
     await db
       .update(userAssets)
@@ -110,7 +113,6 @@ assetRoutes.put("/:id", zValidator("json", upsertAssetSchema), async (c) => {
         source: body.source ?? null,
         note: body.note ?? null,
         data: mergedData,
-        deletedAt: null,
         updatedAt,
       })
       .where(and(eq(userAssets.id, id), eq(userAssets.userId, user.id)));
@@ -127,7 +129,10 @@ assetRoutes.delete("/:id", async (c) => {
     return c.json({ error: "无权删除该素材" }, 403);
   }
   const now = new Date();
+  const candidateKeys = new Set<string>();
   if (existing) {
+    if (existing.mediaId) candidateKeys.add(existing.mediaId);
+    extractStorageKeys(existing.data, candidateKeys);
     await db
       .update(userAssets)
       .set({ deletedAt: now, updatedAt: now })
@@ -146,5 +151,6 @@ assetRoutes.delete("/:id", async (c) => {
       })
       .onConflictDoNothing();
   }
-  return c.json({ ok: true });
+  const deletedMediaCount = await cleanupOrphanedUserMedia(user.id, candidateKeys);
+  return c.json({ ok: true, deletedMediaCount });
 });

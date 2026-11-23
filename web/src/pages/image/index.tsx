@@ -1,12 +1,12 @@
-import { ArrowLeft, ArrowRight, BookOpen, CheckSquare, ClipboardPaste, Download, FolderPlus, HardDrive, History, ImagePlus, LoaderCircle, PenLine, Plus, SlidersHorizontal, Sparkles, Trash2, Upload } from "lucide-react";
+import { ArrowLeft, ArrowRight, BookOpen, CheckSquare, ClipboardPaste, Download, FolderPlus, History, ImagePlus, LoaderCircle, PenLine, Plus, SlidersHorizontal, Sparkles, Trash2, Upload } from "lucide-react";
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { App, Button, Checkbox, Drawer, Empty, Image, Input, Modal, Tag, Tooltip, Typography } from "antd";
 import localforage from "localforage";
 import { saveAs } from "file-saver";
 import { useTranslation } from "react-i18next";
-import { useNavigate } from "react-router-dom";
 
 import { ImageSettingsPanel } from "@/components/image-settings-panel";
+import { CloudQuotaTag } from "@/components/layout/cloud-quota-tag";
 import { ModelPicker } from "@/components/model-picker";
 import { PromptSelectDialog } from "@/components/prompts/prompt-select-dialog";
 import { AssetPickerModal, type InsertAssetPayload } from "@/components/canvas/asset-picker-modal";
@@ -14,14 +14,14 @@ import { canvasThemes } from "@/lib/canvas-theme";
 import { imageReferenceLabel } from "@/lib/image-reference-prompt";
 import { modelOptionLabel, useConfigStore, useEffectiveConfig, type AiConfig } from "@/stores/use-config-store";
 import { useThemeStore } from "@/stores/use-theme-store";
-import { useUserStore } from "@/stores/use-user-store";
 import { nanoid } from "nanoid";
-import { formatBytes, formatDuration, formatStoragePair } from "@/lib/image-utils";
+import { formatBytes, formatDuration } from "@/lib/image-utils";
 import { requestEdit, requestGeneration } from "@/services/api/image";
 import { storageApi } from "@/services/api/server";
-import { isCloudAuthenticated } from "@/services/cloud-media";
+import { isCloudAuthenticated, WORKSPACE_CHANGED_EVENT, type WorkspaceChangeScope } from "@/services/cloud-media";
 import { ensureRuntimeConfigForGeneration } from "@/services/cloud-sync";
-import { deleteStoredImages, ensureImagePreview, getImagePreviewRevision, previewUrlFor, resolveImageUrl, subscribeImagePreviews, uploadImage } from "@/services/image-storage";
+import { ensureImagePreview, getImagePreviewRevision, previewUrlFor, resolveImageUrl, subscribeImagePreviews, uploadImage } from "@/services/image-storage";
+import { deleteWorkbenchLogsWithCloud, pushWorkbenchLogToCloud, syncWorkbenchLogsWithCloud } from "@/services/workbench-sync";
 import { useAssetStore } from "@/stores/use-asset-store";
 import { useWorkbenchAgentStore } from "@/stores/use-workbench-agent-store";
 import type { ReferenceImage } from "@/types/image";
@@ -76,17 +76,16 @@ const logStore = localforage.createInstance({ name: "infinite-canvas", storeName
 export default function ImagePage() {
     const { message } = App.useApp();
     const { t } = useTranslation();
-    const navigate = useNavigate();
     useSyncExternalStore(subscribeImagePreviews, getImagePreviewRevision);
     const fileInputRef = useRef<HTMLInputElement>(null);
     const dragDepthRef = useRef(0);
-    const user = useUserStore((state) => state.user);
     const config = useConfigStore((state) => state.config);
     const effectiveConfig = useEffectiveConfig();
     const updateConfig = useConfigStore((state) => state.updateConfig);
     const isAiConfigReady = useConfigStore((state) => state.isAiConfigReady);
     const openConfigDialog = useConfigStore((state) => state.openConfigDialog);
     const addAsset = useAssetStore((state) => state.addAsset);
+    const cleanupImages = useAssetStore((state) => state.cleanupImages);
     const [prompt, setPrompt] = useState("");
     const [references, setReferences] = useState<ReferenceImage[]>([]);
     const [results, setResults] = useState<GenerationResult[]>([]);
@@ -101,6 +100,7 @@ export default function ImagePage() {
     const [selectedLogIds, setSelectedLogIds] = useState<string[]>([]);
     const [previewLog, setPreviewLog] = useState<GenerationLog | null>(null);
     const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
+    const [deletingLogs, setDeletingLogs] = useState(false);
     const [isReferenceDragActive, setIsReferenceDragActive] = useState(false);
     const [uploadingRefs, setUploadingRefs] = useState(false);
     const [autoRunToken, setAutoRunToken] = useState(0);
@@ -122,16 +122,43 @@ export default function ImagePage() {
     }, [running, startedAt]);
 
     useEffect(() => {
-        void refreshLogs();
+        const syncAndRefresh = () => {
+            void refreshLogs().then(() => {
+                void syncWorkbenchLogsWithCloud("image", logStore, serializeLog).then(() => refreshLogs());
+            });
+        };
+        syncAndRefresh();
         const handleSessionChanged = () => {
             setLogs([]);
             setResults([]);
             setPreviewLog(null);
             setSelectedLogIds([]);
-            void refreshLogs();
+            syncAndRefresh();
+        };
+        const handleCloudSynced = () => {
+            void refreshLogs().then((stored) => {
+                setPreviewLog((cur) => {
+                    if (cur && !stored.some((item) => item.id === cur.id)) {
+                        setResults([]);
+                        return null;
+                    }
+                    return cur;
+                });
+            });
+        };
+        const handleWorkspaceChanged = (event: Event) => {
+            const scope = (event as CustomEvent<{ scope?: WorkspaceChangeScope }>).detail?.scope;
+            if (scope && scope !== "all" && scope !== "image" && scope !== "media") return;
+            handleCloudSynced();
         };
         window.addEventListener("infinite-canvas:user-session-changed", handleSessionChanged);
-        return () => window.removeEventListener("infinite-canvas:user-session-changed", handleSessionChanged);
+        window.addEventListener("infinite-canvas:cloud-workspace-synced", handleCloudSynced);
+        window.addEventListener(WORKSPACE_CHANGED_EVENT, handleWorkspaceChanged);
+        return () => {
+            window.removeEventListener("infinite-canvas:user-session-changed", handleSessionChanged);
+            window.removeEventListener("infinite-canvas:cloud-workspace-synced", handleCloudSynced);
+            window.removeEventListener(WORKSPACE_CHANGED_EVENT, handleWorkspaceChanged);
+        };
     }, []);
 
     const addReferences = async (files?: FileList | null) => {
@@ -310,19 +337,30 @@ export default function ImagePage() {
         setPreviewLog(null);
     };
 
-    const deleteSelectedLogs = () => {
-        const imageKeys = logs.filter((log) => selectedLogIds.includes(log.id)).flatMap((log) => log.images.map((image) => image.storageKey).filter((key): key is string => Boolean(key)));
-        void Promise.all([deleteStoredImages(imageKeys), ...selectedLogIds.map((id) => logStore.removeItem(id))]).then(refreshLogs);
-        if (previewLog && selectedLogIds.includes(previewLog.id)) {
-            setPreviewLog(null);
-            setResults([]);
+    const deleteSelectedLogs = async () => {
+        if (deletingLogs) return;
+        const deletingIds = [...selectedLogIds];
+        setDeletingLogs(true);
+        try {
+            await deleteWorkbenchLogsWithCloud(logStore, deletingIds, () => cleanupImages(), "image");
+            await refreshLogs();
+            if (previewLog && deletingIds.includes(previewLog.id)) {
+                setPreviewLog(null);
+                setResults([]);
+            }
+            setSelectedLogIds([]);
+            setDeleteConfirmOpen(false);
+        } catch (error) {
+            message.error(error instanceof Error ? error.message : "删除失败，请重试");
+        } finally {
+            setDeletingLogs(false);
         }
-        setSelectedLogIds([]);
-        setDeleteConfirmOpen(false);
     };
 
     const saveLog = (log: GenerationLog) => {
-        void logStore.setItem(log.id, serializeLog(log)).then(refreshLogs);
+        const serialized = serializeLog(log);
+        void logStore.setItem(log.id, serialized).then(refreshLogs);
+        void pushWorkbenchLogToCloud("image", serialized);
     };
 
     const refreshLogs = async () => {
@@ -518,27 +556,7 @@ export default function ImagePage() {
                             <div className="flex items-start justify-between gap-3">
                                 <div className="min-w-0">
                                     <h1 className="text-2xl font-semibold text-stone-950 dark:text-stone-100">{t("imageWorkbench.title")}</h1>
-                                    {user ? (
-                                        <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
-                                            {(() => {
-                                                const expired = Boolean(user.storageQuotaExpiresAt && new Date(user.storageQuotaExpiresAt).getTime() <= Date.now());
-                                                const exceeded = expired || (user.storageQuotaBytes ?? 0) <= 0 || (user.storageUsedBytes ?? 0) >= (user.storageQuotaBytes ?? 0);
-                                                return (
-                                                    <Tag
-                                                        color={exceeded ? "red" : "blue"}
-                                                        className="m-0 cursor-pointer"
-                                                        onClick={() => navigate(user.role === "admin" ? "/admin?tab=my-media" : "/console?tab=my-media")}
-                                                    >
-                                                        <span className="inline-flex items-center gap-1">
-                                                            <HardDrive className="size-3" />
-                                                            云端配额：{formatStoragePair(user.storageUsedBytes, user.storageQuotaBytes)}
-                                                            {expired ? "（已过期）" : exceeded ? "（需扩容）" : ""}
-                                                        </span>
-                                                    </Tag>
-                                                );
-                                            })()}
-                                        </div>
-                                    ) : null}
+                                    <CloudQuotaTag />
                                 </div>
                                 <div className="flex shrink-0 gap-2 lg:hidden">
                                     <Button icon={<History className="size-4" />} onClick={() => setLogsOpen(true)}>
@@ -704,7 +722,19 @@ export default function ImagePage() {
             </Drawer>
             <PromptSelectDialog open={promptDialogOpen} onOpenChange={setPromptDialogOpen} onSelect={setPrompt} />
             <AssetPickerModal open={assetPickerOpen} defaultTab="my-assets" onInsert={(payload) => void insertPickedAsset(payload)} onClose={() => setAssetPickerOpen(false)} />
-            <Modal title={t("workbench.deleteLogs")} open={deleteConfirmOpen} onCancel={() => setDeleteConfirmOpen(false)} onOk={deleteSelectedLogs} okText={t("common.delete")} okButtonProps={{ danger: true }} cancelText={t("common.cancel")}>
+            <Modal
+                title={t("workbench.deleteLogs")}
+                open={deleteConfirmOpen}
+                closable={!deletingLogs}
+                maskClosable={!deletingLogs}
+                confirmLoading={deletingLogs}
+                onCancel={() => !deletingLogs && setDeleteConfirmOpen(false)}
+                onOk={() => void deleteSelectedLogs()}
+                okText={t("common.delete")}
+                okButtonProps={{ danger: true }}
+                cancelButtonProps={{ disabled: deletingLogs }}
+                cancelText={t("common.cancel")}
+            >
                 {t("workbench.deleteLogsConfirm", { count: selectedLogIds.length })}
             </Modal>
         </div>
@@ -970,6 +1000,7 @@ async function normalizeLog(log: Partial<GenerationLog>): Promise<GenerationLog>
         size: log.size || config.size || "",
         quality: log.quality || config.quality || "",
         status: log.status || "success",
+        ...(log.slotTaskIds ? { slotTaskIds: log.slotTaskIds } : {}),
         images,
     };
 }

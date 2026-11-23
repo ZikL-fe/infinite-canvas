@@ -12,6 +12,7 @@ import { billingRoutes } from "./routes/billing.ts";
 import { canvasRoutes } from "./routes/canvas.ts";
 import { runtimeRoutes } from "./routes/runtime.ts";
 import { storageRoutes } from "./routes/storage.ts";
+import { workbenchRoutes } from "./routes/workbench.ts";
 
 const app = new Hono();
 
@@ -51,6 +52,7 @@ app.route("/api/runtime", runtimeRoutes);
 app.route("/api/storage", storageRoutes);
 app.route("/api/canvas", canvasRoutes);
 app.route("/api/assets", assetRoutes);
+app.route("/api/workbench", workbenchRoutes);
 app.route("/api/admin", adminRoutes);
 
 app.onError((error, c) => {

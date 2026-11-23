@@ -5,6 +5,7 @@ import { Hono } from "hono";
 import { z } from "zod";
 
 import { canvasProjects, db } from "../db/index.ts";
+import { cleanupOrphanedUserMedia, extractStorageKeys, loadUserMediaByteMap, summarizeWorkspaceMedia } from "../lib/media-cleanup.ts";
 import { requireAuth, type AppEnv } from "../middleware/auth.ts";
 
 const upsertProjectSchema = z.object({
@@ -36,10 +37,12 @@ canvasRoutes.use("*", requireAuth);
 
 canvasRoutes.get("/projects", async (c) => {
   const user = c.get("user");
+  const withStats = c.req.query("withStats") === "1";
   const rows = await db.query.canvasProjects.findMany({
     where: eq(canvasProjects.userId, user.id),
     orderBy: [desc(canvasProjects.updatedAt)],
   });
+  const byteMap = withStats ? await loadUserMediaByteMap([user.id]) : null;
 
   const projects = rows
     .filter((row) => !row.deletedAt)
@@ -56,6 +59,14 @@ canvasRoutes.get("/projects", async (c) => {
       version: row.version,
       createdAt: row.createdAt.toISOString(),
       updatedAt: row.updatedAt.toISOString(),
+      ...(byteMap
+        ? summarizeWorkspaceMedia(user.id, byteMap, [row.nodes, row.chatSessions], {
+            title: row.title,
+            nodes: row.nodes,
+            connections: row.connections,
+            chatSessions: row.chatSessions,
+          })
+        : {}),
     }));
 
   const deletedProjects = rows
@@ -106,8 +117,18 @@ canvasRoutes.put("/projects/:id", zValidator("json", upsertProjectSchema), async
         createdAt: created.createdAt.toISOString(),
         updatedAt: created.updatedAt.toISOString(),
       },
+      deletedMediaCount: 0,
     });
   }
+
+  // 已删除画布不再允许被迟到的自动保存重新恢复
+  if (existing.deletedAt) {
+    return c.json({ project: null, skippedDeleted: true, deletedMediaCount: 0 });
+  }
+
+  const oldKeys = extractStorageKeys([existing.nodes, existing.chatSessions]);
+  const newKeys = extractStorageKeys([body.nodes, body.chatSessions]);
+  const removedKeys = Array.from(oldKeys).filter((key) => !newKeys.has(key));
 
   const [updated] = await db
     .update(canvasProjects)
@@ -121,11 +142,12 @@ canvasRoutes.put("/projects/:id", zValidator("json", upsertProjectSchema), async
       showImageInfo: body.showImageInfo,
       viewport: body.viewport,
       version: existing.version + 1,
-      deletedAt: null,
       updatedAt,
     })
     .where(and(eq(canvasProjects.id, id), eq(canvasProjects.userId, user.id)))
     .returning();
+
+  const deletedMediaCount = await cleanupOrphanedUserMedia(user.id, removedKeys);
 
   return c.json({
     project: {
@@ -133,6 +155,7 @@ canvasRoutes.put("/projects/:id", zValidator("json", upsertProjectSchema), async
       createdAt: updated.createdAt.toISOString(),
       updatedAt: updated.updatedAt.toISOString(),
     },
+    deletedMediaCount,
   });
 });
 
@@ -143,9 +166,13 @@ canvasRoutes.post("/projects/batch-delete", zValidator("json", batchDeleteSchema
 
   const existing = await db.query.canvasProjects.findMany({
     where: and(eq(canvasProjects.userId, user.id), inArray(canvasProjects.id, ids)),
-    columns: { id: true },
+    columns: { id: true, nodes: true, chatSessions: true },
   });
   const existingSet = new Set(existing.map((item) => item.id));
+  const candidateKeys = new Set<string>();
+  for (const project of existing) {
+    extractStorageKeys([project.nodes, project.chatSessions], candidateKeys);
+  }
 
   if (existing.length) {
     await db
@@ -172,7 +199,8 @@ canvasRoutes.post("/projects/batch-delete", zValidator("json", batchDeleteSchema
       .onConflictDoNothing();
   }
 
-  return c.json({ ok: true });
+  const deletedMediaCount = await cleanupOrphanedUserMedia(user.id, candidateKeys);
+  return c.json({ ok: true, deletedMediaCount });
 });
 
 canvasRoutes.delete("/projects/:id", async (c) => {
@@ -183,11 +211,26 @@ canvasRoutes.delete("/projects/:id", async (c) => {
     return c.json({ error: "无权删除该画布项目" }, 403);
   }
   const now = new Date();
+  const candidateKeys = new Set<string>();
   if (existing) {
+    extractStorageKeys([existing.nodes, existing.chatSessions], candidateKeys);
     await db
       .update(canvasProjects)
       .set({ deletedAt: now, updatedAt: now })
       .where(and(eq(canvasProjects.id, id), eq(canvasProjects.userId, user.id)));
+  } else {
+    await db
+      .insert(canvasProjects)
+      .values({
+        id,
+        userId: user.id,
+        title: "已删除画布",
+        deletedAt: now,
+        createdAt: now,
+        updatedAt: now,
+      })
+      .onConflictDoNothing();
   }
-  return c.json({ ok: true });
+  const deletedMediaCount = await cleanupOrphanedUserMedia(user.id, candidateKeys);
+  return c.json({ ok: true, deletedMediaCount });
 });

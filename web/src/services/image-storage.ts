@@ -42,7 +42,12 @@ export async function uploadImage(input: string | Blob, options?: ImageReadOptio
     try {
         blob = await fetchImageBlob(input, options);
     } catch (error) {
-        if (options?.signal?.aborted || isNamedError(error, IMAGE_RESPONSE_ERROR) || isNamedError(error, IMAGE_TIMEOUT_ERROR) || !/^https?:\/\//i.test(input)) throw error;
+        if (options?.signal?.aborted) throw error;
+        if (options?.existingStorageKey) {
+            const cloudBlob = await getImageBlob(options.existingStorageKey).catch(() => null);
+            if (cloudBlob) return storeImage(cloudBlob, options);
+        }
+        if (isNamedError(error, IMAGE_RESPONSE_ERROR) || isNamedError(error, IMAGE_TIMEOUT_ERROR) || !/^https?:\/\//i.test(input)) throw error;
         const meta = await loadImageMeta(input, options, IMAGE_REMOTE_LOAD_TIMEOUT_MS);
         if (!meta) throw error;
         return { url: input, ...(options?.existingStorageKey ? { storageKey: options.existingStorageKey } : {}), width: meta.width, height: meta.height, bytes: 0, mimeType: "" };

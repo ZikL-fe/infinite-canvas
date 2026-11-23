@@ -53,5 +53,24 @@ export function ClientRootInit({ children }: { children: ReactNode }) {
         void syncRuntimeSettings();
     }, [accessToken, channelsCount]);
 
+    // 切回页面或窗口重新聚焦时自动拉取云端增量与删除墓碑，保持多端/多窗口删除同步
+    useEffect(() => {
+        if (!accessToken) return;
+        let lastSyncAt = 0;
+        const triggerSync = () => {
+            if (document.visibilityState === "hidden") return;
+            const now = Date.now();
+            if (now - lastSyncAt < 3000) return;
+            lastSyncAt = now;
+            void syncCloudWorkspace();
+        };
+        window.addEventListener("focus", triggerSync);
+        document.addEventListener("visibilitychange", triggerSync);
+        return () => {
+            window.removeEventListener("focus", triggerSync);
+            document.removeEventListener("visibilitychange", triggerSync);
+        };
+    }, [accessToken]);
+
     return <>{children}</>;
 }

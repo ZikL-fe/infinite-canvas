@@ -1,8 +1,21 @@
-/** 工作区云端同步与平台运行时配置拉取：管理画布/资产合并、定时去抖推送及模型渠道自愈同步。 */
+/** 工作区云端同步与平台运行时配置拉取：管理画布/资产/工作台合并、定时去抖推送及模型渠道自愈同步。 */
+import localforage from "localforage";
+
 import { assetsApi, authApi, canvasApi, runtimeApi, storageApi } from "@/services/api/server";
-import { inferCloudMediaKind, isCloudAuthenticated, isUserCloudQuotaExceeded, notifyCloudStorageQuotaExceeded, setCloudSyncHydrated, uploadBlobToCloud } from "@/services/cloud-media";
+import {
+    inferCloudMediaKind,
+    initWorkspaceBroadcastChannel,
+    isCloudAuthenticated,
+    isUserCloudQuotaExceeded,
+    notifyCloudWorkspaceChanged,
+    notifyCloudStorageQuotaExceeded,
+    setCloudSyncHydrated,
+    uploadBlobToCloud,
+    WORKSPACE_CHANGED_EVENT,
+} from "@/services/cloud-media";
 import { getMediaBlob, resolveMediaUrl, clearLocalMediaFileCache } from "@/services/file-storage";
 import { ensureImagePreview, getImageBlob, resolveImageUrl, clearLocalImageAndWorkbenchCaches } from "@/services/image-storage";
+import { syncWorkbenchLogsWithCloud } from "@/services/workbench-sync";
 import { useCanvasStore, type CanvasDeletedProject, type CanvasProject } from "@/stores/canvas/use-canvas-store";
 import { useAssetStore, type Asset } from "@/stores/use-asset-store";
 import { useConfigStore, type AiConfig } from "@/stores/use-config-store";
@@ -14,8 +27,12 @@ const PROJECT_SYNC_DEBOUNCE_MS = 800;
 let listenersInitialized = false;
 let applyingRemote = false;
 let syncInFlight: Promise<void> | null = null;
+let syncQueued = false;
 let runtimeSyncInFlight: Promise<boolean> | null = null;
 const projectSaveTimers = new Map<string, ReturnType<typeof setTimeout>>();
+const deletedProjectIds = new Set<string>();
+const cloudDeletedProjectIds = new Set<string>();
+const cloudDeletedAssetIds = new Set<string>();
 
 function waitForHydration(store: { getState: () => { hydrated: boolean }; subscribe: (listener: (state: { hydrated: boolean }) => void) => () => void }) {
     if (store.getState().hydrated) return Promise.resolve();
@@ -100,10 +117,18 @@ async function hydrateAsset(asset: Asset): Promise<Asset> {
 }
 
 async function pushProjectToCloud(project: CanvasProject) {
-    if (!isCloudAuthenticated()) return;
+    if (!isCloudAuthenticated() || deletedProjectIds.has(project.id)) return;
     const ok = await ensureCloudMediaUploaded(project);
-    if (!ok) return;
-    await canvasApi.saveProject(project.id, stripBlobUrls(project) as unknown as Record<string, unknown>);
+    if (!ok || deletedProjectIds.has(project.id)) return;
+    if (!useCanvasStore.getState().projects.some((item) => item.id === project.id)) return;
+    const res = await canvasApi.saveProject(project.id, stripBlobUrls(project) as unknown as Record<string, unknown>);
+    if (res?.deletedMediaCount && res.deletedMediaCount > 0) {
+        void authApi
+            .me()
+            .then((meRes) => useUserStore.getState().setUser(meRes.user))
+            .catch(() => undefined);
+        notifyCloudWorkspaceChanged("media", { sync: false });
+    }
 }
 
 async function pushAssetToCloud(asset: Asset) {
@@ -252,7 +277,10 @@ export async function ensureRuntimeConfigForGeneration(
 
 export async function syncCloudWorkspace() {
     if (!isCloudAuthenticated()) return;
-    if (syncInFlight) return syncInFlight;
+    if (syncInFlight) {
+        syncQueued = true;
+        return syncInFlight;
+    }
 
     syncInFlight = (async () => {
         try {
@@ -283,7 +311,12 @@ export async function syncCloudWorkspace() {
             }
             localStorage.setItem(LAST_SYNC_USER_KEY, currentUser.id);
 
-            const [remoteCanvas, remoteAssetRes] = await Promise.all([canvasApi.listProjects(), assetsApi.list()]);
+            const [remoteCanvas, remoteAssetRes] = await Promise.all([
+                canvasApi.listProjects(),
+                assetsApi.list(),
+                syncWorkbenchLogsWithCloud("image", localforage.createInstance({ name: "infinite-canvas", storeName: "image_generation_logs" }), (log) => log),
+                syncWorkbenchLogsWithCloud("video", localforage.createInstance({ name: "infinite-canvas", storeName: "video_generation_logs" }), (log) => log),
+            ]);
             const remoteProjects = remoteCanvas.projects as unknown as CanvasProject[];
             const remoteAssets = remoteAssetRes.assets as unknown as Asset[];
 
@@ -301,11 +334,20 @@ export async function syncCloudWorkspace() {
             } finally {
                 applyingRemote = false;
             }
+            window.dispatchEvent(new CustomEvent("infinite-canvas:cloud-workspace-synced"));
 
             setCloudSyncHydrated(true);
 
             if (canvasPlan.deletedToPush.length) {
-                await canvasApi.deleteProjects(canvasPlan.deletedToPush).catch(() => undefined);
+                await canvasApi
+                    .deleteProjects(canvasPlan.deletedToPush)
+                    .then(() =>
+                        authApi
+                            .me()
+                            .then((res) => useUserStore.getState().setUser(res.user))
+                            .catch(() => undefined),
+                    )
+                    .catch(() => undefined);
             }
             for (const project of canvasPlan.toPush) {
                 await pushProjectToCloud(project).catch((err) => console.warn("[cloud-sync] 上传画布失败:", err));
@@ -317,6 +359,10 @@ export async function syncCloudWorkspace() {
             console.warn("[cloud-sync] 同步工作区失败:", error);
         } finally {
             syncInFlight = null;
+            if (syncQueued) {
+                syncQueued = false;
+                void syncCloudWorkspace();
+            }
         }
     })();
 
@@ -337,28 +383,66 @@ export function initCloudSyncListeners() {
     if (listenersInitialized) return;
     listenersInitialized = true;
 
+    initWorkspaceBroadcastChannel((scope, sync) => {
+        window.dispatchEvent(new CustomEvent(WORKSPACE_CHANGED_EVENT, { detail: { scope, sync } }));
+        if (sync && isCloudAuthenticated()) {
+            void syncCloudWorkspace();
+        }
+    });
+
     useCanvasStore.subscribe((state, prevState) => {
         if (applyingRemote || !state.hydrated || !isCloudAuthenticated()) return;
 
         const prevMap = new Map(prevState.projects.map((p) => [p.id, p]));
         for (const project of state.projects) {
+            deletedProjectIds.delete(project.id);
             const prev = prevMap.get(project.id);
-            if (!prev || prev !== project) {
+            if (!prev) {
+                scheduleProjectSync(project);
+                continue;
+            }
+            if (prev === project) continue;
+            // 仅视口平移/缩放变化时不触发云端整画布上传与查重请求，避免拖拽/缩放掉帧
+            const onlyViewportChanged =
+                prev.title === project.title &&
+                prev.nodes === project.nodes &&
+                prev.connections === project.connections &&
+                prev.chatSessions === project.chatSessions &&
+                prev.activeChatId === project.activeChatId &&
+                prev.backgroundMode === project.backgroundMode &&
+                prev.showImageInfo === project.showImageInfo;
+            if (!onlyViewportChanged) {
                 scheduleProjectSync(project);
             }
         }
 
         const prevDeletedSet = new Set(prevState.deletedProjects.map((d) => d.id));
         const newlyDeleted = state.deletedProjects.filter((d) => !prevDeletedSet.has(d.id)).map((d) => d.id);
-        if (newlyDeleted.length) {
-            for (const id of newlyDeleted) {
-                const timer = projectSaveTimers.get(id);
-                if (timer) {
-                    clearTimeout(timer);
-                    projectSaveTimers.delete(id);
-                }
+        const pendingCloudDeleted: string[] = [];
+        for (const id of newlyDeleted) {
+            deletedProjectIds.add(id);
+            const timer = projectSaveTimers.get(id);
+            if (timer) {
+                clearTimeout(timer);
+                projectSaveTimers.delete(id);
             }
-            void canvasApi.deleteProjects(newlyDeleted).catch((err) => console.warn("[cloud-sync] 删除远端画布失败:", err));
+            if (cloudDeletedProjectIds.has(id)) {
+                cloudDeletedProjectIds.delete(id);
+            } else {
+                pendingCloudDeleted.push(id);
+            }
+        }
+        if (pendingCloudDeleted.length) {
+            void canvasApi
+                .deleteProjects(pendingCloudDeleted)
+                .then(() => {
+                    notifyCloudWorkspaceChanged("canvas", { sync: false });
+                    return authApi
+                        .me()
+                        .then((res) => useUserStore.getState().setUser(res.user))
+                        .catch(() => undefined);
+                })
+                .catch((err) => console.warn("[cloud-sync] 删除远端画布失败:", err));
         }
     });
 
@@ -377,7 +461,20 @@ export function initCloudSyncListeners() {
 
         for (const prevAsset of prevState.assets) {
             if (!nextIds.has(prevAsset.id)) {
-                void assetsApi.remove(prevAsset.id).catch((err) => console.warn("[cloud-sync] 删除远端素材失败:", err));
+                if (cloudDeletedAssetIds.has(prevAsset.id)) {
+                    cloudDeletedAssetIds.delete(prevAsset.id);
+                    continue;
+                }
+                void assetsApi
+                    .remove(prevAsset.id)
+                    .then(() => {
+                        notifyCloudWorkspaceChanged("assets", { sync: false });
+                        return authApi
+                            .me()
+                            .then((res) => useUserStore.getState().setUser(res.user))
+                            .catch(() => undefined);
+                    })
+                    .catch((err) => console.warn("[cloud-sync] 删除远端素材失败:", err));
             }
         }
     });
@@ -405,4 +502,48 @@ export function initCloudSyncListeners() {
             void syncCloudWorkspace();
         }
     });
+}
+
+/** 先确认云端删除画布项目成功，再清理本地画布与孤立媒体缓存（接口失败会抛出错误且保留本地数据）。 */
+export async function deleteCanvasProjectsWithCloud(ids: string[]) {
+    if (!ids.length) return;
+    for (const id of ids) {
+        deletedProjectIds.add(id);
+        const timer = projectSaveTimers.get(id);
+        if (timer) {
+            clearTimeout(timer);
+            projectSaveTimers.delete(id);
+        }
+    }
+    if (isCloudAuthenticated()) {
+        try {
+            await canvasApi.deleteProjects(ids);
+        } catch (error) {
+            ids.forEach((id) => deletedProjectIds.delete(id));
+            throw error;
+        }
+        ids.forEach((id) => cloudDeletedProjectIds.add(id));
+        notifyCloudWorkspaceChanged("canvas", { sync: false });
+        void authApi
+            .me()
+            .then((res) => useUserStore.getState().setUser(res.user))
+            .catch(() => undefined);
+    }
+    useCanvasStore.getState().deleteProjects(ids);
+    useAssetStore.getState().cleanupImages();
+}
+
+/** 先确认云端删除资产成功，再移除本地资产与孤立媒体缓存（接口失败会抛出错误且保留本地数据）。 */
+export async function deleteAssetWithCloud(id: string) {
+    if (!id) return;
+    if (isCloudAuthenticated()) {
+        await assetsApi.remove(id);
+        cloudDeletedAssetIds.add(id);
+        notifyCloudWorkspaceChanged("assets", { sync: false });
+        void authApi
+            .me()
+            .then((res) => useUserStore.getState().setUser(res.user))
+            .catch(() => undefined);
+    }
+    useAssetStore.getState().removeAsset(id);
 }

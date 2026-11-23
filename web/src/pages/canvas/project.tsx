@@ -9,7 +9,7 @@ import { requestEdit, requestGeneration, requestImageQuestion } from "@/services
 import { requestAudioGeneration, storeGeneratedAudio } from "@/services/api/audio";
 import { createVideoGenerationTask, isVideoTaskFailed, storeGeneratedVideo, waitForVideoGenerationTask } from "@/services/api/video";
 import { defaultConfig, useConfigStore, useEffectiveConfig } from "@/stores/use-config-store";
-import { ensureRuntimeConfigForGeneration } from "@/services/cloud-sync";
+import { deleteCanvasProjectsWithCloud, ensureRuntimeConfigForGeneration } from "@/services/cloud-sync";
 import { ensureImagePreview, uploadImage } from "@/services/image-storage";
 import { uploadMediaFile, type UploadedFile } from "@/services/file-storage";
 import { nanoid } from "nanoid";
@@ -239,7 +239,6 @@ function InfiniteCanvasPage() {
     const openProject = useCanvasStore((state) => state.openProject);
     const updateProject = useCanvasStore((state) => state.updateProject);
     const renameProject = useCanvasStore((state) => state.renameProject);
-    const deleteProjects = useCanvasStore((state) => state.deleteProjects);
     const currentProject = useCanvasStore((state) => state.projects.find((project) => project.id === projectId));
     const theme = canvasThemes[useThemeStore((state) => state.theme)];
     const [nodes, setNodes] = useState<CanvasNodeData[]>([]);
@@ -247,6 +246,11 @@ function InfiniteCanvasPage() {
     const [chatSessions, setChatSessions] = useState<CanvasAssistantSession[]>([]);
     const [activeChatId, setActiveChatId] = useState<string | null>(null);
     const [viewport, setViewport] = useState<ViewportTransform>({ x: 0, y: 0, k: 1 });
+    const lastSyncedAtRef = useRef("");
+    const handleViewportChange = useCallback((next: ViewportTransform) => {
+        setViewport(next);
+        setContextMenu((prev) => (prev ? null : prev));
+    }, []);
     const [canvasTool, setCanvasTool] = useState<"select" | "pan">("pan");
     const [size, setSize] = useState({ width: 1200, height: 720 });
     const [selectedNodeIds, setSelectedNodeIds] = useState<Set<string>>(new Set());
@@ -486,31 +490,60 @@ function InfiniteCanvasPage() {
 
         let cancelled = false;
         let recoveryTimer: ReturnType<typeof setTimeout> | null = null;
-        const restore = async () => {
-            const activeIds = getActiveGenerationNodeIds(projectId);
-            const cloudRecovered = await recoverCloudInterruptedImages(project.nodes, activeIds);
-            const restoredNodes = await hydrateCanvasImages(resetInterruptedGeneration(cloudRecovered.nodes, activeIds, cloudRecovered.processingTaskIds));
-            const restoredSessions = await hydrateAssistantImages(project.chatSessions || []);
-            if (cancelled) return;
-            const latestProject = openProject(projectId);
-            const latestNodes = latestProject?.nodes || project.nodes;
-            const latestConnections = latestProject?.connections || project.connections;
-            let processingTaskIds = cloudRecovered.processingTaskIds;
-            let finalNodes = restoredNodes;
-            if (latestNodes !== project.nodes) {
-                const latestActive = getActiveGenerationNodeIds(projectId);
-                const latestRecovered = await recoverCloudInterruptedImages(latestNodes, latestActive);
-                processingTaskIds = latestRecovered.processingTaskIds;
-                finalNodes = await hydrateCanvasImages(resetInterruptedGeneration(latestRecovered.nodes, latestActive, processingTaskIds));
+        lastSyncedAtRef.current = project.updatedAt;
+        const startPolling = (initialProcessingIds: string[]) => {
+            if (recoveryTimer) {
+                clearTimeout(recoveryTimer);
+                recoveryTimer = null;
             }
+            if (!initialProcessingIds.length || cancelled) return;
+            let attempts = 0;
+            const pollPendingImages = async () => {
+                if (cancelled) return;
+                attempts += 1;
+                const activeNow = getActiveGenerationNodeIds(projectId);
+                const result = await recoverCloudInterruptedImages(nodesRef.current, activeNow);
+                if (cancelled) return;
+                if (result.nodes !== nodesRef.current) {
+                    const updated = attempts >= 24 && result.processingTaskIds.length > 0 ? resetInterruptedGeneration(result.nodes, activeNow) : result.nodes;
+                    setNodes(updated);
+                }
+                if (result.processingTaskIds.length > 0 && attempts < 24) {
+                    recoveryTimer = setTimeout(() => void pollPendingImages(), 2500);
+                } else if (result.processingTaskIds.length > 0) {
+                    setNodes((prev) => resetInterruptedGeneration(prev, getActiveGenerationNodeIds(projectId)));
+                }
+            };
+            recoveryTimer = setTimeout(() => void pollPendingImages(), 2500);
+        };
+        const restore = async (targetProject = project) => {
+            let workingNodes = targetProject.nodes;
+            let workingConnections = targetProject.connections;
+            let activeIds = getActiveGenerationNodeIds(projectId);
+            let cloudRecovered = await recoverCloudInterruptedImages(workingNodes, activeIds);
+            let finalNodes = await hydrateCanvasImages(resetInterruptedGeneration(cloudRecovered.nodes, activeIds, cloudRecovered.processingTaskIds));
+            const restoredSessions = await hydrateAssistantImages(targetProject.chatSessions || []);
             if (cancelled) return;
+            // 异步等待期间若 Store 已被后台生成或云同步更新，重新对齐最新快照避免回退成旧的生成中状态
+            let latestProject = openProject(projectId);
+            while (latestProject && latestProject.nodes !== workingNodes) {
+                workingNodes = latestProject.nodes;
+                workingConnections = latestProject.connections;
+                activeIds = getActiveGenerationNodeIds(projectId);
+                cloudRecovered = await recoverCloudInterruptedImages(workingNodes, activeIds);
+                finalNodes = await hydrateCanvasImages(resetInterruptedGeneration(cloudRecovered.nodes, activeIds, cloudRecovered.processingTaskIds));
+                if (cancelled) return;
+                latestProject = openProject(projectId);
+            }
+            const processingTaskIds = cloudRecovered.processingTaskIds;
+            lastSyncedAtRef.current = latestProject?.updatedAt || targetProject.updatedAt;
             setNodes(finalNodes);
-            setConnections(latestConnections);
+            setConnections(workingConnections);
             setChatSessions(restoredSessions);
-            setActiveChatId(project.activeChatId || null);
-            setBackgroundMode(project.backgroundMode);
-            setShowImageInfo(project.showImageInfo || false);
-            setViewport(project.viewport);
+            setActiveChatId(targetProject.activeChatId || null);
+            setBackgroundMode(targetProject.backgroundMode);
+            setShowImageInfo(targetProject.showImageInfo || false);
+            setViewport(targetProject.viewport);
             setRunningNodeId(getFirstActiveRunningNodeId(projectId));
             historyRef.current = { past: [], future: [] };
             if (historyCommitTimerRef.current) {
@@ -519,41 +552,32 @@ function InfiniteCanvasPage() {
             }
             lastHistoryRef.current = {
                 nodes: finalNodes,
-                connections: project.connections,
+                connections: workingConnections,
                 chatSessions: restoredSessions,
-                activeChatId: project.activeChatId || null,
-                backgroundMode: project.backgroundMode,
-                showImageInfo: project.showImageInfo || false,
+                activeChatId: targetProject.activeChatId || null,
+                backgroundMode: targetProject.backgroundMode,
+                showImageInfo: targetProject.showImageInfo || false,
             };
             setHistoryState({ canUndo: false, canRedo: false });
             setProjectLoaded(true);
-
-            if (processingTaskIds.length > 0 && !cancelled) {
-                let attempts = 0;
-                const pollPendingImages = async () => {
-                    if (cancelled) return;
-                    attempts += 1;
-                    const activeNow = getActiveGenerationNodeIds(projectId);
-                    const result = await recoverCloudInterruptedImages(nodesRef.current, activeNow);
-                    if (cancelled) return;
-                    if (result.nodes !== nodesRef.current) {
-                        const updated = attempts >= 24 && result.processingTaskIds.length > 0
-                            ? resetInterruptedGeneration(result.nodes, activeNow)
-                            : result.nodes;
-                        setNodes(updated);
-                    }
-                    if (result.processingTaskIds.length > 0 && attempts < 24) {
-                        recoveryTimer = setTimeout(() => void pollPendingImages(), 2500);
-                    } else if (result.processingTaskIds.length > 0) {
-                        setNodes((prev) => resetInterruptedGeneration(prev, getActiveGenerationNodeIds(projectId)));
-                    }
-                };
-                recoveryTimer = setTimeout(() => void pollPendingImages(), 2500);
+            startPolling(processingTaskIds);
+        };
+        const onCloudSynced = () => {
+            if (cancelled || getActiveGenerationNodeIds(projectId).size > 0) return;
+            const latest = openProject(projectId);
+            if (!latest) {
+                navigate("/canvas", { replace: true });
+                return;
+            }
+            if (latest.updatedAt > lastSyncedAtRef.current) {
+                void restore(latest);
             }
         };
+        window.addEventListener("infinite-canvas:cloud-workspace-synced", onCloudSynced);
         void restore();
         return () => {
             cancelled = true;
+            window.removeEventListener("infinite-canvas:cloud-workspace-synced", onCloudSynced);
             if (recoveryTimer) clearTimeout(recoveryTimer);
         };
     }, [hydrated, navigate, openProject, projectId]);
@@ -607,6 +631,8 @@ function InfiniteCanvasPage() {
     useEffect(() => {
         if (!projectLoaded || historyPausedRef.current) return;
         updateProject(projectId, { nodes, connections, chatSessions, activeChatId, backgroundMode, showImageInfo });
+        const latestUpdatedAt = useCanvasStore.getState().projects.find((item) => item.id === projectId)?.updatedAt;
+        if (latestUpdatedAt) lastSyncedAtRef.current = latestUpdatedAt;
     }, [activeChatId, backgroundMode, chatSessions, connections, nodes, projectId, projectLoaded, showImageInfo, updateProject]);
 
     useEffect(() => {
@@ -618,6 +644,8 @@ function InfiniteCanvasPage() {
         if (viewportSaveTimerRef.current) clearTimeout(viewportSaveTimerRef.current);
         viewportSaveTimerRef.current = setTimeout(() => {
             updateProject(projectId, { viewport: viewportRef.current });
+            const latestUpdatedAt = useCanvasStore.getState().projects.find((item) => item.id === projectId)?.updatedAt;
+            if (latestUpdatedAt) lastSyncedAtRef.current = latestUpdatedAt;
             viewportSaveTimerRef.current = null;
         }, 500);
         return () => {
@@ -1273,11 +1301,14 @@ function InfiniteCanvasPage() {
         navigate(`/canvas/${id}`);
     }, [createProject, navigate, t]);
 
-    const deleteCurrentProject = useCallback(() => {
-        deleteProjects([projectId]);
-        cleanupAssetImages();
-        navigate("/canvas");
-    }, [cleanupAssetImages, deleteProjects, navigate, projectId]);
+    const deleteCurrentProject = useCallback(async () => {
+        try {
+            await deleteCanvasProjectsWithCloud([projectId]);
+            navigate("/canvas");
+        } catch (error) {
+            message.error(error instanceof Error ? error.message : "删除画布失败，请重试");
+        }
+    }, [message, navigate, projectId]);
 
     const exportCurrentProject = useCallback(async () => {
         const project = useCanvasStore.getState().projects.find((item) => item.id === projectId);
@@ -3286,10 +3317,7 @@ function InfiniteCanvasPage() {
                     viewport={viewport}
                     tool={canvasTool}
                     backgroundMode={backgroundMode}
-                    onViewportChange={(next) => {
-                        setViewport(next);
-                        setContextMenu(null);
-                    }}
+                    onViewportChange={handleViewportChange}
                     onCanvasMouseDown={(event) => {
                         if (!referencePickerNodeId) handleCanvasMouseDown(event);
                     }}
@@ -3302,7 +3330,7 @@ function InfiniteCanvasPage() {
                     onContextMenu={preventCanvasContextMenu}
                     onDrop={handleDrop}
                 >
-                    <svg className="absolute left-0 top-0 h-[10000px] w-[10000px] overflow-visible" style={{ pointerEvents: "none", transform: "translateZ(0)", zIndex: 0 }}>
+                    <svg className="absolute left-0 top-0 h-px w-px overflow-visible" style={{ pointerEvents: "none", zIndex: 0 }}>
                         {visibleConnections.map(({ connection, from, to }) => (
                             <ConnectionPath
                                 key={connection.id}

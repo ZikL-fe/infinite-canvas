@@ -7,16 +7,19 @@ import { saveAs } from "file-saver";
 import { useTranslation } from "react-i18next";
 
 import { AssetPickerModal, type InsertAssetPayload } from "@/components/canvas/asset-picker-modal";
+import { CloudQuotaTag } from "@/components/layout/cloud-quota-tag";
 import { ModelPicker } from "@/components/model-picker";
 import { PromptSelectDialog } from "@/components/prompts/prompt-select-dialog";
 import { VideoSettingsPanel, normalizeVideoResolutionValue, normalizeVideoSizeValue, videoModeLabel, videoSizeLabel } from "@/components/video-settings-panel";
 import { canvasThemes } from "@/lib/canvas-theme";
 import { clampVideoSeconds } from "@/lib/media-size";
 import { formatBytes, formatDuration } from "@/lib/image-utils";
-import { deleteStoredMedia, resolveMediaUrl } from "@/services/file-storage";
+import { resolveMediaUrl } from "@/services/file-storage";
+import { deleteWorkbenchLogsWithCloud, pushWorkbenchLogToCloud, syncWorkbenchLogsWithCloud } from "@/services/workbench-sync";
 import { resolveImageUrl, ensureImagePreview, getImagePreviewRevision, previewUrlFor, subscribeImagePreviews, uploadImage } from "@/services/image-storage";
 import { createVideoGenerationTask, pollVideoGenerationTask, storeGeneratedVideo, type VideoGenerationTask } from "@/services/api/video";
 import { ensureRuntimeConfigForGeneration } from "@/services/cloud-sync";
+import { WORKSPACE_CHANGED_EVENT, type WorkspaceChangeScope } from "@/services/cloud-media";
 import { useAssetStore } from "@/stores/use-asset-store";
 import { useWorkbenchAgentStore } from "@/stores/use-workbench-agent-store";
 import { boolConfig, modelOptionLabel, useConfigStore, useEffectiveConfig, type AiConfig } from "@/stores/use-config-store";
@@ -81,6 +84,7 @@ export default function VideoPage() {
     const isAiConfigReady = useConfigStore((state) => state.isAiConfigReady);
     const openConfigDialog = useConfigStore((state) => state.openConfigDialog);
     const addAsset = useAssetStore((state) => state.addAsset);
+    const cleanupImages = useAssetStore((state) => state.cleanupImages);
     const [prompt, setPrompt] = useState("");
     const [references, setReferences] = useState<ReferenceImage[]>([]);
     const [results, setResults] = useState<GenerationResult[]>([]);
@@ -95,6 +99,7 @@ export default function VideoPage() {
     const [selectedLogIds, setSelectedLogIds] = useState<string[]>([]);
     const [previewLog, setPreviewLog] = useState<GenerationLog | null>(null);
     const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
+    const [deletingLogs, setDeletingLogs] = useState(false);
     const [referenceDragTarget, setReferenceDragTarget] = useState(false);
     const [autoRunToken, setAutoRunToken] = useState(0);
     const videoCommand = useWorkbenchAgentStore((state) => state.videoCommand);
@@ -113,16 +118,51 @@ export default function VideoPage() {
     }, [running, startedAt]);
 
     useEffect(() => {
-        void refreshLogs();
+        const syncAndRefresh = (resumePending = true) => {
+            void refreshLogs(resumePending).then(() => {
+                void syncWorkbenchLogsWithCloud("video", logStore, serializeLog).then(() => refreshLogs(resumePending));
+            });
+        };
+        syncAndRefresh(true);
         const handleSessionChanged = () => {
             setLogs([]);
             setResults([]);
             setPreviewLog(null);
             setSelectedLogIds([]);
-            void refreshLogs(false);
+            syncAndRefresh(false);
+        };
+        const handleCloudSynced = () => {
+            void refreshLogs(true).then((stored) => {
+                setPreviewLog((cur) => {
+                    if (cur && !stored.some((item) => item.id === cur.id)) {
+                        setResults([]);
+                        return null;
+                    }
+                    return cur;
+                });
+            });
+        };
+        const handleWorkspaceChanged = (event: Event) => {
+            const scope = (event as CustomEvent<{ scope?: WorkspaceChangeScope }>).detail?.scope;
+            if (scope && scope !== "all" && scope !== "video" && scope !== "media") return;
+            void refreshLogs(false).then((stored) => {
+                setPreviewLog((cur) => {
+                    if (cur && !stored.some((item) => item.id === cur.id)) {
+                        setResults([]);
+                        return null;
+                    }
+                    return cur;
+                });
+            });
         };
         window.addEventListener("infinite-canvas:user-session-changed", handleSessionChanged);
-        return () => window.removeEventListener("infinite-canvas:user-session-changed", handleSessionChanged);
+        window.addEventListener("infinite-canvas:cloud-workspace-synced", handleCloudSynced);
+        window.addEventListener(WORKSPACE_CHANGED_EVENT, handleWorkspaceChanged);
+        return () => {
+            window.removeEventListener("infinite-canvas:user-session-changed", handleSessionChanged);
+            window.removeEventListener("infinite-canvas:cloud-workspace-synced", handleCloudSynced);
+            window.removeEventListener(WORKSPACE_CHANGED_EVENT, handleWorkspaceChanged);
+        };
     }, []);
 
     const addReferences = async (files?: FileList | null) => {
@@ -284,23 +324,31 @@ export default function VideoPage() {
         setPreviewLog(null);
     };
 
-    const deleteSelectedLogs = () => {
-        const mediaKeys = logs
-            .filter((log) => selectedLogIds.includes(log.id))
-            .map((log) => log.video?.storageKey)
-            .filter((key): key is string => Boolean(key));
-        void Promise.all([deleteStoredMedia(mediaKeys), ...selectedLogIds.map((id) => logStore.removeItem(id))]).then(() => refreshLogs());
-        if (previewLog && selectedLogIds.includes(previewLog.id)) {
-            setPreviewLog(null);
-            setResults([]);
+    const deleteSelectedLogs = async () => {
+        if (deletingLogs) return;
+        const deletingIds = [...selectedLogIds];
+        setDeletingLogs(true);
+        try {
+            await deleteWorkbenchLogsWithCloud(logStore, deletingIds, () => cleanupImages(), "video");
+            await refreshLogs();
+            if (previewLog && deletingIds.includes(previewLog.id)) {
+                setPreviewLog(null);
+                setResults([]);
+            }
+            setSelectedLogIds([]);
+            setDeleteConfirmOpen(false);
+        } catch (error) {
+            message.error(error instanceof Error ? error.message : "删除失败，请重试");
+        } finally {
+            setDeletingLogs(false);
         }
-        setSelectedLogIds([]);
-        setDeleteConfirmOpen(false);
     };
 
     const saveLog = async (log: GenerationLog, resumePending = true) => {
-        await logStore.setItem(log.id, serializeLog(log));
+        const serialized = serializeLog(log);
+        await logStore.setItem(log.id, serialized);
         await refreshLogs(resumePending);
+        void pushWorkbenchLogToCloud("video", serialized);
     };
 
     const refreshLogs = async (resumePending = true) => {
@@ -397,7 +445,10 @@ export default function VideoPage() {
                 <section className="grid gap-3 lg:min-h-0 lg:overflow-hidden xl:grid-cols-[420px_minmax(0,1fr)]">
                     <div className="thin-scrollbar flex flex-col rounded-lg border border-stone-200 bg-card p-4 shadow-sm dark:border-stone-800 lg:min-h-0 lg:overflow-y-auto">
                         <div className="flex items-start justify-between gap-3">
-                            <h1 className="text-2xl font-semibold text-stone-950 dark:text-stone-100">{t("videoWorkbench.title")}</h1>
+                            <div>
+                                <h1 className="text-2xl font-semibold text-stone-950 dark:text-stone-100">{t("videoWorkbench.title")}</h1>
+                                <CloudQuotaTag />
+                            </div>
                             <div className="flex shrink-0 gap-2 lg:hidden">
                                 <Button icon={<History className="size-4" />} onClick={() => setLogsOpen(true)}>
                                     {t("workbench.logs")}
@@ -520,7 +571,19 @@ export default function VideoPage() {
             </Drawer>
             <PromptSelectDialog open={promptDialogOpen} onOpenChange={setPromptDialogOpen} onSelect={setPrompt} />
             <AssetPickerModal open={assetPickerOpen} defaultTab="my-assets" onInsert={(payload) => void insertPickedAsset(payload)} onClose={() => setAssetPickerOpen(false)} />
-            <Modal title={t("workbench.deleteLogs")} open={deleteConfirmOpen} onCancel={() => setDeleteConfirmOpen(false)} onOk={deleteSelectedLogs} okText={t("common.delete")} okButtonProps={{ danger: true }} cancelText={t("common.cancel")}>
+            <Modal
+                title={t("workbench.deleteLogs")}
+                open={deleteConfirmOpen}
+                closable={!deletingLogs}
+                maskClosable={!deletingLogs}
+                confirmLoading={deletingLogs}
+                onCancel={() => !deletingLogs && setDeleteConfirmOpen(false)}
+                onOk={() => void deleteSelectedLogs()}
+                okText={t("common.delete")}
+                okButtonProps={{ danger: true }}
+                cancelButtonProps={{ disabled: deletingLogs }}
+                cancelText={t("common.cancel")}
+            >
                 {t("workbench.deleteLogsConfirm", { count: selectedLogIds.length })}
             </Modal>
         </div>

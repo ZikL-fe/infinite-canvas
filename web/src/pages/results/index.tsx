@@ -6,7 +6,8 @@ import { useNavigate } from "react-router-dom";
 
 import { createImageThumbnail, createVideoThumbnail } from "@/lib/image-thumbnail";
 import { formatBytes, formatStoragePair } from "@/lib/image-utils";
-import { storageApi, type MediaItem } from "@/services/api/server";
+import { authApi, storageApi, type MediaItem } from "@/services/api/server";
+import { notifyCloudWorkspaceChanged, WORKSPACE_CHANGED_EVENT } from "@/services/cloud-media";
 import { uploadMediaFile } from "@/services/file-storage";
 import { getImagePreviewRevision, previewUrlFor, subscribeImagePreviews, uploadImage } from "@/services/image-storage";
 import { useAssetStore } from "@/stores/use-asset-store";
@@ -68,6 +69,18 @@ export default function ResultsPage() {
 
     useEffect(() => {
         void loadResults();
+    }, [loadResults]);
+
+    useEffect(() => {
+        const handleChanged = () => {
+            void loadResults();
+        };
+        window.addEventListener(WORKSPACE_CHANGED_EVENT, handleChanged);
+        window.addEventListener("infinite-canvas:cloud-workspace-synced", handleChanged);
+        return () => {
+            window.removeEventListener(WORKSPACE_CHANGED_EVENT, handleChanged);
+            window.removeEventListener("infinite-canvas:cloud-workspace-synced", handleChanged);
+        };
     }, [loadResults]);
 
     const resolveOriginalUrl = async (item: MediaItem) => {
@@ -189,6 +202,11 @@ export default function ResultsPage() {
     const handleDelete = async (mediaId: string) => {
         try {
             await storageApi.remove(mediaId);
+            void authApi
+                .me()
+                .then((res) => useUserStore.getState().setUser(res.user))
+                .catch(() => undefined);
+            notifyCloudWorkspaceChanged("media", { sync: false });
             message.success("已从云端删除并释放配额空间");
             void loadResults();
         } catch (error) {

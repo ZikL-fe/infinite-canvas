@@ -1,13 +1,14 @@
 /** 云端媒体存储接口：S3 预签名直传、远端抓取转存、WebDAV 生成素材自动归档及配额统计。 */
 import { zValidator } from "@hono/zod-validator";
-import { and, asc, count, desc, eq, ilike, inArray, or, sql, type SQL } from "drizzle-orm";
+import { and, asc, count, desc, eq, ilike, inArray, isNull, or, sql, type SQL } from "drizzle-orm";
 import { Hono } from "hono";
 import { nanoid } from "nanoid";
 import { z } from "zod";
 
-import { creditLedger, db, mediaObjects, users, type MediaKind } from "../db/index.ts";
+import { canvasProjects, creditLedger, db, mediaObjects, userAssets, users, workbenchLogs, type MediaKind } from "../db/index.ts";
 import { env } from "../env.ts";
 import { buildThumbnailObjectKey, checkStorageQuotaBlock } from "../lib/ai-media-persist.ts";
+import { collectUserMediaReferences, type MediaSourceModule } from "../lib/media-cleanup.ts";
 import {
   createMediaReadUrl,
   createPresignedUploadUrl,
@@ -362,9 +363,25 @@ storageRoutes.get("/list", async (c) => {
   const q = c.req.query("q")?.trim() || "";
   const kind = c.req.query("kind")?.trim() || "";
   const sourceType = c.req.query("sourceType")?.trim() || "";
+  const moduleFilter = c.req.query("module")?.trim() || "";
   const page = Math.max(1, Number(c.req.query("page") || 1));
   const pageSize = Math.min(100, Math.max(1, Number(c.req.query("pageSize") || 20)));
   const offset = (page - 1) * pageSize;
+
+  const [{ moduleMap }, [canvasCount], [imageLogCount], [videoLogCount], [assetCount]] = await Promise.all([
+    collectUserMediaReferences([user.id]),
+    db.select({ total: count() }).from(canvasProjects).where(and(eq(canvasProjects.userId, user.id), isNull(canvasProjects.deletedAt))),
+    db.select({ total: count() }).from(workbenchLogs).where(and(eq(workbenchLogs.userId, user.id), eq(workbenchLogs.kind, "image"), isNull(workbenchLogs.deletedAt))),
+    db.select({ total: count() }).from(workbenchLogs).where(and(eq(workbenchLogs.userId, user.id), eq(workbenchLogs.kind, "video"), isNull(workbenchLogs.deletedAt))),
+    db.select({ total: count() }).from(userAssets).where(and(eq(userAssets.userId, user.id), isNull(userAssets.deletedAt))),
+  ]);
+
+  const workspaceStats = {
+    canvasProjects: Number(canvasCount?.total ?? 0),
+    imageLogs: Number(imageLogCount?.total ?? 0),
+    videoLogs: Number(videoLogCount?.total ?? 0),
+    assets: Number(assetCount?.total ?? 0),
+  };
 
   const filters: SQL[] = [eq(mediaObjects.userId, user.id), eq(mediaObjects.status, "active")];
   if (kind === "image" || kind === "video" || kind === "audio" || kind === "file") {
@@ -372,6 +389,15 @@ storageRoutes.get("/list", async (c) => {
   }
   if (sourceType === "upload" || sourceType === "ai_generated" || sourceType === "canvas_import") {
     filters.push(eq(mediaObjects.sourceType, sourceType));
+  }
+  if (moduleFilter === "canvas" || moduleFilter === "image_workbench" || moduleFilter === "video_workbench" || moduleFilter === "assets") {
+    const matchedIds = Array.from(moduleMap.entries())
+      .filter(([, mods]) => mods.has(moduleFilter as MediaSourceModule))
+      .map(([id]) => id);
+    if (!matchedIds.length) {
+      return c.json({ items: [], total: 0, page, pageSize, workspaceStats });
+    }
+    filters.push(inArray(mediaObjects.id, matchedIds));
   }
   if (q) {
     filters.push(
@@ -400,12 +426,13 @@ storageRoutes.get("/list", async (c) => {
       ]);
       return {
         ...row,
+        modules: Array.from(moduleMap.get(row.id) || []),
         url,
         thumbnailUrl,
       };
     }),
   );
-  return c.json({ items, total: Number(total), page, pageSize });
+  return c.json({ items, total: Number(total), page, pageSize, workspaceStats });
 });
 
 storageRoutes.post("/thumbnail/:mediaId", async (c) => {

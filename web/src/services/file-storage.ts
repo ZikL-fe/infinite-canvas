@@ -9,6 +9,8 @@ import { deleteCloudMedia, fetchCloudMediaBlob, inferCloudMediaKind, isCloudAuth
 export type UploadedFile = { url: string; storageKey: string; bytes: number; mimeType: string; width?: number; height?: number; durationMs?: number };
 
 const store = localforage.createInstance({ name: "infinite-canvas", storeName: "media_files" });
+const imageLogStore = localforage.createInstance({ name: "infinite-canvas", storeName: "image_generation_logs" });
+const videoLogStore = localforage.createInstance({ name: "infinite-canvas", storeName: "video_generation_logs" });
 const objectUrls = new Map<string, string>();
 
 export async function uploadMediaFile(
@@ -83,11 +85,21 @@ export async function deleteStoredMedia(keys: Iterable<string>) {
 
 export async function cleanupUnusedMedia(usedData: unknown) {
     const usedKeys = collectMediaStorageKeys(usedData);
+    await Promise.all([
+        imageLogStore.iterate((value) => {
+            collectMediaStorageKeys(value, usedKeys);
+        }),
+        videoLogStore.iterate((value) => {
+            collectMediaStorageKeys(value, usedKeys);
+        }),
+    ]);
     const unused: string[] = [];
     await store.iterate((_value, key) => {
         if (!usedKeys.has(key)) unused.push(key);
     });
-    await Promise.all(unused.map((key) => store.removeItem(key)));
+    if (unused.length) {
+        await deleteStoredMedia(unused);
+    }
 }
 
 export function collectMediaStorageKeys(value: unknown, keys = new Set<string>()) {

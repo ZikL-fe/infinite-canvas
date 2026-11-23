@@ -25,6 +25,25 @@ export type S3StorageSettingsResponse = {
     };
 };
 
+export type MediaSourceModule = "canvas" | "image_workbench" | "video_workbench" | "assets";
+
+export type WorkspaceDataItem = {
+    id: string;
+    kind: "canvas" | "image_workbench" | "video_workbench";
+    userId: string;
+    username: string;
+    title: string;
+    prompt?: string;
+    model?: string;
+    status?: string;
+    nodeCount?: number;
+    mediaCount: number;
+    mediaBytes: number;
+    dataBytes?: number;
+    updatedAt: string;
+    createdAt: string;
+};
+
 export type MediaItem = {
     id: string;
     userId: string;
@@ -38,6 +57,7 @@ export type MediaItem = {
     height?: number | null;
     durationMs?: number | null;
     sourceType: string;
+    modules?: MediaSourceModule[];
     meta?: Record<string, unknown>;
     createdAt: string;
     url: string;
@@ -381,15 +401,22 @@ export const storageApi = {
         requestServer<{ existingIds: string[] }>("/storage/check-exists", { method: "POST", body: JSON.stringify({ mediaIds }) }),
     ingestUrl: (payload: { url: string; kind?: "image" | "video" | "audio" | "file"; sourceType?: "upload" | "ai_generated" | "canvas_import" }) =>
         requestServer<{ media: MediaItem; url: string }>("/storage/ingest-url", { method: "POST", body: JSON.stringify(payload) }),
-    list: (params?: { q?: string; kind?: string; sourceType?: string; page?: number; pageSize?: number }) => {
+    list: (params?: { q?: string; kind?: string; sourceType?: string; module?: string; page?: number; pageSize?: number }) => {
         const query = new URLSearchParams();
         if (params?.q) query.set("q", params.q);
         if (params?.kind) query.set("kind", params.kind);
         if (params?.sourceType) query.set("sourceType", params.sourceType);
+        if (params?.module) query.set("module", params.module);
         if (params?.page) query.set("page", String(params.page));
         if (params?.pageSize) query.set("pageSize", String(params.pageSize));
         const suffix = query.size ? `?${query.toString()}` : "";
-        return requestServer<{ items: MediaItem[]; total?: number; page?: number; pageSize?: number }>(`/storage/list${suffix}`);
+        return requestServer<{
+            items: MediaItem[];
+            total?: number;
+            page?: number;
+            pageSize?: number;
+            workspaceStats?: { canvasProjects: number; imageLogs: number; videoLogs: number; assets: number };
+        }>(`/storage/list${suffix}`);
     },
     getByTasks: (taskIds: string[]) => {
         const clean = Array.from(new Set(taskIds.map((id) => id.trim()).filter(Boolean)));
@@ -493,11 +520,34 @@ export const storageApi = {
 };
 
 export const canvasApi = {
-    listProjects: () => requestServer<{ projects: Record<string, unknown>[]; deletedProjects: { id: string; deletedAt: string }[] }>("/canvas/projects"),
+    listProjects: (withStats = false) =>
+        requestServer<{ projects: Record<string, unknown>[]; deletedProjects: { id: string; deletedAt: string }[] }>(
+            `/canvas/projects${withStats ? "?withStats=1" : ""}`,
+        ),
     saveProject: (id: string, payload: Record<string, unknown>) =>
-        requestServer<{ project: Record<string, unknown> }>(`/canvas/projects/${encodeURIComponent(id)}`, { method: "PUT", body: JSON.stringify(payload) }),
+        requestServer<{ project: Record<string, unknown> | null; skippedDeleted?: boolean; deletedMediaCount?: number }>(
+            `/canvas/projects/${encodeURIComponent(id)}`,
+            { method: "PUT", body: JSON.stringify(payload) },
+        ),
     deleteProjects: (ids: string[]) =>
-        requestServer<{ ok: boolean }>("/canvas/projects/batch-delete", { method: "POST", body: JSON.stringify({ ids }) }),
+        requestServer<{ ok: boolean; deletedMediaCount?: number }>("/canvas/projects/batch-delete", { method: "POST", body: JSON.stringify({ ids }) }),
+};
+
+export const workbenchApi = {
+    listLogs: (kind: "image" | "video", withStats = false) =>
+        requestServer<{ logs: Record<string, unknown>[]; deletedIds: { id: string; deletedAt: string }[] }>(
+            `/workbench/logs?kind=${kind}${withStats ? "&withStats=1" : ""}`,
+        ),
+    saveLog: (id: string, payload: Record<string, unknown>) =>
+        requestServer<{ ok: boolean; skippedDeleted?: boolean; deletedMediaCount?: number }>(
+            `/workbench/logs/${encodeURIComponent(id)}`,
+            { method: "PUT", body: JSON.stringify(payload) },
+        ),
+    deleteLogs: (ids: string[], kind?: "image" | "video") =>
+        requestServer<{ ok: boolean; deletedMediaCount?: number }>("/workbench/logs/batch-delete", {
+            method: "POST",
+            body: JSON.stringify({ ids, ...(kind ? { kind } : {}) }),
+        }),
 };
 
 export const assetsApi = {
@@ -609,16 +659,33 @@ export const adminApi = {
             resetUsedBytes?: boolean;
         },
     ) => requestServer<{ ok: boolean; webdavConfig: UserWebdavView }>(`/admin/users/${encodeURIComponent(userId)}/webdav`, { method: "PUT", body: JSON.stringify(payload) }),
-    listMedia: (params?: { q?: string; kind?: string; page?: number; pageSize?: number }) => {
+    listMedia: (params?: { q?: string; kind?: string; module?: string; page?: number; pageSize?: number }) => {
         const query = new URLSearchParams();
         if (params?.q) query.set("q", params.q);
         if (params?.kind) query.set("kind", params.kind);
+        if (params?.module) query.set("module", params.module);
         if (params?.page) query.set("page", String(params.page));
         if (params?.pageSize) query.set("pageSize", String(params.pageSize));
         const suffix = query.size ? `?${query.toString()}` : "";
-        return requestServer<{ items: MediaItem[]; total: number; filteredBytes?: number; page: number; pageSize: number }>(`/admin/media${suffix}`);
+        return requestServer<{
+            items: MediaItem[];
+            total: number;
+            filteredBytes?: number;
+            page: number;
+            pageSize: number;
+            workspaceStats?: { canvasProjects: number; imageLogs: number; videoLogs: number };
+        }>(`/admin/media${suffix}`);
     },
     deleteMedia: (mediaId: string) => requestServer<{ ok: boolean }>(`/admin/media/${encodeURIComponent(mediaId)}`, { method: "DELETE" }),
+    listWorkspaceData: (params: { kind: "canvas" | "image_workbench" | "video_workbench"; q?: string; page?: number; pageSize?: number }) => {
+        const query = new URLSearchParams({ kind: params.kind });
+        if (params.q) query.set("q", params.q);
+        if (params.page) query.set("page", String(params.page));
+        if (params.pageSize) query.set("pageSize", String(params.pageSize));
+        return requestServer<{ items: WorkspaceDataItem[]; total: number; page: number; pageSize: number }>(`/admin/workspace-data?${query.toString()}`);
+    },
+    deleteWorkspaceData: (kind: "canvas" | "image_workbench" | "video_workbench", id: string) =>
+        requestServer<{ ok: boolean; deletedMediaCount?: number }>(`/admin/workspace-data/${encodeURIComponent(kind)}/${encodeURIComponent(id)}`, { method: "DELETE" }),
     listRedeemCodes: (params?: { q?: string; status?: string; page?: number; pageSize?: number }) => {
         const query = new URLSearchParams();
         if (params?.q) query.set("q", params.q);
