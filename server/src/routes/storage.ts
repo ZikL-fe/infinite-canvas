@@ -12,6 +12,7 @@ import {
   createMediaReadUrl,
   createPresignedUploadUrl,
   deleteS3Object,
+  getS3Object,
   headS3Object,
   putS3Object,
 } from "../lib/s3.ts";
@@ -606,6 +607,44 @@ storageRoutes.get("/url/:mediaId", async (c) => {
 
   const url = await createMediaReadUrl(config, media.objectKey);
   return c.json({ mediaId: media.id, url, expiresIn: env.S3_PRESIGN_EXPIRES_SECONDS });
+});
+
+/** 经服务端鉴权代理下载原文件：隐藏底层对象存储地址与签名凭据，并强制下发 attachment 响应头。 */
+storageRoutes.get("/download/:mediaId", async (c) => {
+  const config = await getS3StorageConfig();
+  if (!config) {
+    return c.json({ error: "管理员尚未配置对象存储" }, 503);
+  }
+
+  const user = c.get("user");
+  const mediaId = c.req.param("mediaId");
+  const media = await db.query.mediaObjects.findFirst({ where: eq(mediaObjects.id, mediaId) });
+  if (!media || media.status !== "active") {
+    return c.json({ error: "媒体文件不存在" }, 404);
+  }
+  if (media.userId !== user.id && user.role !== "admin") {
+    return c.json({ error: "无权访问该文件" }, 403);
+  }
+
+  const obj = await getS3Object(config, media.objectKey);
+  const stream = obj.Body?.transformToWebStream();
+  if (!stream) {
+    return c.json({ error: "媒体文件流不可用" }, 502);
+  }
+
+  const ext = media.mimeType?.split("/")[1]?.split("+")[0] || (media.kind === "video" ? "mp4" : media.kind === "audio" ? "mp3" : "png");
+  const filename = media.objectKey.split("/").pop() || `media-${media.id.replace(/:/g, "_")}.${ext}`;
+  const asciiName = filename.replace(/[^\x20-\x7e]/g, "_").replace(/["\\]/g, "_");
+  const headers = new Headers({
+    "Content-Type": obj.ContentType || media.mimeType || "application/octet-stream",
+    "Content-Disposition": `attachment; filename="${asciiName}"; filename*=UTF-8''${encodeURIComponent(filename)}`,
+    "Cache-Control": "private, no-store",
+  });
+  if (typeof obj.ContentLength === "number" && obj.ContentLength > 0) {
+    headers.set("Content-Length", String(obj.ContentLength));
+  }
+
+  return new Response(stream, { status: 200, headers });
 });
 
 storageRoutes.post("/urls", zValidator("json", batchUrlsSchema), async (c) => {

@@ -98,7 +98,7 @@ accountRoutes.get("/profile", async (c) => {
     return c.json({ error: "账号不存在" }, 404);
   }
 
-  const effectiveWebdav = resolveEffectiveUserWebdav(platformWebdav, userRow.webdavConfig);
+  const effectiveWebdav = authUser.role === "admin" ? resolveEffectiveUserWebdav(platformWebdav, userRow.webdavConfig) : null;
 
   return c.json({
     user: {

@@ -117,7 +117,7 @@ export async function uploadBlobToCloud(
 
     if (meta?.sourceType === "ai_generated") {
         const webdav = useConfigStore.getState().webdav;
-        if (webdav.enabled !== false && webdav.url && !webdav.isExpired && !webdav.isQuotaExceeded) {
+        if (webdav.enabled && !webdav.isExpired && !webdav.isQuotaExceeded) {
             void storageApi
                 .uploadToWebdav(storageKey, blob, kind, meta.filename)
                 .then((res) => {

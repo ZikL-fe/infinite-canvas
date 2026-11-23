@@ -60,6 +60,17 @@ export async function headS3Object(config: S3StorageConfig, objectKey: string) {
   );
 }
 
+/** 从对象存储读取对象流，供鉴权后的同源下载代理使用。 */
+export async function getS3Object(config: S3StorageConfig, objectKey: string) {
+  const client = createS3Client(config);
+  return client.send(
+    new GetObjectCommand({
+      Bucket: config.bucket,
+      Key: objectKey,
+    }),
+  );
+}
+
 export async function putS3Object(
   config: S3StorageConfig,
   objectKey: string,

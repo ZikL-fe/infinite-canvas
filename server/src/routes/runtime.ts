@@ -36,6 +36,13 @@ runtimeRoutes.get("/config", async (c) => {
 
   return c.json({
     channels: safeChannels,
-    webdav: assignedWebdav,
+    // 仅向前端下发脱敏的启用与配额状态，不暴露 WebDAV 服务地址、目录、账号或密码
+    webdav: assignedWebdav
+      ? {
+          enabled: true,
+          isExpired: assignedWebdav.isExpired,
+          isQuotaExceeded: assignedWebdav.isQuotaExceeded,
+        }
+      : null,
   });
 });

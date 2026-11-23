@@ -1,12 +1,11 @@
 /** 云端生成成果页面：列表仅加载云端缩略图，点击查看或下载时才按需加载原图/原视频。 */
 import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
 import { App, Button, Card, Empty, Image, Input, Modal, Pagination, Popconfirm, Progress, Result, Space, Spin, Tag, Typography } from "antd";
-import { saveAs } from "file-saver";
 import { AudioLines, Download, Eye, FolderPlus, HardDrive, ImageIcon, Play, RefreshCw, Search, Trash2, Video } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 
 import { createImageThumbnail, createVideoThumbnail } from "@/lib/image-thumbnail";
-import { formatBytes } from "@/lib/image-utils";
+import { formatBytes, formatStoragePair } from "@/lib/image-utils";
 import { storageApi, type MediaItem } from "@/services/api/server";
 import { uploadMediaFile } from "@/services/file-storage";
 import { getImagePreviewRevision, previewUrlFor, subscribeImagePreviews, uploadImage } from "@/services/image-storage";
@@ -122,15 +121,10 @@ export default function ResultsPage() {
     const handleDownload = async (item: MediaItem) => {
         setLoadingOriginalId(item.id);
         try {
-            const url = await resolveOriginalUrl(item);
-            if (!url) {
-                message.error("文件链接暂不可用");
-                return;
-            }
             const ext = item.mimeType?.split("/")[1]?.split("+")[0] || (item.kind === "video" ? "mp4" : item.kind === "audio" ? "mp3" : "png");
-            saveAs(url, `result-${item.id.replace(/:/g, "_")}.${ext}`);
-        } catch {
-            message.error("下载失败，请稍后重试");
+            await storageApi.downloadFile(item, `result-${item.id.replace(/:/g, "_")}.${ext}`);
+        } catch (error) {
+            message.error(error instanceof Error ? error.message : "下载失败，请稍后重试");
         } finally {
             setLoadingOriginalId(null);
         }
@@ -234,7 +228,7 @@ export default function ResultsPage() {
                         <div className="mx-auto mt-4 inline-flex flex-wrap items-center justify-center gap-3 rounded-full border border-stone-200 bg-background/90 px-4 py-1.5 text-xs shadow-sm dark:border-stone-800">
                             <span className="inline-flex items-center gap-1.5 font-medium text-stone-700 dark:text-stone-200">
                                 <HardDrive className="size-3.5" />
-                                云端存储配额：{formatBytes(user.storageUsedBytes ?? 0)} / {formatBytes(user.storageQuotaBytes ?? 0)}
+                                云端存储配额：{formatStoragePair(user.storageUsedBytes, user.storageQuotaBytes)}
                             </span>
                             <div className="w-24">
                                 <Progress
@@ -456,7 +450,7 @@ export default function ResultsPage() {
                 footer={
                     previewItem ? (
                         <Space>
-                            <Button icon={<Download className="size-4" />} onClick={() => void handleDownload(previewItem)}>
+                            <Button icon={<Download className="size-4" />} loading={loadingOriginalId === previewItem.id} onClick={() => void handleDownload(previewItem)}>
                                 下载原文件
                             </Button>
                             <Button

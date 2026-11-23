@@ -379,8 +379,8 @@ export default {
     config: {
         title: "配置与用户偏好",
         invalidFile: "配置文件格式不正确",
-        description: "渠道聚合、模型选择、同步与本地存储",
-        modalDescription: "渠道聚合、默认模型、同步与本地存储",
+        description: "偏好设置、模型选择、提示词来源与本地存储",
+        modalDescription: "默认模型、偏好设置、提示词来源与本地存储",
         tabs: {
             channels: "渠道",
             localProxy: "本地代理",

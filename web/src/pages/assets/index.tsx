@@ -6,7 +6,7 @@ import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
 
 import { useCopyText } from "@/hooks/use-copy-text";
-import { formatBytes, readFileAsDataUrl } from "@/lib/image-utils";
+import { formatBytes, formatStoragePair, readFileAsDataUrl } from "@/lib/image-utils";
 import { getMediaBlob } from "@/services/file-storage";
 import { getImageBlob, getImagePreviewRevision, subscribeImagePreviews, uploadImage } from "@/services/image-storage";
 import { cn } from "@/lib/utils";
@@ -232,7 +232,7 @@ export default function AssetsPage() {
                                         <>
                                             <span className="inline-flex items-center gap-1.5 font-medium text-stone-700 dark:text-stone-200">
                                                 <HardDrive className="size-3.5" />
-                                                云端存储配额：{formatBytes(user.storageUsedBytes ?? 0)} / {formatBytes(user.storageQuotaBytes ?? 0)}
+                                                云端存储配额：{formatStoragePair(user.storageUsedBytes, user.storageQuotaBytes)}
                                             </span>
                                             <div className="w-24">
                                                 <Progress

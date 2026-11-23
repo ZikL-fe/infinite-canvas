@@ -16,7 +16,7 @@ import { modelOptionLabel, useConfigStore, useEffectiveConfig, type AiConfig } f
 import { useThemeStore } from "@/stores/use-theme-store";
 import { useUserStore } from "@/stores/use-user-store";
 import { nanoid } from "nanoid";
-import { formatBytes, formatDuration } from "@/lib/image-utils";
+import { formatBytes, formatDuration, formatStoragePair } from "@/lib/image-utils";
 import { requestEdit, requestGeneration } from "@/services/api/image";
 import { storageApi } from "@/services/api/server";
 import { isCloudAuthenticated } from "@/services/cloud-media";
@@ -531,7 +531,7 @@ export default function ImagePage() {
                                                     >
                                                         <span className="inline-flex items-center gap-1">
                                                             <HardDrive className="size-3" />
-                                                            云端配额：{formatBytes(user.storageUsedBytes ?? 0)} / {formatBytes(user.storageQuotaBytes ?? 0)}
+                                                            云端配额：{formatStoragePair(user.storageUsedBytes, user.storageQuotaBytes)}
                                                             {expired ? "（已过期）" : exceeded ? "（需扩容）" : ""}
                                                         </span>
                                                     </Tag>

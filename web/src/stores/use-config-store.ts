@@ -110,7 +110,7 @@ export type WebdavSyncConfig = {
     isExpired?: boolean;
     isQuotaExceeded?: boolean;
 };
-export type ConfigTabKey = "preferences" | "prompt-sources" | "webdav" | "local-storage";
+export type ConfigTabKey = "preferences" | "prompt-sources" | "local-storage";
 export const SERVER_MANAGED_API_KEY = "__SERVER_MANAGED__";
 
 export type ChannelCredentialsImportResult = {
@@ -174,6 +174,7 @@ export const defaultConfig: AiConfig = {
 };
 
 export const defaultWebdavSyncConfig: WebdavSyncConfig = {
+    enabled: false,
     url: "",
     username: "",
     password: "",

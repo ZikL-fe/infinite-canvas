@@ -379,8 +379,8 @@ export default {
     config: {
         title: "Settings & Preferences",
         invalidFile: "The settings file format is invalid",
-        description: "Providers, model selection, sync, and local storage",
-        modalDescription: "Providers, default models, sync, and local storage",
+        description: "Preferences, model selection, prompt sources, and local storage",
+        modalDescription: "Default models, preferences, prompt sources, and local storage",
         tabs: {
             channels: "Providers",
             localProxy: "Local proxy",

@@ -3,7 +3,6 @@ import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { Alert, App, Button, Card, Col, DatePicker, Descriptions, Drawer, Form, Image, Input, InputNumber, Menu, Modal, Progress, Radio, Result, Row, Select, Space, Statistic, Switch, Table, Tag, Typography, Upload, theme as antdTheme } from "antd";
 import type { MenuProps, UploadProps } from "antd";
 import dayjs, { type Dayjs } from "dayjs";
-import { saveAs } from "file-saver";
 import { AudioLines, Copy, Coins, Cpu, Database, Download, FileIcon, FolderKanban, Gift, HardDrive, ImageIcon, LayoutDashboard, Megaphone, Menu as MenuIcon, Plus, RefreshCw, ScrollText, Shield, Sliders, UploadCloud, UserCheck, Users, Video, Wifi } from "lucide-react";
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 
@@ -184,6 +183,7 @@ export default function AdminPage() {
     const [mediaLoading, setMediaLoading] = useState(false);
     const [uploadingTest, setUploadingTest] = useState(false);
     const [previewMediaItem, setPreviewMediaItem] = useState<MediaItem | null>(null);
+    const [downloadingPreviewMedia, setDownloadingPreviewMedia] = useState(false);
 
     const [allowRegister, setAllowRegister] = useState(true);
     const [authPolicySaving, setAuthPolicySaving] = useState(false);
@@ -382,6 +382,26 @@ export default function AdminPage() {
                         <Button type="primary" onClick={() => navigate(`/auth?redirect=${encodeURIComponent(pathname)}`)}>
                             前往登录
                         </Button>
+                    }
+                />
+            </div>
+        );
+    }
+
+    if (!isAdmin && isAdminRoute) {
+        return (
+            <div className="flex h-full items-center justify-center p-6">
+                <Result
+                    status="403"
+                    title="无权访问管理后台"
+                    subTitle="仅系统管理员可访问管理后台，普通用户请前往个人后台。"
+                    extra={
+                        <Space>
+                            <Button type="primary" onClick={() => navigate("/console", { replace: true })}>
+                                前往个人后台
+                            </Button>
+                            <Button onClick={() => navigate("/", { replace: true })}>返回首页</Button>
+                        </Space>
                     }
                 />
             </div>
@@ -2203,13 +2223,18 @@ export default function AdminPage() {
                 onCancel={() => setPreviewMediaItem(null)}
                 footer={
                     <Space>
-                        {previewMediaItem?.url ? (
+                        {previewMediaItem ? (
                             <Button
                                 icon={<Download className="size-4" />}
+                                loading={downloadingPreviewMedia}
                                 onClick={() => {
-                                    const ext = previewMediaItem.mimeType?.split("/")[1]?.split("+")[0] || "bin";
-                                    const filename = previewMediaItem.objectKey.split("/").pop() || `media-${previewMediaItem.id.replace(/:/g, "_")}.${ext}`;
-                                    saveAs(previewMediaItem.url!, filename);
+                                    setDownloadingPreviewMedia(true);
+                                    void storageApi
+                                        .downloadFile(previewMediaItem)
+                                        .catch((error) => {
+                                            message.error(error instanceof Error ? error.message : "下载失败");
+                                        })
+                                        .finally(() => setDownloadingPreviewMedia(false));
                                 }}
                             >
                                 下载原文件

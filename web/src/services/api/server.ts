@@ -1,4 +1,6 @@
 /** 后端服务 REST API 客户端：封装鉴权刷新、个人中心、账本日志、对象存储直传、WebDAV 归档及后台管理接口。 */
+import { saveAs } from "file-saver";
+
 import type { ModelPricing } from "@/stores/use-config-store";
 import { useUserStore, type BootstrapStatus, type LocalUser, type UserRole, type UserStatus } from "@/stores/use-user-store";
 
@@ -220,13 +222,6 @@ export type RuntimeConfigResponse = {
     }>;
     webdav: {
         enabled: boolean;
-        url: string;
-        username: string;
-        password: string;
-        directory: string;
-        quotaBytes?: number | null;
-        usedBytes?: number;
-        expiresAt?: string | null;
         isExpired?: boolean;
         isQuotaExceeded?: boolean;
     } | null;
@@ -273,7 +268,7 @@ async function parseErrorMessage(response: Response) {
 }
 
 /** 统一请求包装器：自动附带访问令牌，遇到 401 时静默刷新令牌并重放原请求。 */
-export async function requestServer<T>(path: string, init: RequestInit = {}, auth = true): Promise<T> {
+async function fetchServer(path: string, init: RequestInit = {}, auth = true): Promise<Response> {
     const headers = new Headers(init.headers);
     if (init.body && !(init.body instanceof FormData) && !headers.has("Content-Type")) {
         headers.set("Content-Type", "application/json");
@@ -298,6 +293,11 @@ export async function requestServer<T>(path: string, init: RequestInit = {}, aut
         throw new Error(await parseErrorMessage(response));
     }
 
+    return response;
+}
+
+export async function requestServer<T>(path: string, init: RequestInit = {}, auth = true): Promise<T> {
+    const response = await fetchServer(path, init, auth);
     return (await response.json()) as T;
 }
 
@@ -366,6 +366,12 @@ export const authApi = {
     me: () => requestServer<{ user: LocalUser }>("/auth/me"),
 };
 
+/** 根据云端媒体记录推导下载文件名。 */
+export function mediaDownloadFilename(record: Pick<MediaItem, "id" | "objectKey" | "mimeType" | "kind">) {
+    const ext = record.mimeType?.split("/")[1]?.split("+")[0] || (record.kind === "video" ? "mp4" : record.kind === "audio" ? "mp3" : "png");
+    return record.objectKey.split("/").pop() || `media-${record.id.replace(/:/g, "_")}.${ext}`;
+}
+
 export const storageApi = {
     presignUpload: (payload: { mediaId?: string; filename?: string; kind: "image" | "video" | "audio" | "file"; mimeType: string; bytes?: number; width?: number; height?: number; durationMs?: number; sourceType?: "upload" | "ai_generated" | "canvas_import" }) =>
         requestServer<{ alreadyExists?: boolean; mediaId: string; objectKey: string; uploadUrl: string; expiresIn: number; headers: Record<string, string> }>("/storage/presign-upload", { method: "POST", body: JSON.stringify(payload) }),
@@ -393,6 +399,10 @@ export const storageApi = {
         );
     },
     getUrl: (mediaId: string) => requestServer<{ mediaId: string; url: string; expiresIn: number }>(`/storage/url/${encodeURIComponent(mediaId)}`),
+    downloadBlob: async (mediaId: string) => {
+        const response = await fetchServer(`/storage/download/${encodeURIComponent(mediaId)}`);
+        return response.blob();
+    },
     getLedgerMedia: (ledgerId: string) => requestServer<{ items: MediaItem[] }>(`/storage/ledger-media/${encodeURIComponent(ledgerId)}`),
     getThumbnailUrl: (mediaId: string) => requestServer<{ mediaId: string; thumbnailUrl: string }>(`/storage/thumbnail/${encodeURIComponent(mediaId)}`),
     uploadThumbnail: (mediaId: string, blob: Blob) => {
@@ -405,6 +415,11 @@ export const storageApi = {
     },
     getUrls: (mediaIds: string[]) => requestServer<{ urls: Record<string, string> }>("/storage/urls", { method: "POST", body: JSON.stringify({ mediaIds }) }),
     remove: (mediaId: string) => requestServer<{ ok: boolean }>(`/storage/${encodeURIComponent(mediaId)}`, { method: "DELETE" }),
+    /** 通过鉴权下载接口拉取文件 Blob 并触发本地保存，避免直接打开跨域 S3 预签名链接。 */
+    async downloadFile(record: Pick<MediaItem, "id" | "objectKey" | "mimeType" | "kind">, filename?: string) {
+        const blob = await storageApi.downloadBlob(record.id);
+        saveAs(blob, filename || mediaDownloadFilename(record));
+    },
     async uploadBlobWithKey(
         mediaId: string,
         blob: Blob,

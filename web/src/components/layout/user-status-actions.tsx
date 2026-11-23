@@ -10,7 +10,7 @@ import { GitHubLink } from "@/components/layout/github-link";
 import { VersionReleaseModal } from "@/components/layout/version-release-modal";
 import { DOCS_URL } from "@/constant/env";
 import { changeAppLocale, type AppLocale } from "@/i18n";
-import { formatBytes } from "@/lib/image-utils";
+import { formatStoragePair } from "@/lib/image-utils";
 import { cn } from "@/lib/utils";
 import { canvasThemes } from "@/lib/canvas-theme";
 import { MyWalletPanel } from "@/pages/admin/user-panels";
@@ -63,7 +63,7 @@ export function UserStatusActions({ showConfig = true, variant = "default", onOp
               {
                   key: "storage-quota",
                   icon: <HardDrive className="size-4" />,
-                  label: `云端存储（${formatBytes(user.storageUsedBytes ?? 0)} / ${formatBytes(user.storageQuotaBytes ?? 0)}）`,
+                  label: `云端存储（${formatStoragePair(user.storageUsedBytes, user.storageQuotaBytes)}）`,
                   onClick: () => navigate(user.role === "admin" ? "/admin?tab=my-media" : "/console?tab=my-media"),
               },
               {

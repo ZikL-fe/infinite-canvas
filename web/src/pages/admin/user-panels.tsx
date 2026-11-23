@@ -2,7 +2,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { Alert, App, Avatar, Button, Card, Col, DatePicker, Descriptions, Empty, Form, Image, Input, Modal, Popconfirm, Progress, Row, Segmented, Select, Space, Spin, Statistic, Switch, Table, Tag, Tooltip, Typography, theme as antdTheme } from "antd";
 import type { Dayjs } from "dayjs";
-import { saveAs } from "file-saver";
 import { AudioLines, Download, FileIcon, Gift, ImageIcon, KeyRound, Laptop, Megaphone, Pin, RefreshCw, Search, TrendingUp, User, Video } from "lucide-react";
 
 import { createImageThumbnail, createVideoThumbnail } from "@/lib/image-thumbnail";
@@ -13,6 +12,7 @@ import {
     accountApi,
     adminApi,
     billingApi,
+    mediaDownloadFilename,
     storageApi,
     type AccountOverviewResponse,
     type AccountProfileResponse,
@@ -554,24 +554,26 @@ export function ProfileSecurityPanel() {
                             )}
                         </div>
                     </Descriptions.Item>
-                    <Descriptions.Item label="WebDAV 分配" span={2}>
-                        {profileData?.webdav?.enabled ? (
-                            <div className="flex flex-wrap items-center gap-2">
-                                <Tag color={profileData.webdav.isExpired ? "red" : "cyan"}>{profileData.webdav.directory}</Tag>
-                                {profileData.webdav.isExpired ? <Tag color="red">已过期</Tag> : null}
-                                {profileData.webdav.isQuotaExceeded ? <Tag color="volcano">空间已满</Tag> : null}
-                                <Typography.Text type="secondary" className="text-xs">
-                                    已用 {formatBytes(profileData.webdav.usedBytes ?? 0)}
-                                    {profileData.webdav.quotaBytes ? ` / ${formatBytes(profileData.webdav.quotaBytes)}` : " / 不限空间"}
-                                    {profileData.webdav.expiresAt
-                                        ? ` · 有效期至 ${new Date(profileData.webdav.expiresAt).toLocaleString("zh-CN")}`
-                                        : " · 永久有效"}
-                                </Typography.Text>
-                            </div>
-                        ) : (
-                            <Tag>未分配</Tag>
-                        )}
-                    </Descriptions.Item>
+                    {detail?.role === "admin" ? (
+                        <Descriptions.Item label="WebDAV 分配" span={2}>
+                            {profileData?.webdav?.enabled ? (
+                                <div className="flex flex-wrap items-center gap-2">
+                                    <Tag color={profileData.webdav.isExpired ? "red" : "cyan"}>{profileData.webdav.directory}</Tag>
+                                    {profileData.webdav.isExpired ? <Tag color="red">已过期</Tag> : null}
+                                    {profileData.webdav.isQuotaExceeded ? <Tag color="volcano">空间已满</Tag> : null}
+                                    <Typography.Text type="secondary" className="text-xs">
+                                        已用 {formatBytes(profileData.webdav.usedBytes ?? 0)}
+                                        {profileData.webdav.quotaBytes ? ` / ${formatBytes(profileData.webdav.quotaBytes)}` : " / 不限空间"}
+                                        {profileData.webdav.expiresAt
+                                            ? ` · 有效期至 ${new Date(profileData.webdav.expiresAt).toLocaleString("zh-CN")}`
+                                            : " · 永久有效"}
+                                    </Typography.Text>
+                                </div>
+                            ) : (
+                                <Tag>未分配</Tag>
+                            )}
+                        </Descriptions.Item>
+                    ) : null}
                     <Descriptions.Item label="注册时间">
                         {profileData?.user.createdAt ? new Date(profileData.user.createdAt).toLocaleString("zh-CN") : "—"}
                     </Descriptions.Item>
@@ -763,19 +765,6 @@ const emptyLedgerSummary: CreditLedgerSummary = {
     recentRpm: 0,
 };
 
-function mediaDownloadFilename(record: MediaItem) {
-    const ext = record.mimeType?.split("/")[1]?.split("+")[0] || (record.kind === "video" ? "mp4" : record.kind === "audio" ? "mp3" : "png");
-    return record.objectKey.split("/").pop() || `media-${record.id.replace(/:/g, "_")}.${ext}`;
-}
-
-async function downloadCloudMediaFile(record: MediaItem, knownUrl?: string) {
-    const url = knownUrl || record.url || (await storageApi.getUrl(record.id)).url;
-    if (!url) {
-        throw new Error("文件链接暂不可用");
-    }
-    saveAs(url, mediaDownloadFilename(record));
-}
-
 function LedgerDetailModal({
     item,
     showUser = false,
@@ -820,7 +809,7 @@ function LedgerDetailModal({
     const handleDownloadGenerated = async (media: MediaItem) => {
         setDownloadingId(media.id);
         try {
-            await downloadCloudMediaFile(media);
+            await storageApi.downloadFile(media);
         } catch (error) {
             message.error(error instanceof Error ? error.message : "下载失败");
         } finally {
@@ -1829,10 +1818,10 @@ export function MyMediaPanel() {
         }
     };
 
-    const handleDownloadMedia = async (record: MediaItem, knownUrl?: string) => {
+    const handleDownloadMedia = async (record: MediaItem) => {
         setDownloadingId(record.id);
         try {
-            await downloadCloudMediaFile(record, knownUrl);
+            await storageApi.downloadFile(record);
         } catch (error) {
             message.error(error instanceof Error ? error.message : "下载失败");
         } finally {
@@ -2014,7 +2003,7 @@ export function MyMediaPanel() {
                             <Button
                                 icon={<Download className="size-4" />}
                                 loading={downloadingId === previewItem.id}
-                                onClick={() => void handleDownloadMedia(previewItem, previewOriginalUrl)}
+                                onClick={() => void handleDownloadMedia(previewItem)}
                             >
                                 下载原文件
                             </Button>

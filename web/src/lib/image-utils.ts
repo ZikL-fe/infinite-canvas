@@ -1,9 +1,9 @@
 import i18n from "@/i18n";
 import type { ReferenceImage } from "@/types/image";
 
-export function formatBytes(bytes: number) {
+export function formatBytes(bytes: number, zeroFallback = "") {
     if (!Number.isFinite(bytes) || bytes <= 0) {
-        return "";
+        return zeroFallback;
     }
     const units = ["B", "KB", "MB", "GB"];
     let value = bytes;
@@ -13,6 +13,11 @@ export function formatBytes(bytes: number) {
         unitIndex += 1;
     }
     return `${value >= 10 || unitIndex === 0 ? value.toFixed(0) : value.toFixed(1)} ${units[unitIndex]}`;
+}
+
+/** 格式化存储用量与配额，无用量或无配额时统一显示为 `0 MB`。 */
+export function formatStoragePair(usedBytes?: number | null, quotaBytes?: number | null) {
+    return `${formatBytes(usedBytes ?? 0, "0 MB")} / ${formatBytes(quotaBytes ?? 0, "0 MB")}`;
 }
 
 export function formatDuration(ms: number) {
