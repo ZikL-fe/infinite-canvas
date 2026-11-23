@@ -1,22 +1,23 @@
-import { App, Button, Form, Input, Modal, Progress, Radio, Select, Switch, Tabs } from "antd";
+import { Alert, App, Button, Descriptions, Form, Input, Modal, Progress, Radio, Select, Switch, Tabs } from "antd";
 import type { TFunction } from "i18next";
-import { Cloud, Download, Pencil, Plus, RefreshCw, Trash2, Upload, Wifi } from "lucide-react";
+import { Cloud, Download, RefreshCw, Upload, Wifi } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { useNavigate } from "react-router-dom";
 
 import { ModelPicker } from "@/components/model-picker";
 import { videoResolutionOptions } from "@/components/video-settings-panel";
-import { ChannelEditorDrawer } from "@/components/layout/channel-editor-drawer";
-import { ConfigLocalProxy } from "@/components/layout/config-local-proxy";
 import { ConfigPromptSources } from "@/components/layout/config-prompt-sources";
 import { ConfigLocalStorage } from "@/components/layout/config-local-storage";
 import type { AppLocale } from "@/i18n";
 import { exportAppConfig, importAppConfig } from "@/services/config-file";
+import { syncRuntimeSettings } from "@/services/cloud-sync";
 import { syncAppDataToWebdav, type AppSyncDomainKey, type AppSyncProgressEvent } from "@/services/app-sync";
-import { testWebdavConnection, WEBDAV_MANIFEST_FILE_NAME } from "@/services/webdav-sync";
+import { testWebdavConnection } from "@/services/webdav-sync";
 import { audioFormatOptions, audioVoiceOptions, normalizeAudioSpeedValue } from "@/lib/audio-generation";
 import { computeMediaSize, inferMediaRatio, inferMediaScale, mediaScaleOptions, parseVideoResolution } from "@/lib/media-size";
-import { createModelChannel, modelOptionsFromChannels, normalizeModelOptionValue, selectableModelsByCapability, useConfigStore, type AiConfig, type ApiCallFormat, type ConfigTabKey, type ModelCapability, type ModelChannel } from "@/stores/use-config-store";
+import { useConfigStore, type ConfigTabKey, type ModelCapability } from "@/stores/use-config-store";
+import { useUserStore } from "@/stores/use-user-store";
 
 type ModelGroup = {
     capability: ModelCapability;
@@ -49,12 +50,13 @@ function createWebdavDomainProgress(): Record<AppSyncDomainKey, WebdavDomainProg
     );
 }
 
-export function AppConfigPanel({ showDoneButton = false, initialTab = "channels" }: { showDoneButton?: boolean; initialTab?: ConfigTabKey }) {
+export function AppConfigPanel({ showDoneButton = false, initialTab = "preferences" }: { showDoneButton?: boolean; initialTab?: ConfigTabKey }) {
     const { message } = App.useApp();
     const { i18n, t } = useTranslation();
+    const navigate = useNavigate();
     const configInputRef = useRef<HTMLInputElement>(null);
     const [activeTab, setActiveTab] = useState<ConfigTabKey>(initialTab);
-    const [editingChannelId, setEditingChannelId] = useState("");
+    const [refreshingChannels, setRefreshingChannels] = useState(false);
     const [testingWebdav, setTestingWebdav] = useState(false);
     const [syncingWebdav, setSyncingWebdav] = useState(false);
     const [webdavSyncStatus, setWebdavSyncStatus] = useState("");
@@ -63,24 +65,41 @@ export function AppConfigPanel({ showDoneButton = false, initialTab = "channels"
     const webdav = useConfigStore((state) => state.webdav);
     const updateConfig = useConfigStore((state) => state.updateConfig);
     const updateWebdavConfig = useConfigStore((state) => state.updateWebdavConfig);
-    const shouldPromptContinue = useConfigStore((state) => state.shouldPromptContinue);
     const setConfigDialogOpen = useConfigStore((state) => state.setConfigDialogOpen);
     const clearPromptContinue = useConfigStore((state) => state.clearPromptContinue);
+    const user = useUserStore((state) => state.user);
     const webdavReady = Boolean(webdav.url.trim());
-    const editingChannel = config.channels.find((channel) => channel.id === editingChannelId) || null;
     const locale = i18n.resolvedLanguage as AppLocale;
     const imageResolutionOptions = mediaScaleOptions.map((value) => ({ value, label: value === "auto" ? t("settingsPanels.common.auto") : value.toUpperCase() }));
     useEffect(() => setActiveTab(initialTab), [initialTab]);
+    useEffect(() => {
+        if (!user || config.channels.length) return;
+        setRefreshingChannels(true);
+        void syncRuntimeSettings().finally(() => setRefreshingChannels(false));
+    }, [config.channels.length, user]);
 
-    const saveConfig = (nextConfig: AiConfig) => {
-        (Object.keys(nextConfig) as Array<keyof AiConfig>).forEach((key) => updateConfig(key, nextConfig[key]));
+    const handleRefreshChannels = async () => {
+        setRefreshingChannels(true);
+        try {
+            const ok = await syncRuntimeSettings();
+            if (ok && useConfigStore.getState().config.channels.length) {
+                message.success("已刷新可用模型渠道");
+            } else {
+                message.warning("暂未获取到已启用的模型渠道");
+            }
+        } finally {
+            setRefreshingChannels(false);
+        }
+    };
+
+    const goToPage = (path: string) => {
+        setConfigDialogOpen(false);
+        navigate(path);
     };
 
     const finishConfig = () => {
-        const ready = config.channels.some((channel) => channel.baseUrl.trim() && channel.apiKey.trim() && channel.models.length);
         setConfigDialogOpen(false);
-        if (!ready) return;
-        message.success(t(shouldPromptContinue ? "config.savedContinue" : "config.saved"));
+        message.success(t("config.saved"));
         clearPromptContinue();
     };
 
@@ -95,29 +114,9 @@ export function AppConfigPanel({ showDoneButton = false, initialTab = "channels"
         }
     };
 
-    const updateChannels = (channels: ModelChannel[]) => saveConfig(withChannels(config, channels));
-
-    const addChannel = () => {
-        const channel = createModelChannel({ name: t("config.channels.numberedName", { count: config.channels.length + 1 }) });
-        updateChannels([...config.channels, channel]);
-        setEditingChannelId(channel.id);
-    };
-
-    const deleteChannel = (id: string) => {
-        if (config.channels.length <= 1) {
-            message.warning(t("config.channels.keepOne"));
-            return;
-        }
-        updateChannels(config.channels.filter((channel) => channel.id !== id));
-    };
-
-    const saveChannel = (channel: ModelChannel) => {
-        updateChannels(config.channels.map((item) => (item.id === channel.id ? channel : item)));
-    };
-
     const testWebdav = async () => {
         if (!webdavReady) {
-            message.error(t("config.webdav.missingUrl"));
+            message.error("管理员尚未为您分配 WebDAV");
             return;
         }
         setTestingWebdav(true);
@@ -147,7 +146,7 @@ export function AppConfigPanel({ showDoneButton = false, initialTab = "channels"
 
     const syncWebdav = async () => {
         if (!webdavReady) {
-            message.error(t("config.webdav.missingUrl"));
+            message.error("管理员尚未为您分配 WebDAV");
             return;
         }
         setSyncingWebdav(true);
@@ -168,7 +167,7 @@ export function AppConfigPanel({ showDoneButton = false, initialTab = "channels"
     return (
         <>
             <div className="flex flex-wrap items-center justify-between gap-3 border-b border-stone-200 pb-3 dark:border-stone-800">
-                <div className="text-xs text-stone-500">{t("config.fileSecurity")}</div>
+                <div className="text-xs text-stone-500">模型渠道与 WebDAV 统一由系统管理员在后台配置，此处仅管理个人偏好与提示词来源</div>
                 <div className="flex gap-2">
                     <Button icon={<Upload className="size-4" />} onClick={() => configInputRef.current?.click()}>
                         {t("config.import")}
@@ -184,47 +183,44 @@ export function AppConfigPanel({ showDoneButton = false, initialTab = "channels"
                 onChange={(key) => setActiveTab(key as ConfigTabKey)}
                 items={[
                     {
-                        key: "channels",
-                        label: t("config.tabs.channels"),
-                        children: (
-                            <div>
-                                <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-                                    <div className="text-xs text-stone-500">{t("config.channels.description")}</div>
-                                    <Button type="primary" icon={<Plus className="size-4" />} onClick={addChannel}>
-                                        {t("config.channels.add")}
-                                    </Button>
-                                </div>
-                                <div className="space-y-2">
-                                    {config.channels.map((channel) => (
-                                        <div key={channel.id} className="flex items-center justify-between gap-3 rounded-lg border border-stone-200 px-4 py-3 dark:border-stone-800">
-                                            <div className="min-w-0">
-                                                <div className="truncate text-sm font-semibold">{channel.name || t("config.channels.unnamed")}</div>
-                                                <div className="mt-1 truncate text-xs text-stone-500">
-                                                    {apiFormatLabel(channel.apiFormat)} · {t("config.channels.modelCount", { count: channel.models.length })} · {channel.baseUrl || t("config.channels.missingUrl")}
-                                                </div>
-                                            </div>
-                                            <div className="flex shrink-0 gap-2">
-                                                <Button size="small" icon={<Pencil className="size-3.5" />} onClick={() => setEditingChannelId(channel.id)}>
-                                                    {t("common.edit")}
-                                                </Button>
-                                                <Button size="small" danger icon={<Trash2 className="size-3.5" />} onClick={() => deleteChannel(channel.id)} />
-                                            </div>
-                                        </div>
-                                    ))}
-                                </div>
-                            </div>
-                        ),
-                    },
-                    {
-                        key: "local-proxy",
-                        label: t("config.tabs.localProxy"),
-                        children: <ConfigLocalProxy />,
-                    },
-                    {
                         key: "preferences",
                         label: t("config.tabs.preferences"),
                         children: (
                             <Form layout="vertical" requiredMark={false}>
+                                {!user ? (
+                                    <Alert
+                                        type="info"
+                                        showIcon
+                                        className="mb-4"
+                                        message="请先登录账号"
+                                        description="模型渠道由系统管理员在后台统一配置，登录后即可选择并使用平台已开通的模型。"
+                                        action={
+                                            <Button size="small" type="primary" onClick={() => goToPage("/auth")}>
+                                                去登录
+                                            </Button>
+                                        }
+                                    />
+                                ) : !config.channels.length ? (
+                                    <Alert
+                                        type="warning"
+                                        showIcon
+                                        className="mb-4"
+                                        message="暂无可用模型渠道"
+                                        description="管理员尚未在后台配置或启用模型渠道，请联系管理员添加后再选择模型。"
+                                        action={
+                                            <div className="flex items-center gap-2">
+                                                <Button size="small" icon={<RefreshCw className="size-3.5" />} loading={refreshingChannels} onClick={() => void handleRefreshChannels()}>
+                                                    刷新渠道
+                                                </Button>
+                                                {user.role === "admin" ? (
+                                                    <Button size="small" type="primary" onClick={() => goToPage("/admin")}>
+                                                        前往后台配置
+                                                    </Button>
+                                                ) : null}
+                                            </div>
+                                        }
+                                    />
+                                ) : null}
                                 <div className="mb-2 text-sm font-semibold">{t("config.preferences.defaultModels")}</div>
                                 <div className="mb-4 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
                                     {modelGroups.map((group) => (
@@ -305,44 +301,64 @@ export function AppConfigPanel({ showDoneButton = false, initialTab = "channels"
                         key: "webdav",
                         label: "WebDAV",
                         children: (
-                            <Form layout="vertical" requiredMark={false}>
-                                <section className="rounded-lg border border-stone-200 p-3 dark:border-stone-800">
-                                    <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
-                                        <div>
-                                            <div className="flex items-center gap-2 text-sm font-semibold">
-                                                <Cloud className="size-4" />
-                                                {t("config.webdav.title")}
-                                            </div>
-                                            <div className="mt-1 text-xs text-stone-500">{t("config.webdav.description")}</div>
+                            <section className="rounded-lg border border-stone-200 p-4 dark:border-stone-800">
+                                <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
+                                    <div>
+                                        <div className="flex items-center gap-2 text-sm font-semibold">
+                                            <Cloud className="size-4" />
+                                            WebDAV 同步（由管理员统一分配）
                                         </div>
-                                        <div className="text-xs text-stone-500">{webdav.lastSyncedAt ? t("config.webdav.lastSynced", { time: formatWebdavTime(webdav.lastSyncedAt, locale) }) : t("config.webdav.neverSynced")}</div>
+                                        <div className="mt-1 text-xs text-stone-500">WebDAV 服务地址与账号权限仅在管理后台配置与分配，普通用户不可自行修改</div>
                                     </div>
-                                    <div className="grid gap-4 md:grid-cols-2">
-                                        <Form.Item label={t("config.webdav.url")} className="mb-4">
-                                            <Input value={webdav.url} placeholder="https://nas.example.com/webdav" onChange={(event) => updateWebdavConfig("url", event.target.value)} />
-                                        </Form.Item>
-                                        <Form.Item label={t("config.webdav.directory")} extra={t("config.webdav.directoryDescription", { manifest: WEBDAV_MANIFEST_FILE_NAME })} className="mb-4">
-                                            <Input value={webdav.directory} placeholder="infinite-canvas" onChange={(event) => updateWebdavConfig("directory", event.target.value)} />
-                                        </Form.Item>
-                                        <Form.Item label={t("config.webdav.username")} className="mb-0">
-                                            <Input value={webdav.username} autoComplete="username" onChange={(event) => updateWebdavConfig("username", event.target.value)} />
-                                        </Form.Item>
-                                        <Form.Item label={t("config.webdav.password")} className="mb-0">
-                                            <Input.Password value={webdav.password} autoComplete="current-password" onChange={(event) => updateWebdavConfig("password", event.target.value)} />
-                                        </Form.Item>
-                                    </div>
-                                    <div className="mt-4 flex flex-wrap items-center gap-2">
-                                        <Button icon={<Wifi className="size-4" />} disabled={!webdavReady || syncingWebdav} loading={testingWebdav} onClick={() => void testWebdav()}>
-                                            {t("config.webdav.test")}
-                                        </Button>
-                                        <Button type="primary" icon={<RefreshCw className="size-4" />} disabled={!webdavReady || testingWebdav} loading={syncingWebdav} onClick={() => void syncWebdav()}>
-                                            {t(syncingWebdav ? "config.webdav.syncing" : "config.webdav.syncNow")}
-                                        </Button>
-                                        {webdavSyncStatus ? <span className="text-xs text-stone-500">{syncStageLabel(webdavSyncStatus, t)}</span> : null}
-                                    </div>
-                                    {syncingWebdav || webdavSyncStatus ? <WebdavProgressGrid progress={webdavDomainProgress} t={t} /> : null}
-                                </section>
-                            </Form>
+                                    <div className="text-xs text-stone-500">{webdav.lastSyncedAt ? t("config.webdav.lastSynced", { time: formatWebdavTime(webdav.lastSyncedAt, locale) }) : t("config.webdav.neverSynced")}</div>
+                                </div>
+                                {!user ? (
+                                    <Alert
+                                        type="info"
+                                        showIcon
+                                        message="请先登录账号"
+                                        description="登录后可查看管理员为您分配的 WebDAV 同步目录。"
+                                        action={
+                                            <Button size="small" type="primary" onClick={() => goToPage("/auth")}>
+                                                去登录
+                                            </Button>
+                                        }
+                                    />
+                                ) : !webdavReady ? (
+                                    <Alert
+                                        type="warning"
+                                        showIcon
+                                        message="暂未分配 WebDAV"
+                                        description="管理员尚未为您开通 WebDAV 同步权限，请联系系统管理员在后台分配。"
+                                        action={
+                                            user.role === "admin" ? (
+                                                <Button size="small" type="primary" onClick={() => goToPage("/admin")}>
+                                                    前往后台分配
+                                                </Button>
+                                            ) : undefined
+                                        }
+                                    />
+                                ) : (
+                                    <>
+                                        <Descriptions column={{ xs: 1, sm: 2 }} size="small" bordered className="mb-4">
+                                            <Descriptions.Item label="服务地址">{webdav.url}</Descriptions.Item>
+                                            <Descriptions.Item label="分配目录">{webdav.directory}</Descriptions.Item>
+                                            <Descriptions.Item label="同步账号">{webdav.username || "—"}</Descriptions.Item>
+                                            <Descriptions.Item label="分配状态">已开通</Descriptions.Item>
+                                        </Descriptions>
+                                        <div className="flex flex-wrap items-center gap-2">
+                                            <Button icon={<Wifi className="size-4" />} disabled={syncingWebdav} loading={testingWebdav} onClick={() => void testWebdav()}>
+                                                {t("config.webdav.test")}
+                                            </Button>
+                                            <Button type="primary" icon={<RefreshCw className="size-4" />} disabled={testingWebdav} loading={syncingWebdav} onClick={() => void syncWebdav()}>
+                                                {t(syncingWebdav ? "config.webdav.syncing" : "config.webdav.syncNow")}
+                                            </Button>
+                                            {webdavSyncStatus ? <span className="text-xs text-stone-500">{syncStageLabel(webdavSyncStatus, t)}</span> : null}
+                                        </div>
+                                        {syncingWebdav || webdavSyncStatus ? <WebdavProgressGrid progress={webdavDomainProgress} t={t} /> : null}
+                                    </>
+                                )}
+                            </section>
                         ),
                     },
                     {
@@ -359,7 +375,6 @@ export function AppConfigPanel({ showDoneButton = false, initialTab = "channels"
                     </Button>
                 </div>
             ) : null}
-            <ChannelEditorDrawer open={Boolean(editingChannel)} channel={editingChannel} onSave={saveChannel} onClose={() => setEditingChannelId("")} />
         </>
     );
 }
@@ -389,37 +404,8 @@ export function AppConfigModal() {
     );
 }
 
-function withChannels(config: AiConfig, channels: ModelChannel[]): AiConfig {
-    const next: AiConfig = {
-        ...config,
-        channels,
-        models: modelOptionsFromChannels(channels),
-        baseUrl: channels[0]?.baseUrl || config.baseUrl,
-        apiKey: channels[0]?.apiKey || config.apiKey,
-        apiFormat: channels[0]?.apiFormat || config.apiFormat,
-    };
-    return {
-        ...next,
-        imageModel: pickDefaultModel(next, "image", config.imageModel),
-        videoModel: pickDefaultModel(next, "video", config.videoModel),
-        textModel: pickDefaultModel(next, "text", config.textModel),
-        audioModel: pickDefaultModel(next, "audio", config.audioModel),
-    };
-}
-
-function pickDefaultModel(config: AiConfig, capability: ModelCapability, current: string) {
-    const options = selectableModelsByCapability(config, capability);
-    const normalized = normalizeModelOptionValue(current, config.channels);
-    return options.includes(normalized) ? normalized : options[0] || "";
-}
-
 function normalizeImageCount(value: string) {
     return String(Math.max(1, Math.min(15, Math.floor(Math.abs(Number(value)) || 3))));
-}
-
-function apiFormatLabel(apiFormat: ApiCallFormat) {
-    if (apiFormat === "gemini") return "Gemini";
-    return "OpenAI";
 }
 
 function formatWebdavTime(value: string, locale: AppLocale) {

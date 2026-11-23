@@ -9,8 +9,7 @@ type AppConfigFile = {
     app: "infinite-canvas";
     version: 1;
     exportedAt: string;
-    config: AiConfig;
-    webdav: WebdavSyncConfig;
+    config: Partial<AiConfig>;
     promptSources: {
         sources: PromptSource[];
         schedule: PromptSourceSchedule;
@@ -18,9 +17,10 @@ type AppConfigFile = {
 };
 
 export function exportAppConfig() {
-    const { config, webdav } = useConfigStore.getState();
+    const { config } = useConfigStore.getState();
     const { sources, schedule } = usePromptSourceStore.getState();
-    const data: AppConfigFile = { app: "infinite-canvas", version: 1, exportedAt: new Date().toISOString(), config, webdav, promptSources: { sources, schedule } };
+    const { channels: _c, models: _m, baseUrl: _b, apiKey: _k, ...preferences } = config;
+    const data: AppConfigFile = { app: "infinite-canvas", version: 1, exportedAt: new Date().toISOString(), config: preferences, promptSources: { sources, schedule } };
     saveAs(new Blob([JSON.stringify(data, null, 2)], { type: "application/json;charset=utf-8" }), "infinite-canvas-config.json");
 }
 
@@ -31,7 +31,9 @@ export async function importAppConfig(file: File) {
     } catch {
         throw new Error(i18n.t("config.invalidFile"));
     }
-    if (data.app !== "infinite-canvas" || data.version !== 1 || !data.config || !data.webdav || !data.promptSources) throw new Error(i18n.t("config.invalidFile"));
-    useConfigStore.setState({ config: data.config, webdav: data.webdav });
+    if (data.app !== "infinite-canvas" || data.version !== 1 || !data.config || !data.promptSources) throw new Error(i18n.t("config.invalidFile"));
+    const current = useConfigStore.getState().config;
+    const { channels: _c, models: _m, baseUrl: _b, apiKey: _k, ...safePrefs } = data.config;
+    useConfigStore.setState({ config: { ...current, ...safePrefs } });
     usePromptSourceStore.setState(data.promptSources);
 }

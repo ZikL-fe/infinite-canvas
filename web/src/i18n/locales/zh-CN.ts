@@ -343,6 +343,12 @@ export default {
         shortcuts: "快捷键",
         lightTheme: "切换到浅色主题",
         darkTheme: "切换到深色主题",
+        login: "登录 / 注册",
+        logout: "退出登录",
+        adminConsole: "管理后台",
+        userConsole: "个人后台",
+        roleAdmin: "管理员",
+        roleUser: "普通用户",
     },
     home: {
         promptError: "获取提示词失败",

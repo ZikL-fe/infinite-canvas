@@ -16,6 +16,7 @@ import { useThemeStore } from "@/stores/use-theme-store";
 import { nanoid } from "nanoid";
 import { formatBytes, formatDuration } from "@/lib/image-utils";
 import { requestEdit, requestGeneration } from "@/services/api/image";
+import { ensureRuntimeConfigForGeneration } from "@/services/cloud-sync";
 import { deleteStoredImages, ensureImagePreview, getImagePreviewRevision, previewUrlFor, resolveImageUrl, subscribeImagePreviews, uploadImage } from "@/services/image-storage";
 import { useAssetStore } from "@/stores/use-asset-store";
 import { useWorkbenchAgentStore } from "@/stores/use-workbench-agent-store";
@@ -113,6 +114,15 @@ export default function ImagePage() {
 
     useEffect(() => {
         void refreshLogs();
+        const handleSessionChanged = () => {
+            setLogs([]);
+            setResults([]);
+            setPreviewLog(null);
+            setSelectedLogIds([]);
+            void refreshLogs();
+        };
+        window.addEventListener("infinite-canvas:user-session-changed", handleSessionChanged);
+        return () => window.removeEventListener("infinite-canvas:user-session-changed", handleSessionChanged);
     }, []);
 
     const addReferences = async (files?: FileList | null) => {
@@ -156,16 +166,9 @@ export default function ImagePage() {
             if (agentTaskId) updateAgentTask(agentTaskId, { status: "failed", error: t("imageWorkbench.promptRequired") });
             return;
         }
-        if (!isAiConfigReady(effectiveConfig, model)) {
-            message.warning(t("workbench.configFirst"));
-            openConfigDialog(true);
-            if (agentTaskId) updateAgentTask(agentTaskId, { status: "failed", error: t("imageWorkbench.configIncomplete") });
-            return;
-        }
-
-        const snapshot = buildRequestSnapshot();
+        const snapshot = await buildRequestSnapshot();
         if (!snapshot) {
-            if (agentTaskId) updateAgentTask(agentTaskId, { status: "failed", error: t("imageWorkbench.invalidParams") });
+            if (agentTaskId) updateAgentTask(agentTaskId, { status: "failed", error: t("imageWorkbench.configIncomplete") });
             return;
         }
 
@@ -304,18 +307,23 @@ export default function ImagePage() {
         setResults(log.images.map((image) => ({ id: image.id, status: "success", image })));
     };
 
-    const buildRequestSnapshot = () => {
+    const buildRequestSnapshot = async () => {
         const text = prompt.trim();
         if (!text) {
             message.error(t("imageWorkbench.promptRequired"));
             return null;
         }
-        if (!isAiConfigReady(effectiveConfig, model)) {
-            message.warning(t("workbench.configFirst"));
-            openConfigDialog(true);
-            return null;
+        let snapshotConfig = { ...effectiveConfig, model, count: "1" };
+        if (!isAiConfigReady(snapshotConfig, snapshotConfig.model)) {
+            const refreshed = await ensureRuntimeConfigForGeneration(snapshotConfig, snapshotConfig.model, isAiConfigReady);
+            if (!refreshed) {
+                message.warning(t("workbench.configFirst"));
+                openConfigDialog(true);
+                return null;
+            }
+            snapshotConfig = { ...refreshed, count: "1" };
         }
-        return { text, config: { ...effectiveConfig, model, count: "1" }, references: [...references] };
+        return { text, config: snapshotConfig, references: [...references] };
     };
 
     const runGenerationSlot = async (index: number, snapshot: { text: string; config: AiConfig; references: ReferenceImage[] }) => {
@@ -324,7 +332,7 @@ export default function ImagePage() {
             const result = snapshot.references.length ? await requestEdit(snapshot.config, snapshot.text, snapshot.references) : await requestGeneration(snapshot.config, snapshot.text);
             const image = result[0];
             if (!image) throw new Error(t("imageWorkbench.missingResult"));
-            const stored = await uploadImage(image.dataUrl);
+            const stored = await uploadImage(image.dataUrl, { sourceType: "ai_generated" });
             const nextImage: GeneratedImage = { id: image.id, dataUrl: stored.url, ...(stored.storageKey ? { storageKey: stored.storageKey } : {}), durationMs: performance.now() - itemStartedAt, width: stored.width, height: stored.height, bytes: stored.bytes, mimeType: stored.mimeType };
             setResults((value) => updateResultAt(value, index, { status: "success", image: nextImage }));
             return nextImage;
@@ -335,7 +343,7 @@ export default function ImagePage() {
     };
 
     const retryResult = async (index: number) => {
-        const snapshot = buildRequestSnapshot();
+        const snapshot = await buildRequestSnapshot();
         if (!snapshot) return;
         setPreviewLog(null);
         setResults((value) => updateResultAt(value, index, { status: "pending", error: undefined, image: undefined }));

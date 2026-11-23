@@ -16,6 +16,7 @@ import { formatBytes, formatDuration } from "@/lib/image-utils";
 import { deleteStoredMedia, resolveMediaUrl } from "@/services/file-storage";
 import { resolveImageUrl, ensureImagePreview, getImagePreviewRevision, previewUrlFor, subscribeImagePreviews, uploadImage } from "@/services/image-storage";
 import { createVideoGenerationTask, pollVideoGenerationTask, storeGeneratedVideo, type VideoGenerationTask } from "@/services/api/video";
+import { ensureRuntimeConfigForGeneration } from "@/services/cloud-sync";
 import { useAssetStore } from "@/stores/use-asset-store";
 import { useWorkbenchAgentStore } from "@/stores/use-workbench-agent-store";
 import { boolConfig, modelOptionLabel, useConfigStore, useEffectiveConfig, type AiConfig } from "@/stores/use-config-store";
@@ -113,6 +114,15 @@ export default function VideoPage() {
 
     useEffect(() => {
         void refreshLogs();
+        const handleSessionChanged = () => {
+            setLogs([]);
+            setResults([]);
+            setPreviewLog(null);
+            setSelectedLogIds([]);
+            void refreshLogs(false);
+        };
+        window.addEventListener("infinite-canvas:user-session-changed", handleSessionChanged);
+        return () => window.removeEventListener("infinite-canvas:user-session-changed", handleSessionChanged);
     }, []);
 
     const addReferences = async (files?: FileList | null) => {
@@ -171,11 +181,24 @@ export default function VideoPage() {
     const generate = async () => {
         const agentTaskId = agentTaskIdRef.current;
         agentTaskIdRef.current = undefined;
-        const snapshot = buildRequestSnapshot();
-        if (!snapshot) {
+        const text = prompt.trim();
+        if (!text) {
+            message.error(t("videoWorkbench.promptRequired"));
             if (agentTaskId) updateAgentTask(agentTaskId, { status: "failed", error: t("videoWorkbench.invalidParams") });
             return;
         }
+        let runtimeCfg = effectiveConfig;
+        if (!isAiConfigReady(runtimeCfg, model)) {
+            const refreshed = await ensureRuntimeConfigForGeneration(runtimeCfg, model, isAiConfigReady);
+            if (!refreshed) {
+                message.warning(t("workbench.configFirst"));
+                openConfigDialog(true);
+                if (agentTaskId) updateAgentTask(agentTaskId, { status: "failed", error: t("videoWorkbench.invalidParams") });
+                return;
+            }
+            runtimeCfg = refreshed;
+        }
+        const snapshot = { text, config: buildVideoConfig(runtimeCfg, model), references: [...references] };
         setElapsedMs(0);
         setRunning(true);
         if (agentTaskId) updateAgentTask(agentTaskId, { status: "running", error: undefined });
@@ -219,20 +242,6 @@ export default function VideoPage() {
         void generate();
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [autoRunToken]);
-
-    const buildRequestSnapshot = () => {
-        const text = prompt.trim();
-        if (!text) {
-            message.error(t("videoWorkbench.promptRequired"));
-            return null;
-        }
-        if (!isAiConfigReady(effectiveConfig, model)) {
-            message.warning(t("workbench.configFirst"));
-            openConfigDialog(true);
-            return null;
-        }
-        return { text, config: buildVideoConfig(effectiveConfig, model), references: [...references] };
-    };
 
     const retryResult = () => {
         void generate();
@@ -313,10 +322,19 @@ export default function VideoPage() {
         setRunning(true);
         setStartedAt((value) => value || performance.now());
         setResults((value) => (value.length ? value : [{ id: log.id, status: "pending" }]));
-        const taskConfig = buildVideoConfig({ ...effectiveConfig, ...log.config }, log.task.model || log.model);
+        let resolvedConfig = configOverride;
+        let taskConfig = buildVideoConfig({ ...effectiveConfig, ...log.config }, log.task.model || log.model);
+        // 刷新页面恢复轮询时可能早于渠道同步完成，需先等待拉取运行时配置再轮询
+        if (!resolvedConfig && !isAiConfigReady(taskConfig, taskConfig.model)) {
+            const refreshed = await ensureRuntimeConfigForGeneration(taskConfig, taskConfig.model, isAiConfigReady);
+            if (refreshed) {
+                resolvedConfig = buildVideoConfig(refreshed, taskConfig.model);
+                taskConfig = resolvedConfig;
+            }
+        }
         try {
             for (let attempt = 0; attempt < 120; attempt += 1) {
-                const state = await pollVideoGenerationTask(configOverride || taskConfig, log.task);
+                const state = await pollVideoGenerationTask(resolvedConfig || taskConfig, log.task);
                 if (state.status === "completed") {
                     const stored = await storeGeneratedVideo(state.result);
                     const nextVideo: GeneratedVideo = {

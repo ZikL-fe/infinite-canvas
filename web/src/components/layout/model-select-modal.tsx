@@ -7,7 +7,21 @@ import { fetchChannelModels } from "@/services/api/image";
 import type { ModelChannel } from "@/stores/use-config-store";
 
 // Channel model selector: fetch upstream models or add them manually, then include checked models in the channel list.
-export function ModelSelectModal({ open, channel, selectedNames, onConfirm, onClose }: { open: boolean; channel: ModelChannel | null; selectedNames: string[]; onConfirm: (names: string[]) => void; onClose: () => void }) {
+export function ModelSelectModal({
+    open,
+    channel,
+    selectedNames,
+    onConfirm,
+    onClose,
+    onFetchModels,
+}: {
+    open: boolean;
+    channel: ModelChannel | null;
+    selectedNames: string[];
+    onConfirm: (names: string[]) => void;
+    onClose: () => void;
+    onFetchModels?: (channel: ModelChannel) => Promise<string[]>;
+}) {
     const { message } = App.useApp();
     const { t } = useTranslation();
     const [existing, setExisting] = useState<string[]>([]);
@@ -61,13 +75,13 @@ export function ModelSelectModal({ open, channel, selectedNames, onConfirm, onCl
 
     const fetchModels = async () => {
         if (!channel) return;
-        if (!channel.baseUrl.trim() || !channel.apiKey.trim()) {
+        if (!channel.baseUrl.trim() || (!channel.apiKey.trim() && !channel.hasApiKey)) {
             message.error(t("config.modelSelect.missingConfig"));
             return;
         }
         setLoading(true);
         try {
-            const models = await fetchChannelModels(channel);
+            const models = onFetchModels ? await onFetchModels(channel) : await fetchChannelModels(channel);
             setFetched(models);
             setActiveTab("new");
             message.success(t("config.modelSelect.fetched", { count: models.length }));

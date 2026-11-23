@@ -3,9 +3,10 @@ import { Cpu } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import i18n from "@/i18n";
+import { formatModelPricingSummary } from "@/components/layout/model-pricing-modal";
 import { Select, SelectContent, SelectItem, SelectTrigger } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
-import { modelOptionLabel, modelOptionName, selectableModelsByCapability, type AiConfig, type ModelCapability } from "@/stores/use-config-store";
+import { decodeChannelModel, modelOptionLabel, modelOptionName, selectableModelsByCapability, type AiConfig, type ModelCapability } from "@/stores/use-config-store";
 
 type ModelPickerProps = {
     config: AiConfig;
@@ -88,14 +89,21 @@ export function ModelPicker({ config, value, onChange, capability, className, fu
 function emptyModelLabel(config: AiConfig, capability?: ModelCapability) {
     const label = capability ? i18n.t(`settingsPanels.model.capabilities.${capability}`) : "";
     if (capability && config.models.length) return i18n.t("settingsPanels.model.assign", { capability: label });
-    return config.models.length ? i18n.t("settingsPanels.model.noMatch", { capability: label }) : i18n.t("settingsPanels.model.addFirst");
+    return config.models.length ? i18n.t("settingsPanels.model.noMatch", { capability: label }) : "请联系管理员配置可用模型";
 }
 
 function ModelLabel({ config, model }: { config: AiConfig; model: string }) {
+    const decoded = decodeChannelModel(model);
+    const channel = decoded ? config.channels.find((ch) => ch.id === decoded.channelId) : undefined;
+    const matchedModel = channel?.models.find((item) => item.name === (decoded?.model || model));
+    const priceText = matchedModel?.pricing ? formatModelPricingSummary(matchedModel.capability, matchedModel.pricing) : "";
     return (
-        <span className="flex min-w-0 items-center gap-2">
-            <ModelIcon model={model} />
-            <span className="truncate">{modelOptionLabel(config, model)}</span>
+        <span className="flex w-full min-w-0 items-center justify-between gap-2">
+            <span className="flex min-w-0 items-center gap-2">
+                <ModelIcon model={model} />
+                <span className="truncate">{modelOptionLabel(config, model)}</span>
+            </span>
+            {priceText && priceText !== "免费" ? <span className="shrink-0 text-[11px] opacity-60">{priceText}</span> : null}
         </span>
     );
 }

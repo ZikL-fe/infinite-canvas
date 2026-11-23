@@ -343,6 +343,12 @@ export default {
         shortcuts: "Keyboard shortcuts",
         lightTheme: "Switch to light theme",
         darkTheme: "Switch to dark theme",
+        login: "Sign in / Register",
+        logout: "Sign out",
+        adminConsole: "Admin Console",
+        userConsole: "Account Console",
+        roleAdmin: "Admin",
+        roleUser: "User",
     },
     home: {
         promptError: "Failed to load prompts",

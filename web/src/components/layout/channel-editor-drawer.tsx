@@ -1,19 +1,34 @@
-import { Button, Drawer, Input, Segmented, Select, Space } from "antd";
-import { ListPlus, Trash2 } from "lucide-react";
+import { Button, Drawer, Input, Segmented, Select, Space, Tag } from "antd";
+import { Coins, ListPlus, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 
-import { defaultBaseUrlForApiFormat, guessCapability, normalizeChannelModels, type ApiCallFormat, type ChannelModel, type ModelCapability, type ModelChannel } from "@/stores/use-config-store";
+import { defaultBaseUrlForApiFormat, guessCapability, normalizeChannelModels, type ApiCallFormat, type ChannelModel, type ModelCapability, type ModelChannel, type ModelPricing } from "@/stores/use-config-store";
+import { formatModelPricingSummary, ModelPricingModal } from "./model-pricing-modal";
 import { ModelScriptEditor } from "./model-script-editor";
 import { ModelSelectModal } from "./model-select-modal";
 
 type ScriptTarget = { name: string; capability: ModelCapability; value: string };
+type PricingTarget = { name: string; capability: ModelCapability; value?: ModelPricing };
 
-export function ChannelEditorDrawer({ open, channel, onSave, onClose }: { open: boolean; channel: ModelChannel | null; onSave: (channel: ModelChannel) => void; onClose: () => void }) {
+export function ChannelEditorDrawer({
+    open,
+    channel,
+    onSave,
+    onClose,
+    onFetchModels,
+}: {
+    open: boolean;
+    channel: ModelChannel | null;
+    onSave: (channel: ModelChannel) => void;
+    onClose: () => void;
+    onFetchModels?: (channel: ModelChannel) => Promise<string[]>;
+}) {
     const { t } = useTranslation();
     const [draft, setDraft] = useState<ModelChannel | null>(channel);
     const [selectOpen, setSelectOpen] = useState(false);
     const [scriptTarget, setScriptTarget] = useState<ScriptTarget | null>(null);
+    const [pricingTarget, setPricingTarget] = useState<PricingTarget | null>(null);
     const apiFormatOptions: Array<{ label: string; value: ApiCallFormat }> = [
         { label: "OpenAI", value: "openai" },
         { label: "Gemini", value: "gemini" },
@@ -39,8 +54,9 @@ export function ChannelEditorDrawer({ open, channel, onSave, onClose }: { open: 
         setModels(names.map((name) => map.get(name) || { name, capability: guessCapability(name) }));
     };
 
-    const setCapability = (name: string, capability: ModelCapability) => setModels(draft.models.map((model) => (model.name === name ? { ...model, capability } : model)));
+    const setCapability = (name: string, capability: ModelCapability) => setModels(draft.models.map((model) => (model.name === name ? { ...model, capability, pricing: undefined } : model)));
     const setScript = (name: string, script: string) => setModels(draft.models.map((model) => (model.name === name ? { ...model, script: script || undefined } : model)));
+    const setPricing = (name: string, pricing?: ModelPricing) => setModels(draft.models.map((model) => (model.name === name ? { ...model, pricing } : model)));
     const removeModel = (name: string) => setModels(draft.models.filter((model) => model.name !== name));
 
     const save = () => {
@@ -78,8 +94,14 @@ export function ChannelEditorDrawer({ open, channel, onSave, onClose }: { open: 
                     <Input value={draft.baseUrl} onChange={(event) => patch({ baseUrl: event.target.value })} placeholder="https://api.example.com" />
                 </label>
                 <label className="block md:col-span-2">
-                    <span className="mb-1 block text-sm font-medium">API Key</span>
-                    <Input.Password value={draft.apiKey} onChange={(event) => patch({ apiKey: event.target.value })} placeholder="sk-..." />
+                    <span className="mb-1 block text-sm font-medium">
+                        API Key{draft.hasApiKey && draft.apiKeyPreview ? `（已保存：${draft.apiKeyPreview}，留空则保持不变）` : ""}
+                    </span>
+                    <Input.Password
+                        value={draft.apiKey}
+                        onChange={(event) => patch({ apiKey: event.target.value })}
+                        placeholder={draft.hasApiKey ? "留空表示沿用已保存密钥" : "sk-..."}
+                    />
                 </label>
             </div>
 
@@ -101,7 +123,11 @@ export function ChannelEditorDrawer({ open, channel, onSave, onClose }: { open: 
                                 {model.name}
                             </span>
                             <div className="flex shrink-0 items-center gap-2">
+                                <Tag>{formatModelPricingSummary(model.capability, model.pricing)}</Tag>
                                 <Segmented size="small" value={model.capability} options={capabilityOptions} onChange={(value) => setCapability(model.name, value as ModelCapability)} />
+                                <Button size="small" icon={<Coins className="size-3.5" />} onClick={() => setPricingTarget({ name: model.name, capability: model.capability, value: model.pricing })}>
+                                    计费
+                                </Button>
                                 <Button size="small" type={model.script ? "primary" : "default"} ghost={Boolean(model.script)} onClick={() => setScriptTarget({ name: model.name, capability: model.capability, value: model.script || "" })}>
                                     {t(model.script ? "config.channelEditor.scriptReady" : "config.channelEditor.script")}
                                 </Button>
@@ -114,7 +140,7 @@ export function ChannelEditorDrawer({ open, channel, onSave, onClose }: { open: 
                 )}
             </div>
 
-            <ModelSelectModal open={selectOpen} channel={draft} selectedNames={draft.models.map((model) => model.name)} onConfirm={applySelection} onClose={() => setSelectOpen(false)} />
+            <ModelSelectModal open={selectOpen} channel={draft} selectedNames={draft.models.map((model) => model.name)} onConfirm={applySelection} onClose={() => setSelectOpen(false)} onFetchModels={onFetchModels} />
 
             <ModelScriptEditor
                 open={Boolean(scriptTarget)}
@@ -123,6 +149,15 @@ export function ChannelEditorDrawer({ open, channel, onSave, onClose }: { open: 
                 value={scriptTarget?.value || ""}
                 onSave={(script) => scriptTarget && setScript(scriptTarget.name, script)}
                 onClose={() => setScriptTarget(null)}
+            />
+
+            <ModelPricingModal
+                open={Boolean(pricingTarget)}
+                modelName={pricingTarget?.name || ""}
+                capability={pricingTarget?.capability || "text"}
+                value={pricingTarget?.value}
+                onSave={(pricing) => pricingTarget && setPricing(pricingTarget.name, pricing)}
+                onClose={() => setPricingTarget(null)}
             />
         </Drawer>
     );

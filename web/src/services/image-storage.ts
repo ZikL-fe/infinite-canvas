@@ -4,6 +4,7 @@ import { nanoid } from "nanoid";
 import i18n from "@/i18n";
 import { withLocalProxy } from "@/stores/use-config-store";
 import { createImageThumbnail } from "@/lib/image-thumbnail";
+import { deleteCloudMedia, fetchCloudMediaBlob, resolveCloudMediaUrl, uploadBlobToCloud } from "@/services/cloud-media";
 
 export type UploadedImage = {
     url: string;
@@ -32,7 +33,7 @@ const IMAGE_TIMEOUT_ERROR = "ImageTimeoutError";
 
 type StoredImagePreview = { version: number; blob?: Blob };
 
-type ImageReadOptions = { signal?: AbortSignal };
+type ImageReadOptions = { signal?: AbortSignal; sourceType?: "upload" | "ai_generated" | "canvas_import"; filename?: string };
 
 export async function uploadImage(input: string | Blob, options?: ImageReadOptions): Promise<UploadedImage> {
     if (typeof input !== "string") return storeImage(input, options);
@@ -60,6 +61,12 @@ async function storeImage(blob: Blob, options?: ImageReadOptions): Promise<Uploa
         throwIfAborted(options?.signal);
         objectUrls.set(storageKey, url);
         await storeImagePreview(storageKey, blob);
+        await uploadBlobToCloud(storageKey, blob, "image", {
+            width: meta.width,
+            height: meta.height,
+            filename: options?.filename,
+            sourceType: options?.sourceType,
+        });
         return { url, storageKey, width: meta.width, height: meta.height, bytes: blob.size, mimeType: blob.type.startsWith("image/") ? blob.type : "" };
     } catch (error) {
         URL.revokeObjectURL(url);
@@ -145,14 +152,22 @@ export async function resolveImageUrl(storageKey?: string, fallback = "") {
     const cached = objectUrls.get(storageKey);
     if (cached) return cached;
     const blob = await store.getItem<Blob>(storageKey);
-    if (!blob) return fallback;
-    const url = URL.createObjectURL(blob);
-    objectUrls.set(storageKey, url);
-    return url;
+    if (blob) {
+        const url = URL.createObjectURL(blob);
+        objectUrls.set(storageKey, url);
+        return url;
+    }
+    return resolveCloudMediaUrl(storageKey, fallback);
 }
 
 export async function getImageBlob(storageKey: string) {
-    return store.getItem<Blob>(storageKey);
+    const local = await store.getItem<Blob>(storageKey);
+    if (local) return local;
+    return fetchCloudMediaBlob(storageKey, async (blob) => {
+        await store.setItem(storageKey, blob);
+        const url = URL.createObjectURL(blob);
+        objectUrls.set(storageKey, url);
+    });
 }
 
 // 缩略图按图片的 storageKey 另存一份 WebP，只放在本地 IndexedDB 里，不写进节点数据，也不参与导出和 WebDAV 同步。
@@ -219,6 +234,7 @@ export async function setImageBlob(storageKey: string, blob: Blob) {
     await storeImagePreview(storageKey, blob);
     const url = URL.createObjectURL(blob);
     objectUrls.set(storageKey, url);
+    await uploadBlobToCloud(storageKey, blob, "image");
     return url;
 }
 
@@ -229,6 +245,7 @@ export async function imageToDataUrl(image: { url?: string; dataUrl?: string; st
 }
 
 export async function deleteStoredImages(keys: Iterable<string>) {
+    await deleteCloudMedia(keys);
     await Promise.all(
         Array.from(new Set(keys)).map(async (key) => {
             const url = objectUrls.get(key);
@@ -266,6 +283,20 @@ export function collectImageStorageKeys(value: unknown, keys = new Set<string>()
     if ("storageKey" in value && typeof value.storageKey === "string" && value.storageKey.startsWith("image:")) keys.add(value.storageKey);
     Object.values(value).forEach((item) => (Array.isArray(item) ? item.forEach((child) => collectImageStorageKeys(child, keys)) : collectImageStorageKeys(item, keys)));
     return keys;
+}
+
+export async function clearLocalImageAndWorkbenchCaches() {
+    objectUrls.forEach((url) => URL.revokeObjectURL(url));
+    objectUrls.clear();
+    previewUrls.forEach((url) => URL.revokeObjectURL(url));
+    previewUrls.clear();
+    previewListeners.forEach((listener) => listener());
+    await Promise.all([
+        store.clear().catch(() => undefined),
+        previewStore.clear().catch(() => undefined),
+        imageLogStore.clear().catch(() => undefined),
+        videoLogStore.clear().catch(() => undefined),
+    ]);
 }
 
 function blobToDataUrl(blob: Blob) {

@@ -37,6 +37,8 @@ type CanvasStore = {
     deleteProjects: (ids: string[]) => void;
     replaceProjects: (projects: CanvasProject[], deletedProjects?: CanvasDeletedProject[]) => void;
     updateProject: (id: string, patch: Partial<Pick<CanvasProject, "nodes" | "connections" | "chatSessions" | "activeChatId" | "backgroundMode" | "showImageInfo" | "viewport">>) => void;
+    patchProjectNodes: (id: string, updater: (nodes: CanvasNodeData[]) => CanvasNodeData[]) => void;
+    patchProjectConnections: (id: string, updater: (connections: CanvasConnection[]) => CanvasConnection[]) => void;
 };
 
 const initialViewport: ViewportTransform = { x: 0, y: 0, k: 1 };
@@ -128,6 +130,18 @@ export const useCanvasStore = create<CanvasStore>()(
             updateProject: (id, patch) =>
                 set((state) => ({
                     projects: state.projects.map((project) => (project.id === id ? { ...project, ...patch, updatedAt: new Date().toISOString() } : project)),
+                })),
+            patchProjectNodes: (id, updater) =>
+                set((state) => ({
+                    projects: state.projects.map((project) =>
+                        project.id === id ? { ...project, nodes: updater(project.nodes), updatedAt: new Date().toISOString() } : project,
+                    ),
+                })),
+            patchProjectConnections: (id, updater) =>
+                set((state) => ({
+                    projects: state.projects.map((project) =>
+                        project.id === id ? { ...project, connections: updater(project.connections), updatedAt: new Date().toISOString() } : project,
+                    ),
                 })),
         }),
         {

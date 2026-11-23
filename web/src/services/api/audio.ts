@@ -1,8 +1,8 @@
-import axios from "axios";
-
 import i18n from "@/i18n";
 import { audioMimeType, normalizeAudioFormatValue, normalizeAudioSpeedValue, normalizeAudioVoiceValue } from "@/lib/audio-generation";
+import { aiAxios } from "@/services/api/ai-http";
 import { uploadMediaFile, type UploadedFile } from "@/services/file-storage";
+import { scheduleRefreshUserBalance } from "@/services/api/server";
 import { buildApiUrl, resolveModelRequestConfig, resolveModelScript, withLocalProxy, type AiConfig } from "@/stores/use-config-store";
 import { runModelPlugin } from "./model-plugin";
 
@@ -41,13 +41,15 @@ export async function requestAudioGeneration(config: AiConfig, prompt: string, o
             return await audioPluginBlob(result, format);
         } catch (error) {
             throw new Error(readAxiosError(error, apiText("audioGenerationFailed")));
+        } finally {
+            scheduleRefreshUserBalance();
         }
     }
     assertAudioConfig(requestConfig, model);
     const instructions = config.audioInstructions.trim();
 
     try {
-        const response = await axios.post<Blob>(
+        const response = await aiAxios.post<Blob>(
             aiApiUrl(requestConfig, "/audio/speech"),
             {
                 model,
@@ -63,6 +65,8 @@ export async function requestAudioGeneration(config: AiConfig, prompt: string, o
         return response.data.type.startsWith("audio/") ? response.data : new Blob([response.data], { type: audioMimeType(format) });
     } catch (error) {
         throw new Error(readAxiosError(error, apiText("audioGenerationFailed")));
+    } finally {
+        scheduleRefreshUserBalance();
     }
 }
 
@@ -82,7 +86,7 @@ async function audioPluginBlob(result: unknown, format: string): Promise<Blob> {
 
 export async function storeGeneratedAudio(blob: Blob, format = "mp3"): Promise<UploadedFile> {
     const audio = blob.type.startsWith("audio/") ? blob : new Blob([blob], { type: audioMimeType(format) });
-    return uploadMediaFile(audio, "audio");
+    return uploadMediaFile(audio, "audio", { sourceType: "ai_generated" });
 }
 
 function assertAudioConfig(config: AiConfig, model: string) {

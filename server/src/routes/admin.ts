@@ -1,0 +1,898 @@
+/** 管理员后台接口：系统概览、公告发布、用户管控、兑换码、渠道模型、对象存储、WebDAV 与全站使用日志。 */
+import { randomBytes } from "node:crypto";
+import { zValidator } from "@hono/zod-validator";
+import { and, count, desc, eq, ilike, inArray, isNull, ne, or, sql, type SQL } from "drizzle-orm";
+import { Hono } from "hono";
+import { nanoid } from "nanoid";
+import { z } from "zod";
+
+import { announcements, canvasProjects, creditWallets, db, mediaObjects, redeemCodes, userAssets, userSessions, users } from "../db/index.ts";
+import { adjustWalletCredits, queryConsumptionMetrics, queryCreditLedger, roundCredits } from "../lib/billing.ts";
+import { maskSecret } from "../lib/crypto.ts";
+import { createMediaReadUrl, deleteS3Object, testS3Connection } from "../lib/s3.ts";
+import {
+  getAuthPolicy,
+  getPlatformChannels,
+  getPlatformWebdavConfig,
+  getS3StorageConfig,
+  saveAuthPolicy,
+  savePlatformChannels,
+  savePlatformWebdavConfig,
+  saveS3StorageConfig,
+  type PlatformChannel,
+  type S3StorageConfig,
+} from "../lib/settings.ts";
+import { requireAdmin, requireAuth, type AppEnv } from "../middleware/auth.ts";
+
+const updateUserSchema = z.object({
+  role: z.enum(["admin", "user"]).optional(),
+  status: z.enum(["active", "disabled"]).optional(),
+});
+
+const userWebdavSchema = z.object({
+  enabled: z.boolean(),
+  url: z.string().trim().optional(),
+  username: z.string().trim().optional(),
+  password: z.string().optional(),
+  directory: z.string().trim().optional(),
+  quotaBytes: z.number().nonnegative().nullable().optional(),
+  expiresAt: z.string().nullable().optional(),
+  resetUsedBytes: z.boolean().optional(),
+});
+
+const modelPricingSchema = z
+  .union([
+    z.object({
+      mode: z.literal("token"),
+      inputPerMillion: z.number().nonnegative(),
+      cachedInputPerMillion: z.number().nonnegative().default(0),
+      outputPerMillion: z.number().nonnegative(),
+    }),
+    z.object({
+      mode: z.literal("per_image"),
+      perImage: z.number().nonnegative(),
+    }),
+    z.object({
+      mode: z.literal("per_resolution"),
+      resolutionPrices: z.object({
+        "1k": z.number().nonnegative().optional(),
+        "2k": z.number().nonnegative().optional(),
+        "4k": z.number().nonnegative().optional(),
+        default: z.number().nonnegative(),
+      }),
+    }),
+    z.object({
+      mode: z.enum(["per_second", "per_request"]),
+      perSecond: z.number().nonnegative().optional(),
+      perRequest: z.number().nonnegative().optional(),
+      chargeReferenceVideo: z.boolean().optional(),
+      referenceVideoMode: z.enum(["per_second", "per_request"]).optional(),
+      referenceVideoPrice: z.number().nonnegative().optional(),
+    }),
+  ])
+  .optional();
+
+const channelModelSchema = z.object({
+  name: z.string().trim().min(1),
+  capability: z.enum(["image", "video", "text", "audio"]),
+  script: z.string().optional(),
+  pricing: modelPricingSchema,
+});
+
+const adjustCreditsSchema = z.object({
+  delta: z.number().refine((v) => Number.isFinite(v) && v !== 0, "调整积分不能为 0"),
+  note: z.string().trim().max(200).optional(),
+});
+
+const createRedeemCodesSchema = z.object({
+  count: z.number().int().min(1).max(100).default(1),
+  credits: z.number().positive("积分面值必须大于 0"),
+  maxUses: z.number().int().min(1).default(1),
+  prefix: z.string().trim().max(16).optional().default("IC"),
+  customCode: z.string().trim().max(64).optional(),
+  expiresAt: z.string().nullable().optional(),
+  note: z.string().trim().max(200).optional().default(""),
+});
+
+const updateRedeemCodeSchema = z.object({
+  status: z.enum(["active", "disabled"]),
+});
+
+function generateRedeemCodeString(prefix: string) {
+  const cleanPrefix = prefix
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9_-]/g, "");
+  const raw = randomBytes(6).toString("hex").toUpperCase();
+  const body = `${raw.slice(0, 4)}-${raw.slice(4, 8)}-${raw.slice(8, 12)}`;
+  return cleanPrefix ? `${cleanPrefix}-${body}` : body;
+}
+
+const channelItemSchema = z.object({
+  id: z.string().trim().min(1),
+  name: z.string().trim().min(1),
+  baseUrl: z.string().trim(),
+  apiKey: z.string().optional().default(""),
+  apiFormat: z.enum(["openai", "gemini"]).default("openai"),
+  enabled: z.boolean().default(true),
+  models: z.array(channelModelSchema).default([]),
+});
+
+const saveChannelsSchema = z.object({
+  channels: z.array(channelItemSchema),
+});
+
+const fetchChannelModelsSchema = z.object({
+  id: z.string().optional(),
+  baseUrl: z.string().trim().min(1, "请先填写 Base URL"),
+  apiKey: z.string().optional().default(""),
+  apiFormat: z.enum(["openai", "gemini"]).default("openai"),
+});
+
+const platformWebdavSchema = z.object({
+  enabled: z.boolean(),
+  url: z.string().trim().default(""),
+  username: z.string().trim().default(""),
+  password: z.string().optional().default(""),
+  baseDirectory: z.string().trim().default("infinite-canvas"),
+  autoAssignNewUsers: z.boolean().default(false),
+});
+
+const storageConfigSchema = z.object({
+  provider: z.enum(["s3", "r2", "oss", "cos"]),
+  endpoint: z.string().trim().default(""),
+  region: z.string().trim().default("auto"),
+  bucket: z.string().trim().min(1, "请填写 Bucket 名称"),
+  accessKeyId: z.string().trim().min(1, "请填写 AccessKey ID"),
+  secretAccessKey: z.string().optional().default(""),
+  publicBaseUrl: z.string().trim().default(""),
+  forcePathStyle: z.boolean().default(false),
+});
+
+const authPolicySchema = z.object({
+  allowRegister: z.boolean(),
+});
+
+const announcementSchema = z.object({
+  title: z.string().trim().min(1, "请输入公告标题").max(120),
+  content: z.string().trim().min(1, "请输入公告内容").max(5000),
+  level: z.enum(["info", "warning", "success"]).default("info"),
+  isPinned: z.boolean().default(false),
+  isPublished: z.boolean().default(true),
+});
+
+export const adminRoutes = new Hono<AppEnv>();
+
+adminRoutes.use("*", requireAuth, requireAdmin);
+
+adminRoutes.get("/overview", async (c) => {
+  const days = Number(c.req.query("days") || 7);
+  const [[userStats], [adminStats], [disabledStats], [mediaStats], [projectStats], [assetStats], kindRows, topStorageUsers, storageConfig, consumption, latestAnnouncements] = await Promise.all([
+    db.select({ totalUsers: count() }).from(users),
+    db.select({ adminCount: count() }).from(users).where(and(eq(users.role, "admin"), eq(users.status, "active"))),
+    db.select({ disabledUsers: count() }).from(users).where(eq(users.status, "disabled")),
+    db
+      .select({
+        activeMediaCount: count(),
+        totalStorageBytes: sql<number>`COALESCE(SUM(${mediaObjects.bytes}), 0)::bigint`,
+      })
+      .from(mediaObjects)
+      .where(eq(mediaObjects.status, "active")),
+    db.select({ canvasProjectCount: count() }).from(canvasProjects).where(isNull(canvasProjects.deletedAt)),
+    db.select({ assetCount: count() }).from(userAssets).where(isNull(userAssets.deletedAt)),
+    db
+      .select({
+        kind: mediaObjects.kind,
+        count: count(),
+        bytes: sql<number>`COALESCE(SUM(${mediaObjects.bytes}), 0)::bigint`,
+      })
+      .from(mediaObjects)
+      .where(eq(mediaObjects.status, "active"))
+      .groupBy(mediaObjects.kind),
+    db
+      .select({
+        id: users.id,
+        username: users.username,
+        displayName: users.displayName,
+        role: users.role,
+        storageUsedBytes: users.storageUsedBytes,
+      })
+      .from(users)
+      .orderBy(desc(users.storageUsedBytes), desc(users.createdAt))
+      .limit(5),
+    getS3StorageConfig(),
+    queryConsumptionMetrics(days),
+    db.query.announcements.findMany({
+      where: eq(announcements.isPublished, true),
+      orderBy: [desc(announcements.isPinned), desc(announcements.createdAt)],
+      limit: 5,
+    }),
+  ]);
+
+  return c.json({
+    totalUsers: Number(userStats?.totalUsers ?? 0),
+    adminCount: Number(adminStats?.adminCount ?? 0),
+    disabledUsers: Number(disabledStats?.disabledUsers ?? 0),
+    activeMediaCount: Number(mediaStats?.activeMediaCount ?? 0),
+    totalStorageBytes: Number(mediaStats?.totalStorageBytes ?? 0),
+    canvasProjectCount: Number(projectStats?.canvasProjectCount ?? 0),
+    assetCount: Number(assetStats?.assetCount ?? 0),
+    mediaByKind: kindRows.map((row) => ({
+      kind: row.kind,
+      count: Number(row.count),
+      bytes: Number(row.bytes),
+    })),
+    topStorageUsers,
+    storageConfigured: Boolean(storageConfig),
+    storageBucket: storageConfig?.bucket || "",
+    storageProvider: storageConfig?.provider || "",
+    ...consumption,
+    announcements: latestAnnouncements,
+  });
+});
+
+adminRoutes.get("/announcements", async (c) => {
+  const items = await db.query.announcements.findMany({
+    orderBy: [desc(announcements.isPinned), desc(announcements.createdAt)],
+  });
+  return c.json({ items });
+});
+
+adminRoutes.post("/announcements", zValidator("json", announcementSchema), async (c) => {
+  const body = c.req.valid("json");
+  const [created] = await db
+    .insert(announcements)
+    .values({
+      id: nanoid(),
+      title: body.title,
+      content: body.content,
+      level: body.level,
+      isPinned: body.isPinned,
+      isPublished: body.isPublished,
+      createdBy: c.get("user").id,
+    })
+    .returning();
+  return c.json({ item: created }, 201);
+});
+
+adminRoutes.patch("/announcements/:id", zValidator("json", announcementSchema.partial()), async (c) => {
+  const id = c.req.param("id");
+  const body = c.req.valid("json");
+  const [updated] = await db
+    .update(announcements)
+    .set({ ...body, updatedAt: new Date() })
+    .where(eq(announcements.id, id))
+    .returning();
+  if (!updated) return c.json({ error: "公告不存在" }, 404);
+  return c.json({ item: updated });
+});
+
+adminRoutes.delete("/announcements/:id", async (c) => {
+  const id = c.req.param("id");
+  const [deleted] = await db.delete(announcements).where(eq(announcements.id, id)).returning({ id: true });
+  if (!deleted) return c.json({ error: "公告不存在" }, 404);
+  return c.json({ ok: true });
+});
+
+adminRoutes.get("/users", async (c) => {
+  const q = c.req.query("q")?.trim() || "";
+  const role = c.req.query("role")?.trim() || "";
+  const status = c.req.query("status")?.trim() || "";
+  const sort = c.req.query("sort")?.trim() || "created_desc";
+  const page = Math.max(1, Number(c.req.query("page") || 1));
+  const pageSize = Math.min(100, Math.max(1, Number(c.req.query("pageSize") || 20)));
+  const offset = (page - 1) * pageSize;
+
+  const filters: SQL[] = [];
+  if (q) {
+    const searchCond = or(ilike(users.username, `%${q}%`), ilike(users.displayName, `%${q}%`), ilike(users.email, `%${q}%`));
+    if (searchCond) filters.push(searchCond);
+  }
+  if (role === "admin" || role === "user") filters.push(eq(users.role, role));
+  if (status === "active" || status === "disabled") filters.push(eq(users.status, status));
+  const condition = filters.length ? and(...filters) : undefined;
+
+  const [rows, [{ total }]] = await Promise.all([
+    db.query.users.findMany({
+      where: condition,
+      orderBy: sort === "storage_desc" ? [desc(users.storageUsedBytes), desc(users.createdAt)] : [desc(users.createdAt)],
+      limit: pageSize,
+      offset,
+      columns: {
+        id: true,
+        username: true,
+        email: true,
+        displayName: true,
+        avatarUrl: true,
+        role: true,
+        status: true,
+        storageUsedBytes: true,
+        webdavConfig: true,
+        lastLoginAt: true,
+        createdAt: true,
+      },
+    }),
+    db.select({ total: count() }).from(users).where(condition),
+  ]);
+
+  const userIds = rows.map((row) => row.id);
+  const [mediaCounts, projectCounts, wallets] = userIds.length
+    ? await Promise.all([
+        db
+          .select({ userId: mediaObjects.userId, count: count() })
+          .from(mediaObjects)
+          .where(and(inArray(mediaObjects.userId, userIds), eq(mediaObjects.status, "active")))
+          .groupBy(mediaObjects.userId),
+        db
+          .select({ userId: canvasProjects.userId, count: count() })
+          .from(canvasProjects)
+          .where(and(inArray(canvasProjects.userId, userIds), isNull(canvasProjects.deletedAt)))
+          .groupBy(canvasProjects.userId),
+        db
+          .select({ userId: creditWallets.userId, balance: creditWallets.balance })
+          .from(creditWallets)
+          .where(inArray(creditWallets.userId, userIds)),
+      ])
+    : [[], [], []];
+
+  const mediaMap = new Map(mediaCounts.map((item) => [item.userId, Number(item.count)]));
+  const projectMap = new Map(projectCounts.map((item) => [item.userId, Number(item.count)]));
+  const walletMap = new Map(wallets.map((item) => [item.userId, roundCredits(item.balance)]));
+
+  return c.json({
+    items: rows.map((row) => ({
+      ...row,
+      webdavConfig: row.webdavConfig
+        ? {
+            enabled: row.webdavConfig.enabled,
+            url: row.webdavConfig.url || "",
+            username: row.webdavConfig.username || "",
+            directory: row.webdavConfig.directory || "",
+            hasPassword: Boolean(row.webdavConfig.password),
+            quotaBytes: typeof row.webdavConfig.quotaBytes === "number" && row.webdavConfig.quotaBytes > 0 ? row.webdavConfig.quotaBytes : null,
+            usedBytes: Math.max(0, Number(row.webdavConfig.usedBytes ?? 0)),
+            expiresAt: row.webdavConfig.expiresAt || null,
+          }
+        : null,
+      mediaCount: mediaMap.get(row.id) ?? 0,
+      projectCount: projectMap.get(row.id) ?? 0,
+      creditBalance: walletMap.get(row.id) ?? 0,
+    })),
+    total: Number(total),
+    page,
+    pageSize,
+  });
+});
+
+adminRoutes.post("/users/:id/credits", zValidator("json", adjustCreditsSchema), async (c) => {
+  const targetId = c.req.param("id");
+  const body = c.req.valid("json");
+  const target = await db.query.users.findFirst({ where: eq(users.id, targetId), columns: { id: true } });
+  if (!target) {
+    return c.json({ error: "用户不存在" }, 404);
+  }
+  const result = await adjustWalletCredits({
+    userId: targetId,
+    delta: body.delta,
+    reason: "admin_adjust",
+    allowNegative: true,
+    meta: { adminId: c.get("user").id, note: body.note || "" },
+  });
+  return c.json({ ok: true, balance: result.balance });
+});
+
+adminRoutes.get("/redeem-codes", async (c) => {
+  const q = c.req.query("q")?.trim() || "";
+  const status = c.req.query("status")?.trim() || "";
+  const page = Math.max(1, Number(c.req.query("page") || 1));
+  const pageSize = Math.min(100, Math.max(1, Number(c.req.query("pageSize") || 20)));
+  const offset = (page - 1) * pageSize;
+
+  const filters: SQL[] = [];
+  if (q) {
+    const cond = or(ilike(redeemCodes.code, `%${q}%`), ilike(redeemCodes.note, `%${q}%`));
+    if (cond) filters.push(cond);
+  }
+  if (status === "active" || status === "disabled") {
+    filters.push(eq(redeemCodes.status, status));
+  }
+  const whereClause = filters.length ? and(...filters) : undefined;
+
+  const [items, [{ total }]] = await Promise.all([
+    db.query.redeemCodes.findMany({
+      where: whereClause,
+      orderBy: [desc(redeemCodes.createdAt)],
+      limit: pageSize,
+      offset,
+    }),
+    db.select({ total: count() }).from(redeemCodes).where(whereClause),
+  ]);
+
+  return c.json({ items, total: Number(total), page, pageSize });
+});
+
+adminRoutes.post("/redeem-codes", zValidator("json", createRedeemCodesSchema), async (c) => {
+  const body = c.req.valid("json");
+  const adminId = c.get("user").id;
+  const expiresAt = body.expiresAt ? new Date(body.expiresAt) : null;
+  if (expiresAt && Number.isNaN(expiresAt.getTime())) {
+    return c.json({ error: "过期时间格式无效" }, 400);
+  }
+
+  const custom = body.count === 1 && body.customCode?.trim() ? body.customCode.trim().toUpperCase() : "";
+  if (custom) {
+    const exists = await db.query.redeemCodes.findFirst({ where: eq(redeemCodes.code, custom), columns: { id: true } });
+    if (exists) {
+      return c.json({ error: "该兑换码已存在" }, 409);
+    }
+  }
+
+  // 批量生成随机兑换码时如遇极小概率碰撞，自动跳过已存在码并补齐剩余数量
+  const remainingTarget = body.count;
+  const created: (typeof redeemCodes.$inferSelect)[] = [];
+  for (let attempt = 0; attempt < 5 && created.length < remainingTarget; attempt += 1) {
+    const needed = remainingTarget - created.length;
+    const values = Array.from({ length: needed }, (_, idx) => ({
+      id: nanoid(),
+      code: attempt === 0 && idx === 0 && custom ? custom : generateRedeemCodeString(body.prefix),
+      credits: roundCredits(body.credits),
+      maxUses: body.maxUses,
+      usedCount: 0,
+      note: body.note,
+      status: "active" as const,
+      expiresAt,
+      createdBy: adminId,
+    }));
+    const batch = await db
+      .insert(redeemCodes)
+      .values(values)
+      .onConflictDoNothing({ target: redeemCodes.code })
+      .returning();
+    created.push(...batch);
+  }
+  return c.json({ items: created }, 201);
+});
+
+adminRoutes.patch("/redeem-codes/:id", zValidator("json", updateRedeemCodeSchema), async (c) => {
+  const id = c.req.param("id");
+  const { status } = c.req.valid("json");
+  const [updated] = await db.update(redeemCodes).set({ status }).where(eq(redeemCodes.id, id)).returning();
+  if (!updated) return c.json({ error: "兑换码不存在" }, 404);
+  return c.json({ item: updated });
+});
+
+adminRoutes.delete("/redeem-codes/:id", async (c) => {
+  const id = c.req.param("id");
+  const [deleted] = await db.delete(redeemCodes).where(eq(redeemCodes.id, id)).returning({ id: true });
+  if (!deleted) return c.json({ error: "兑换码不存在" }, 404);
+  return c.json({ ok: true });
+});
+
+adminRoutes.put("/users/:id/webdav", zValidator("json", userWebdavSchema), async (c) => {
+  const targetId = c.req.param("id");
+  const body = c.req.valid("json");
+  const target = await db.query.users.findFirst({ where: eq(users.id, targetId) });
+  if (!target) {
+    return c.json({ error: "用户不存在" }, 404);
+  }
+
+  const prev = target.webdavConfig;
+  const parsedExpiresAt = body.expiresAt ? new Date(body.expiresAt) : null;
+  const expiresAt = parsedExpiresAt && !Number.isNaN(parsedExpiresAt.getTime()) ? parsedExpiresAt.toISOString() : null;
+  const quotaBytes = typeof body.quotaBytes === "number" && body.quotaBytes > 0 ? Math.round(body.quotaBytes) : null;
+  const usedBytes = body.resetUsedBytes ? 0 : Math.max(0, Number(prev?.usedBytes ?? 0));
+  const nextConfig = {
+    enabled: body.enabled,
+    ...(body.url ? { url: body.url.replace(/\/+$/, "") } : {}),
+    ...(body.username ? { username: body.username } : {}),
+    ...(body.password?.trim() ? { password: body.password.trim() } : prev?.password && body.password === undefined ? { password: prev.password } : {}),
+    ...(body.directory ? { directory: body.directory.replace(/^\/+|\/+$/g, "") } : {}),
+    quotaBytes,
+    usedBytes,
+    expiresAt,
+  };
+
+  await db.update(users).set({ webdavConfig: nextConfig, updatedAt: new Date() }).where(eq(users.id, targetId));
+  return c.json({
+    ok: true,
+    webdavConfig: {
+      enabled: nextConfig.enabled,
+      url: nextConfig.url || "",
+      username: nextConfig.username || "",
+      directory: nextConfig.directory || "",
+      hasPassword: Boolean(nextConfig.password),
+      quotaBytes: nextConfig.quotaBytes,
+      usedBytes: nextConfig.usedBytes,
+      expiresAt: nextConfig.expiresAt,
+    },
+  });
+});
+
+adminRoutes.patch("/users/:id", zValidator("json", updateUserSchema), async (c) => {
+  const currentAdmin = c.get("user");
+  const targetId = c.req.param("id");
+  const body = c.req.valid("json");
+
+  const target = await db.query.users.findFirst({ where: eq(users.id, targetId) });
+  if (!target) {
+    return c.json({ error: "用户不存在" }, 404);
+  }
+
+  if (targetId === currentAdmin.id && body.status === "disabled") {
+    return c.json({ error: "不能禁用当前登录的管理员账号" }, 400);
+  }
+
+  const nextRole = body.role ?? target.role;
+  const nextStatus = body.status ?? target.status;
+
+  if (target.role === "admin" && target.status === "active" && (nextRole !== "admin" || nextStatus !== "active")) {
+    const [{ otherAdmins }] = await db
+      .select({ otherAdmins: count() })
+      .from(users)
+      .where(and(eq(users.role, "admin"), eq(users.status, "active"), ne(users.id, targetId)));
+    if (Number(otherAdmins) === 0) {
+      return c.json({ error: "系统至少需要保留一名可用管理员" }, 400);
+    }
+  }
+
+  const [updated] = await db
+    .update(users)
+    .set({ role: nextRole, status: nextStatus, updatedAt: new Date() })
+    .where(eq(users.id, targetId))
+    .returning({
+      id: users.id,
+      username: users.username,
+      email: users.email,
+      displayName: users.displayName,
+      avatarUrl: users.avatarUrl,
+      role: users.role,
+      status: users.status,
+      storageUsedBytes: users.storageUsedBytes,
+      lastLoginAt: users.lastLoginAt,
+      createdAt: users.createdAt,
+    });
+
+  if (nextStatus === "disabled") {
+    await db.update(userSessions).set({ revokedAt: new Date() }).where(eq(userSessions.userId, targetId));
+  }
+
+  return c.json({ user: updated });
+});
+
+adminRoutes.get("/settings/storage", async (c) => {
+  const config = await getS3StorageConfig();
+  if (!config) {
+    return c.json({
+      configured: false,
+      config: {
+        provider: "r2",
+        endpoint: "",
+        region: "auto",
+        bucket: "",
+        accessKeyId: "",
+        publicBaseUrl: "",
+        forcePathStyle: false,
+        hasSecretKey: false,
+        secretAccessKeyPreview: "",
+      },
+    });
+  }
+
+  return c.json({
+    configured: true,
+    config: {
+      provider: config.provider,
+      endpoint: config.endpoint,
+      region: config.region,
+      bucket: config.bucket,
+      accessKeyId: config.accessKeyId,
+      publicBaseUrl: config.publicBaseUrl,
+      forcePathStyle: config.forcePathStyle,
+      hasSecretKey: Boolean(config.secretAccessKey),
+      secretAccessKeyPreview: maskSecret(config.secretAccessKey),
+    },
+  });
+});
+
+adminRoutes.put("/settings/storage", zValidator("json", storageConfigSchema), async (c) => {
+  const body = c.req.valid("json");
+  const existing = await getS3StorageConfig();
+  const secretAccessKey = body.secretAccessKey.trim() || existing?.secretAccessKey || "";
+  if (!secretAccessKey) {
+    return c.json({ error: "请填写 SecretAccessKey" }, 400);
+  }
+
+  const nextConfig: S3StorageConfig = {
+    provider: body.provider,
+    endpoint: body.endpoint,
+    region: body.region || "auto",
+    bucket: body.bucket,
+    accessKeyId: body.accessKeyId,
+    secretAccessKey,
+    publicBaseUrl: body.publicBaseUrl,
+    forcePathStyle: body.forcePathStyle,
+  };
+
+  await saveS3StorageConfig(nextConfig, c.get("user").id);
+  return c.json({ ok: true, secretAccessKeyPreview: maskSecret(secretAccessKey) });
+});
+
+adminRoutes.post("/settings/storage/test", zValidator("json", storageConfigSchema), async (c) => {
+  const body = c.req.valid("json");
+  const existing = await getS3StorageConfig();
+  const secretAccessKey = body.secretAccessKey.trim() || existing?.secretAccessKey || "";
+  if (!secretAccessKey) {
+    return c.json({ error: "请先填写 SecretAccessKey" }, 400);
+  }
+
+  try {
+    await testS3Connection({
+      provider: body.provider,
+      endpoint: body.endpoint,
+      region: body.region || "auto",
+      bucket: body.bucket,
+      accessKeyId: body.accessKeyId,
+      secretAccessKey,
+      publicBaseUrl: body.publicBaseUrl,
+      forcePathStyle: body.forcePathStyle,
+    });
+    return c.json({ ok: true, message: "连接成功，测试文件写入、读取、删除均正常" });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "对象存储连接测试失败";
+    return c.json({ error: message }, 400);
+  }
+});
+
+adminRoutes.get("/settings/auth", async (c) => {
+  const policy = await getAuthPolicy();
+  return c.json(policy);
+});
+
+adminRoutes.put("/settings/auth", zValidator("json", authPolicySchema), async (c) => {
+  const policy = await saveAuthPolicy(c.req.valid("json"), c.get("user").id);
+  return c.json(policy);
+});
+
+adminRoutes.get("/settings/channels", async (c) => {
+  const channels = await getPlatformChannels();
+  return c.json({
+    channels: channels.map((channel) => ({
+      id: channel.id,
+      name: channel.name,
+      baseUrl: channel.baseUrl,
+      apiFormat: channel.apiFormat,
+      enabled: channel.enabled,
+      models: channel.models,
+      hasApiKey: Boolean(channel.apiKey),
+      apiKeyPreview: maskSecret(channel.apiKey),
+    })),
+  });
+});
+
+adminRoutes.put("/settings/channels", zValidator("json", saveChannelsSchema), async (c) => {
+  const body = c.req.valid("json");
+  const existing = await getPlatformChannels();
+  const existingKeyMap = new Map(existing.map((ch) => [ch.id, ch.apiKey]));
+
+  const nextChannels: PlatformChannel[] = body.channels.map((ch) => ({
+    id: ch.id,
+    name: ch.name,
+    baseUrl: ch.baseUrl.replace(/\/+$/, ""),
+    apiKey: ch.apiKey.trim() || existingKeyMap.get(ch.id) || "",
+    apiFormat: ch.apiFormat,
+    enabled: ch.enabled,
+    models: ch.models,
+  }));
+
+  await savePlatformChannels(nextChannels, c.get("user").id);
+  return c.json({ ok: true });
+});
+
+adminRoutes.post("/settings/channels/fetch-models", zValidator("json", fetchChannelModelsSchema), async (c) => {
+  const body = c.req.valid("json");
+  const existing = await getPlatformChannels();
+  const savedKey = body.id ? existing.find((ch) => ch.id === body.id)?.apiKey || "" : "";
+  const apiKey = body.apiKey.trim() || savedKey;
+  if (!apiKey) {
+    return c.json({ error: "请先填写 API Key" }, 400);
+  }
+
+  const base = body.baseUrl.replace(/\/+$/, "");
+  const lower = base.toLowerCase();
+  let url = "";
+  const headers: Record<string, string> = {};
+
+  if (body.apiFormat === "gemini") {
+    const apiBase = lower.endsWith("/v1") || lower.endsWith("/v1beta") ? base : `${base}/v1beta`;
+    url = `${apiBase}/models`;
+    headers["x-goog-api-key"] = apiKey;
+  } else {
+    const apiBase = lower.endsWith("/v1") ? base : `${base}/v1`;
+    url = `${apiBase}/models`;
+    headers.Authorization = `Bearer ${apiKey}`;
+  }
+
+  const res = await fetch(url, { headers });
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    return c.json({ error: `拉取模型失败（HTTP ${res.status}）${text ? `: ${text.slice(0, 120)}` : ""}` }, 400);
+  }
+
+  const payload = (await res.json()) as { data?: Array<{ id?: string }>; models?: Array<{ name?: string }> };
+  const models =
+    body.apiFormat === "gemini"
+      ? (payload.models || []).map((item) => (item.name || "").replace(/^models\//, "").trim()).filter(Boolean)
+      : (payload.data || []).map((item) => (item.id || "").trim()).filter(Boolean);
+
+  return c.json({ models: Array.from(new Set(models)) });
+});
+
+adminRoutes.get("/settings/webdav", async (c) => {
+  const config = await getPlatformWebdavConfig();
+  return c.json({
+    enabled: config.enabled,
+    url: config.url,
+    username: config.username,
+    baseDirectory: config.baseDirectory,
+    autoAssignNewUsers: config.autoAssignNewUsers,
+    hasPassword: Boolean(config.password),
+    passwordPreview: maskSecret(config.password),
+  });
+});
+
+adminRoutes.put("/settings/webdav", zValidator("json", platformWebdavSchema), async (c) => {
+  const body = c.req.valid("json");
+  const existing = await getPlatformWebdavConfig();
+  await savePlatformWebdavConfig(
+    {
+      enabled: body.enabled,
+      url: body.url,
+      username: body.username,
+      password: body.password.trim() || existing.password,
+      baseDirectory: body.baseDirectory,
+      autoAssignNewUsers: body.autoAssignNewUsers,
+    },
+    c.get("user").id,
+  );
+  return c.json({ ok: true });
+});
+
+adminRoutes.post("/settings/webdav/test", zValidator("json", platformWebdavSchema), async (c) => {
+  const body = c.req.valid("json");
+  const existing = await getPlatformWebdavConfig();
+  const password = body.password.trim() || existing.password;
+  const url = body.url.trim().replace(/\/+$/, "");
+  if (!url) {
+    return c.json({ error: "请先填写 WebDAV 地址" }, 400);
+  }
+  const auth = Buffer.from(`${body.username}:${password}`).toString("base64");
+  const res = await fetch(`${url}/`, {
+    method: "PROPFIND",
+    headers: {
+      Depth: "0",
+      ...(body.username ? { Authorization: `Basic ${auth}` } : {}),
+    },
+  });
+  if (!res.ok && res.status !== 207) {
+    return c.json({ error: `WebDAV 连接测试失败（HTTP ${res.status}）` }, 400);
+  }
+  return c.json({ ok: true, message: "WebDAV 连接测试成功" });
+});
+
+adminRoutes.get("/media", async (c) => {
+  const q = c.req.query("q")?.trim() || "";
+  const kind = c.req.query("kind")?.trim() || "";
+  const page = Math.max(1, Number(c.req.query("page") || 1));
+  const pageSize = Math.min(100, Math.max(1, Number(c.req.query("pageSize") || 20)));
+  const offset = (page - 1) * pageSize;
+
+  const filters: SQL[] = [eq(mediaObjects.status, "active")];
+  if (kind === "image" || kind === "video" || kind === "audio" || kind === "file") {
+    filters.push(eq(mediaObjects.kind, kind));
+  }
+  if (q) {
+    const searchCond = or(ilike(mediaObjects.objectKey, `%${q}%`), ilike(users.username, `%${q}%`));
+    if (searchCond) filters.push(searchCond);
+  }
+  const whereClause = and(...filters);
+
+  const [rows, [totalRow], config] = await Promise.all([
+    db
+      .select({
+        id: mediaObjects.id,
+        userId: mediaObjects.userId,
+        username: users.username,
+        bucket: mediaObjects.bucket,
+        objectKey: mediaObjects.objectKey,
+        kind: mediaObjects.kind,
+        mimeType: mediaObjects.mimeType,
+        bytes: mediaObjects.bytes,
+        sourceType: mediaObjects.sourceType,
+        createdAt: mediaObjects.createdAt,
+      })
+      .from(mediaObjects)
+      .leftJoin(users, eq(mediaObjects.userId, users.id))
+      .where(whereClause)
+      .orderBy(desc(mediaObjects.createdAt))
+      .limit(pageSize)
+      .offset(offset),
+    db
+      .select({
+        total: count(),
+        filteredBytes: sql<number>`COALESCE(SUM(${mediaObjects.bytes}), 0)::double precision`,
+      })
+      .from(mediaObjects)
+      .leftJoin(users, eq(mediaObjects.userId, users.id))
+      .where(whereClause),
+    getS3StorageConfig(),
+  ]);
+
+  const items = await Promise.all(
+    rows.map(async (row) => ({
+      ...row,
+      url: config ? await createMediaReadUrl(config, row.objectKey) : "",
+    })),
+  );
+
+  return c.json({
+    items,
+    total: Number(totalRow?.total ?? 0),
+    filteredBytes: Number(totalRow?.filteredBytes ?? 0),
+    page,
+    pageSize,
+  });
+});
+
+adminRoutes.delete("/media/:id", async (c) => {
+  const mediaId = c.req.param("id");
+  const media = await db.query.mediaObjects.findFirst({ where: eq(mediaObjects.id, mediaId) });
+  if (!media || media.status === "deleted") {
+    return c.json({ error: "媒体文件不存在" }, 404);
+  }
+
+  const config = await getS3StorageConfig();
+  if (config) {
+    await deleteS3Object(config, media.objectKey).catch(() => undefined);
+  }
+
+  await db.transaction(async (tx) => {
+    await tx.update(mediaObjects).set({ status: "deleted" }).where(eq(mediaObjects.id, media.id));
+    if (media.status === "active" && media.bytes > 0) {
+      await tx
+        .update(users)
+        .set({
+          storageUsedBytes: sql`GREATEST(0, ${users.storageUsedBytes} - ${media.bytes})`,
+          updatedAt: new Date(),
+        })
+        .where(eq(users.id, media.userId));
+    }
+  });
+
+  return c.json({ ok: true });
+});
+
+adminRoutes.get("/logs", async (c) => {
+  const adminUser = c.get("user");
+  const scope = c.req.query("scope") === "self" ? "self" : "all";
+  const categoryRaw = c.req.query("category")?.trim();
+  const category = categoryRaw === "usage" || categoryRaw === "recharge" ? categoryRaw : "usage";
+
+  const ledger = await queryCreditLedger({
+    userId: scope === "self" ? adminUser.id : undefined,
+    userQuery: scope === "all" ? c.req.query("q") : undefined,
+    logId: c.req.query("logId"),
+    taskStatus: c.req.query("taskStatus"),
+    category,
+    reason: c.req.query("reason"),
+    model: c.req.query("model"),
+    startDate: c.req.query("startDate"),
+    endDate: c.req.query("endDate"),
+    page: Number(c.req.query("page") || 1),
+    pageSize: Number(c.req.query("pageSize") || 20),
+  });
+
+  return c.json({
+    scope,
+    ...ledger,
+  });
+});

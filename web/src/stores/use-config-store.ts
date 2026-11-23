@@ -4,15 +4,51 @@ import { persist } from "zustand/middleware";
 import { nanoid } from "nanoid";
 
 import i18n from "@/i18n";
+import { useUserStore } from "@/stores/use-user-store";
 
 export type ApiCallFormat = "openai" | "gemini";
 export type ModelCapability = "image" | "video" | "text" | "audio";
 export type ReasoningEffort = "auto" | "low" | "medium" | "high" | "xhigh";
 
+export type TextModelPricing = {
+    mode: "token";
+    inputPerMillion: number;
+    cachedInputPerMillion: number;
+    outputPerMillion: number;
+};
+
+export type ImageModelPricing = {
+    mode: "per_image" | "per_resolution";
+    perImage?: number;
+    resolutionPrices?: {
+        "1k"?: number;
+        "2k"?: number;
+        "4k"?: number;
+        default: number;
+    };
+};
+
+export type VideoModelPricing = {
+    mode: "per_second" | "per_request";
+    perSecond?: number;
+    perRequest?: number;
+    chargeReferenceVideo?: boolean;
+    referenceVideoMode?: "per_second" | "per_request";
+    referenceVideoPrice?: number;
+};
+
+export type AudioModelPricing = {
+    mode: "per_second";
+    perSecond: number;
+};
+
+export type ModelPricing = TextModelPricing | ImageModelPricing | VideoModelPricing | AudioModelPricing;
+
 export type ChannelModel = {
     name: string;
     capability: ModelCapability;
     script?: string;
+    pricing?: ModelPricing;
 };
 
 export type ModelChannel = {
@@ -21,6 +57,9 @@ export type ModelChannel = {
     baseUrl: string;
     apiKey: string;
     apiFormat: ApiCallFormat;
+    enabled?: boolean;
+    hasApiKey?: boolean;
+    apiKeyPreview?: string;
     models: ChannelModel[];
 };
 
@@ -59,13 +98,20 @@ export type AiConfig = {
 };
 
 export type WebdavSyncConfig = {
+    enabled?: boolean;
     url: string;
     username: string;
     password: string;
     directory: string;
     lastSyncedAt: string;
+    quotaBytes?: number | null;
+    usedBytes?: number;
+    expiresAt?: string | null;
+    isExpired?: boolean;
+    isQuotaExceeded?: boolean;
 };
-export type ConfigTabKey = "channels" | "local-proxy" | "preferences" | "prompt-sources" | "webdav" | "local-storage";
+export type ConfigTabKey = "preferences" | "prompt-sources" | "webdav" | "local-storage";
+export const SERVER_MANAGED_API_KEY = "__SERVER_MANAGED__";
 
 export type ChannelCredentialsImportResult = {
     status: "created" | "updated" | "missing-base-url" | "invalid-base-url";
@@ -144,6 +190,8 @@ type ConfigStore = {
     updateConfig: <K extends keyof AiConfig>(key: K, value: AiConfig[K]) => void;
     importChannelCredentials: (input: { baseUrl?: string | null; apiKey?: string | null }) => ChannelCredentialsImportResult;
     updateWebdavConfig: <K extends keyof WebdavSyncConfig>(key: K, value: WebdavSyncConfig[K]) => void;
+    applyRuntimeConfig: (channels: ModelChannel[], assignedWebdav: Partial<WebdavSyncConfig> | null) => void;
+    clearRuntimeConfig: () => void;
     isAiConfigReady: (config: AiConfig, model: string) => boolean;
     openConfigDialog: (shouldPromptContinue?: boolean, tab?: ConfigTabKey) => void;
     setConfigDialogOpen: (isOpen: boolean) => void;
@@ -215,10 +263,19 @@ function isAiConfigReady(config: AiConfig, model: string) {
 export const useConfigStore = create<ConfigStore>()(
     persist(
         (set, get) => ({
-            config: defaultConfig,
+            config: {
+                ...defaultConfig,
+                channels: [],
+                models: [],
+                model: "",
+                imageModel: "",
+                videoModel: "",
+                textModel: "",
+                audioModel: "",
+            },
             webdav: defaultWebdavSyncConfig,
             isConfigOpen: false,
-            configTab: "channels",
+            configTab: "preferences",
             shouldPromptContinue: false,
             updateConfig: (key, value) =>
                 set((state) => ({
@@ -240,35 +297,101 @@ export const useConfigStore = create<ConfigStore>()(
                         [key]: value,
                     },
                 })),
+            applyRuntimeConfig: (serverChannels, assignedWebdav) =>
+                set((state) => {
+                    const channels = serverChannels.map((ch) =>
+                        createModelChannel({
+                            ...ch,
+                            apiKey: SERVER_MANAGED_API_KEY,
+                        }),
+                    );
+                    const models = modelOptionsFromChannels(channels);
+                    const pick = (capability: ModelCapability, current: string) => {
+                        const options = selectableModelsByCapability({ ...state.config, channels, models }, capability);
+                        const normalized = normalizeModelOptionValue(current, channels);
+                        return options.includes(normalized) ? normalized : options[0] || "";
+                    };
+                    const imageModel = pick("image", state.config.imageModel);
+                    const videoModel = pick("video", state.config.videoModel);
+                    const textModel = pick("text", state.config.textModel);
+                    const audioModel = pick("audio", state.config.audioModel);
+                    return {
+                        config: {
+                            ...state.config,
+                            channels,
+                            models,
+                            model: imageModel || models[0] || "",
+                            imageModel,
+                            videoModel,
+                            textModel,
+                            audioModel,
+                            baseUrl: channels[0]?.baseUrl || "",
+                            apiKey: channels[0] ? SERVER_MANAGED_API_KEY : "",
+                            apiFormat: channels[0]?.apiFormat || "openai",
+                        },
+                        webdav: assignedWebdav
+                            ? {
+                                  ...defaultWebdavSyncConfig,
+                                  ...assignedWebdav,
+                                  lastSyncedAt: state.webdav.lastSyncedAt || "",
+                              }
+                            : { ...defaultWebdavSyncConfig, lastSyncedAt: state.webdav.lastSyncedAt || "" },
+                    };
+                }),
+            clearRuntimeConfig: () =>
+                set((state) => ({
+                    config: {
+                        ...state.config,
+                        channels: [],
+                        models: [],
+                        model: "",
+                        imageModel: "",
+                        videoModel: "",
+                        textModel: "",
+                        audioModel: "",
+                        baseUrl: "",
+                        apiKey: "",
+                    },
+                    webdav: defaultWebdavSyncConfig,
+                })),
             isAiConfigReady: (config, model) => isAiConfigReady(config, model),
-            openConfigDialog: (shouldPromptContinue = false, configTab = "channels") => set({ isConfigOpen: true, shouldPromptContinue, configTab }),
+            openConfigDialog: (shouldPromptContinue = false, configTab = "preferences") => set({ isConfigOpen: true, shouldPromptContinue, configTab }),
             setConfigDialogOpen: (isConfigOpen) => set({ isConfigOpen }),
             clearPromptContinue: () => set({ shouldPromptContinue: false }),
         }),
         {
             name: CONFIG_STORE_KEY,
-            partialize: (state) => ({ config: state.config, webdav: state.webdav }),
+            partialize: (state) => ({
+                config: {
+                    ...state.config,
+                    channels: [],
+                    models: [],
+                    baseUrl: "",
+                    apiKey: "",
+                },
+                webdav: {
+                    lastSyncedAt: state.webdav.lastSyncedAt,
+                },
+            }),
             merge: (persisted, current) => {
                 const persistedState = (persisted || {}) as Partial<ConfigStore>;
                 const persistedConfig = (persistedState.config || {}) as Partial<AiConfig>;
                 const persistedWebdav = (persistedState.webdav || {}) as Partial<WebdavSyncConfig>;
                 const config = { ...defaultConfig, ...persistedConfig };
-                if (!Array.isArray(persistedConfig.channels)) config.channels = [];
-                const channels = normalizeChannels(config);
-                const models = modelOptionsFromChannels(channels);
                 return {
                     ...current,
-                    webdav: { ...defaultWebdavSyncConfig, ...persistedWebdav },
+                    webdav: { ...defaultWebdavSyncConfig, lastSyncedAt: persistedWebdav.lastSyncedAt || "" },
                     config: {
                         ...config,
                         channelMode: "local",
                         apiFormat: normalizeApiFormat(config.apiFormat),
-                        channels,
-                        models,
-                        imageModel: normalizeModelOptionValue(config.imageModel || config.model, channels),
-                        videoModel: normalizeModelOptionValue(config.videoModel, channels),
-                        textModel: normalizeModelOptionValue(config.textModel || config.model, channels),
-                        audioModel: normalizeModelOptionValue(config.audioModel || defaultConfig.audioModel, channels),
+                        channels: [],
+                        models: [],
+                        imageModel: persistedConfig.imageModel || "",
+                        videoModel: persistedConfig.videoModel || "",
+                        textModel: persistedConfig.textModel || "",
+                        audioModel: persistedConfig.audioModel || "",
+                        model: persistedConfig.model || "",
                         audioVoice: config.audioVoice || defaultConfig.audioVoice,
                         audioFormat: config.audioFormat || defaultConfig.audioFormat,
                         audioSpeed: config.audioSpeed || defaultConfig.audioSpeed,
@@ -280,7 +403,8 @@ export const useConfigStore = create<ConfigStore>()(
                         videoWatermark: config.videoWatermark || "false",
                         videoMode: config.videoMode === "reference" ? "reference" : "frames",
                         canvasImageCount: config.canvasImageCount || "3",
-                        proxyEnabled: Boolean(config.proxyEnabled),
+                        // 前台本地代理入口已下线，强制关闭历史残留开关以免拦截 S3 / WebDAV 地址
+                        proxyEnabled: false,
                         proxyUrl: config.proxyUrl || DEFAULT_LOCAL_PROXY_URL,
                         nodeRegenerateBehavior: config.nodeRegenerateBehavior === "overwrite" ? "overwrite" : "new-node",
                         autoFocusOnSelect: Boolean(config.autoFocusOnSelect),
@@ -306,7 +430,8 @@ export function normalizeChannelModels(models: Array<string | ChannelModel> | un
         seen.add(name);
         const capability = typeof item === "string" ? guessCapability(name) : item.capability || guessCapability(name);
         const script = typeof item === "string" ? undefined : item.script?.trim() || undefined;
-        result.push({ name, capability, script });
+        const pricing = typeof item === "string" ? undefined : item.pricing;
+        result.push({ name, capability, script, ...(pricing ? { pricing } : {}) });
     }
     return result;
 }
@@ -437,11 +562,12 @@ export function resolveModelChannel(config: AiConfig, value: string) {
 
 export function resolveModelRequestConfig(config: AiConfig, value: string) {
     const channel = resolveModelChannel(config, value);
+    const apiKey = channel.apiKey === SERVER_MANAGED_API_KEY ? useUserStore.getState().accessToken : channel.apiKey;
     return {
         ...config,
         model: modelOptionName(value || config.model),
         baseUrl: channel.baseUrl,
-        apiKey: channel.apiKey,
+        apiKey,
         apiFormat: channel.apiFormat,
     };
 }
