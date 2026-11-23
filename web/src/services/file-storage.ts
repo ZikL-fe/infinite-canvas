@@ -1,8 +1,10 @@
 import localforage from "localforage";
 import { nanoid } from "nanoid";
 
+import { createVideoThumbnail } from "@/lib/image-thumbnail";
+import { storageApi } from "@/services/api/server";
 import { withLocalProxy } from "@/stores/use-config-store";
-import { deleteCloudMedia, fetchCloudMediaBlob, inferCloudMediaKind, resolveCloudMediaUrl, uploadBlobToCloud } from "@/services/cloud-media";
+import { deleteCloudMedia, fetchCloudMediaBlob, inferCloudMediaKind, isCloudAuthenticated, resolveCloudMediaUrl, uploadBlobToCloud } from "@/services/cloud-media";
 
 export type UploadedFile = { url: string; storageKey: string; bytes: number; mimeType: string; width?: number; height?: number; durationMs?: number };
 
@@ -12,19 +14,27 @@ const objectUrls = new Map<string, string>();
 export async function uploadMediaFile(
     input: string | Blob,
     prefix = "file",
-    options?: { sourceType?: "upload" | "ai_generated" | "canvas_import"; filename?: string },
+    options?: { sourceType?: "upload" | "ai_generated" | "canvas_import"; filename?: string; existingStorageKey?: string },
 ): Promise<UploadedFile> {
     const blob = typeof input === "string" ? await (await fetch(withLocalProxy(input))).blob() : input;
-    const storageKey = `${prefix}:${nanoid()}`;
+    const storageKey = options?.existingStorageKey || `${prefix}:${nanoid()}`;
     await store.setItem(storageKey, blob);
     const url = URL.createObjectURL(blob);
     objectUrls.set(storageKey, url);
     const meta = blob.type.startsWith("video/") ? await readVideoMeta(url) : blob.type.startsWith("audio/") ? await readAudioMeta(url) : {};
-    await uploadBlobToCloud(storageKey, blob, inferCloudMediaKind(storageKey, blob.type), {
-        ...meta,
-        filename: options?.filename,
-        sourceType: options?.sourceType,
-    });
+    const thumbnailBlob = blob.type.startsWith("video/") ? await createVideoThumbnail(blob, 480).catch(() => undefined) : undefined;
+    if (options?.existingStorageKey) {
+        if (thumbnailBlob && isCloudAuthenticated()) {
+            void storageApi.uploadThumbnail(storageKey, thumbnailBlob).catch(() => undefined);
+        }
+    } else {
+        await uploadBlobToCloud(storageKey, blob, inferCloudMediaKind(storageKey, blob.type), {
+            ...meta,
+            filename: options?.filename,
+            sourceType: options?.sourceType,
+            thumbnailBlob,
+        });
+    }
     return { url, storageKey, bytes: blob.size, mimeType: blob.type || "application/octet-stream", ...meta };
 }
 

@@ -1,7 +1,7 @@
 import type { CSSProperties } from "react";
 import { useState } from "react";
 import { Dropdown, Modal, Tooltip, type MenuProps } from "antd";
-import { BookOpen, Coins, Keyboard, LogIn, LogOut, Puzzle, Settings2, Shield, User } from "lucide-react";
+import { BookOpen, Coins, HardDrive, Keyboard, LogIn, LogOut, Puzzle, Settings2, Shield, User } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
 
@@ -10,6 +10,7 @@ import { GitHubLink } from "@/components/layout/github-link";
 import { VersionReleaseModal } from "@/components/layout/version-release-modal";
 import { DOCS_URL } from "@/constant/env";
 import { changeAppLocale, type AppLocale } from "@/i18n";
+import { formatBytes } from "@/lib/image-utils";
 import { cn } from "@/lib/utils";
 import { canvasThemes } from "@/lib/canvas-theme";
 import { MyWalletPanel } from "@/pages/admin/user-panels";
@@ -58,6 +59,12 @@ export function UserStatusActions({ showConfig = true, variant = "default", onOp
                   icon: <Coins className="size-4" />,
                   label: `积分钱包（余额：${user.creditBalance ?? 0}）`,
                   onClick: () => setWalletOpen(true),
+              },
+              {
+                  key: "storage-quota",
+                  icon: <HardDrive className="size-4" />,
+                  label: `云端存储（${formatBytes(user.storageUsedBytes ?? 0)} / ${formatBytes(user.storageQuotaBytes ?? 0)}）`,
+                  onClick: () => navigate(user.role === "admin" ? "/admin?tab=my-media" : "/console?tab=my-media"),
               },
               {
                   key: "console",

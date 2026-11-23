@@ -1,8 +1,13 @@
 /** 个人后台与公共面板组件：概览趋势、平台公告卡片、账号安全维护、充值钱包、NewAPI 风格使用日志及云端媒体清理。 */
 import { useCallback, useEffect, useState } from "react";
-import { Alert, App, Avatar, Button, Card, Col, DatePicker, Descriptions, Empty, Form, Input, Modal, Popconfirm, Progress, Row, Segmented, Select, Space, Statistic, Switch, Table, Tag, Tooltip, Typography, theme as antdTheme } from "antd";
+import { Alert, App, Avatar, Button, Card, Col, DatePicker, Descriptions, Empty, Form, Image, Input, Modal, Popconfirm, Progress, Row, Segmented, Select, Space, Spin, Statistic, Switch, Table, Tag, Tooltip, Typography, theme as antdTheme } from "antd";
 import type { Dayjs } from "dayjs";
-import { Eye, Gift, KeyRound, Laptop, Megaphone, Pin, RefreshCw, Search, Trash2, TrendingUp, User } from "lucide-react";
+import { saveAs } from "file-saver";
+import { AudioLines, Download, FileIcon, Gift, ImageIcon, KeyRound, Laptop, Megaphone, Pin, RefreshCw, Search, TrendingUp, User, Video } from "lucide-react";
+
+import { createImageThumbnail, createVideoThumbnail } from "@/lib/image-thumbnail";
+import { previewUrlFor } from "@/services/image-storage";
+import { ADMIN_TABLE_CLASS, ADMIN_TABLE_SCROLL, TableRowActions } from "@/pages/admin/components/table-row-actions";
 
 import {
     accountApi,
@@ -358,8 +363,8 @@ export function UserOverviewPanel({ onOpenWallet }: { onOpenWallet?: () => void 
                 <Col xs={24} sm={12} md={6}>
                     <Card loading={loading}>
                         <Statistic
-                            title="云端存储 / 画布"
-                            value={formatBytes(data?.storageUsedBytes ?? 0)}
+                            title="云端存储配额 / 画布"
+                            value={`${formatBytes(data?.storageUsedBytes ?? 0)} / ${formatBytes(data?.storageQuotaBytes ?? 0)}`}
                             suffix={
                                 <Typography.Text type="secondary" className="text-xs">
                                     {data?.canvasProjectCount ?? 0} 画布
@@ -505,7 +510,10 @@ export function ProfileSecurityPanel() {
                 </Col>
                 <Col xs={24} sm={12} md={6}>
                     <Card loading={loading}>
-                        <Statistic title="已用云端存储" value={formatBytes(detail?.storageUsedBytes ?? 0)} />
+                        <Statistic
+                            title="云端存储配额"
+                            value={`${formatBytes(detail?.storageUsedBytes ?? 0)} / ${formatBytes(detail?.storageQuotaBytes ?? 0)}`}
+                        />
                     </Card>
                 </Col>
                 <Col xs={24} sm={12} md={6}>
@@ -528,6 +536,23 @@ export function ProfileSecurityPanel() {
                     </Descriptions.Item>
                     <Descriptions.Item label="账号状态">
                         <Tag color={detail?.status === "active" ? "green" : "red"}>{detail?.status === "active" ? "正常" : "已禁用"}</Tag>
+                    </Descriptions.Item>
+                    <Descriptions.Item label="云端对象存储配额">
+                        <div className="flex flex-wrap items-center gap-2">
+                            <span>
+                                已用 {formatBytes(detail?.storageUsedBytes ?? 0)} / 配额 {formatBytes(detail?.storageQuotaBytes ?? 0)}
+                                {detail?.storageQuotaExpiresAt
+                                    ? ` · 有效期至 ${new Date(detail.storageQuotaExpiresAt).toLocaleString("zh-CN")}`
+                                    : " · 不限期"}
+                            </span>
+                            {detail?.storageQuotaExpiresAt && new Date(detail.storageQuotaExpiresAt).getTime() <= Date.now() ? (
+                                <Tag color="red">已过期</Tag>
+                            ) : (detail?.storageQuotaBytes ?? 0) <= 0 || (detail?.storageUsedBytes ?? 0) >= (detail?.storageQuotaBytes ?? 0) ? (
+                                <Tag color="red">配额已满 / 需扩容</Tag>
+                            ) : (
+                                <Tag color="green">正常</Tag>
+                            )}
+                        </div>
                     </Descriptions.Item>
                     <Descriptions.Item label="WebDAV 分配" span={2}>
                         {profileData?.webdav?.enabled ? (
@@ -665,6 +690,8 @@ export function ProfileSecurityPanel() {
                 <Table<AccountSessionItem>
                     rowKey="id"
                     size="small"
+                    className={ADMIN_TABLE_CLASS}
+                    scroll={ADMIN_TABLE_SCROLL}
                     loading={sessionsLoading}
                     dataSource={sessions}
                     pagination={false}
@@ -672,31 +699,45 @@ export function ProfileSecurityPanel() {
                         {
                             title: "设备 / 浏览器",
                             key: "ua",
+                            width: 340,
                             render: (_, record) => (
-                                <div className="flex items-center gap-2">
-                                    <Typography.Text ellipsis={{ tooltip: record.userAgent }} style={{ maxWidth: 360 }}>
+                                <div className="flex max-w-[320px] items-center gap-2">
+                                    <Typography.Text ellipsis={{ tooltip: record.userAgent }} className="min-w-0 flex-1">
                                         {record.userAgent || "未知设备"}
                                     </Typography.Text>
-                                    {record.isCurrent ? <Tag color="green">当前设备</Tag> : null}
+                                    {record.isCurrent ? (
+                                        <Tag color="green" style={{ marginInlineEnd: 0 }}>
+                                            当前设备
+                                        </Tag>
+                                    ) : null}
                                 </div>
                             ),
                         },
                         { title: "IP", dataIndex: "ip", width: 130, render: (v: string) => v || "—" },
-                        { title: "登录时间", dataIndex: "createdAt", width: 165, render: (v: string) => new Date(v).toLocaleString("zh-CN") },
-                        { title: "过期时间", dataIndex: "expiresAt", width: 165, render: (v: string) => new Date(v).toLocaleString("zh-CN") },
+                        { title: "登录时间", dataIndex: "createdAt", width: 170, render: (v: string) => new Date(v).toLocaleString("zh-CN") },
+                        { title: "过期时间", dataIndex: "expiresAt", width: 170, render: (v: string) => new Date(v).toLocaleString("zh-CN") },
                         {
                             title: "操作",
                             key: "actions",
-                            width: 90,
+                            fixed: "right",
+                            width: 75,
                             render: (_, record) =>
                                 record.isCurrent ? (
-                                    <Typography.Text type="secondary">使用中</Typography.Text>
+                                    <Typography.Text type="secondary" className="text-xs">
+                                        当前
+                                    </Typography.Text>
                                 ) : (
-                                    <Popconfirm title="确定强制下线该设备吗？" onConfirm={() => void handleRevokeSession(record.id)}>
-                                        <Button size="small" type="link" danger>
-                                            下线
-                                        </Button>
-                                    </Popconfirm>
+                                    <TableRowActions
+                                        items={[
+                                            {
+                                                key: "revoke",
+                                                label: "下线",
+                                                danger: true,
+                                                confirm: "确定强制下线该设备吗？",
+                                                onClick: () => void handleRevokeSession(record.id),
+                                            },
+                                        ]}
+                                    />
                                 ),
                         },
                     ]}
@@ -722,6 +763,19 @@ const emptyLedgerSummary: CreditLedgerSummary = {
     recentRpm: 0,
 };
 
+function mediaDownloadFilename(record: MediaItem) {
+    const ext = record.mimeType?.split("/")[1]?.split("+")[0] || (record.kind === "video" ? "mp4" : record.kind === "audio" ? "mp3" : "png");
+    return record.objectKey.split("/").pop() || `media-${record.id.replace(/:/g, "_")}.${ext}`;
+}
+
+async function downloadCloudMediaFile(record: MediaItem, knownUrl?: string) {
+    const url = knownUrl || record.url || (await storageApi.getUrl(record.id)).url;
+    if (!url) {
+        throw new Error("文件链接暂不可用");
+    }
+    saveAs(url, mediaDownloadFilename(record));
+}
+
 function LedgerDetailModal({
     item,
     showUser = false,
@@ -731,7 +785,48 @@ function LedgerDetailModal({
     showUser?: boolean;
     onClose: () => void;
 }) {
+    const { message } = App.useApp();
     const { token } = antdTheme.useToken();
+    const [mediaItems, setMediaItems] = useState<MediaItem[]>([]);
+    const [mediaLoading, setMediaLoading] = useState(false);
+    const [downloadingId, setDownloadingId] = useState<string | null>(null);
+
+    const isMediaGeneration = item?.reason === "image_gen" || item?.reason === "video_gen";
+
+    useEffect(() => {
+        if (!item || !isMediaGeneration) {
+            setMediaItems([]);
+            setMediaLoading(false);
+            return;
+        }
+        let cancelled = false;
+        setMediaLoading(true);
+        storageApi
+            .getLedgerMedia(item.id)
+            .then((res) => {
+                if (!cancelled) setMediaItems(res.items || []);
+            })
+            .catch(() => {
+                if (!cancelled) setMediaItems([]);
+            })
+            .finally(() => {
+                if (!cancelled) setMediaLoading(false);
+            });
+        return () => {
+            cancelled = true;
+        };
+    }, [isMediaGeneration, item]);
+
+    const handleDownloadGenerated = async (media: MediaItem) => {
+        setDownloadingId(media.id);
+        try {
+            await downloadCloudMediaFile(media);
+        } catch (error) {
+            message.error(error instanceof Error ? error.message : "下载失败");
+        } finally {
+            setDownloadingId(null);
+        }
+    };
     const reasonInfo = item ? ledgerReasonMeta[item.reason] : undefined;
     const modelName = typeof item?.meta?.model === "string" && item.meta.model ? item.meta.model : "";
     const hasTokens = typeof item?.meta?.inputTokens === "number" || typeof item?.meta?.outputTokens === "number";
@@ -915,6 +1010,88 @@ function LedgerDetailModal({
                         ) : null}
                     </div>
 
+                    {isMediaGeneration ? (
+                        <div>
+                            <Typography.Text type="secondary" className="mb-1.5 block text-xs">
+                                生成结果（缩略图与原文件下载）
+                            </Typography.Text>
+                            {mediaLoading ? (
+                                <div
+                                    className="flex items-center gap-2 rounded-lg border p-3"
+                                    style={{ borderColor: token.colorBorderSecondary }}
+                                >
+                                    <Spin size="small" />
+                                    <Typography.Text type="secondary" className="text-xs">
+                                        正在加载生成结果缩略图...
+                                    </Typography.Text>
+                                </div>
+                            ) : mediaItems.length ? (
+                                <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
+                                    {mediaItems.map((media) => {
+                                        const thumb = media.thumbnailUrl || previewUrlFor(media.id) || "";
+                                        const fileLabel = mediaDownloadFilename(media);
+                                        return (
+                                            <div
+                                                key={media.id}
+                                                className="flex items-center gap-3 rounded-lg border p-2.5"
+                                                style={{ borderColor: token.colorBorderSecondary }}
+                                            >
+                                                {thumb ? (
+                                                    <img src={thumb} alt={fileLabel} className="size-16 shrink-0 rounded object-cover" />
+                                                ) : (
+                                                    <div className="flex size-16 shrink-0 items-center justify-center rounded bg-black/5 text-stone-400 dark:bg-white/10">
+                                                        {media.kind === "video" ? <Video className="size-5" /> : <ImageIcon className="size-5" />}
+                                                    </div>
+                                                )}
+                                                <div className="min-w-0 flex-1">
+                                                    <div className="flex items-center gap-1.5">
+                                                        <Tag style={{ marginInlineEnd: 0 }}>{kindLabels[media.kind] || media.kind}</Tag>
+                                                        {media.width && media.height ? (
+                                                            <Typography.Text type="secondary" className="text-xs">
+                                                                {media.width}×{media.height}
+                                                            </Typography.Text>
+                                                        ) : null}
+                                                    </div>
+                                                    <div className="mt-1 truncate text-xs" title={fileLabel}>
+                                                        {fileLabel}
+                                                    </div>
+                                                    <Typography.Text type="secondary" className="block text-xs">
+                                                        {formatBytes(media.bytes)}
+                                                    </Typography.Text>
+                                                </div>
+                                                <Popconfirm
+                                                    title="确定下载该原文件到本地吗？"
+                                                    okText="确认下载"
+                                                    cancelText="取消"
+                                                    onConfirm={() => void handleDownloadGenerated(media)}
+                                                >
+                                                    <Button
+                                                        size="small"
+                                                        type="primary"
+                                                        ghost
+                                                        icon={<Download className="size-3.5" />}
+                                                        loading={downloadingId === media.id}
+                                                    >
+                                                        下载
+                                                    </Button>
+                                                </Popconfirm>
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+                            ) : (
+                                <div
+                                    className="rounded-lg border p-3"
+                                    style={{ borderColor: token.colorBorderSecondary }}
+                                >
+                                    <Typography.Text type="secondary" className="text-xs">
+                                        暂无关联云端媒体文件（可能因配额不足、任务未完成或文件已删除）
+                                    </Typography.Text>
+                                </div>
+                            )}
+                        </div>
+                    ) : null}
+
                     {item.meta && Object.keys(item.meta).length > 0 ? (
                         <div>
                             <Typography.Text type="secondary" className="mb-1.5 block text-xs">
@@ -1084,9 +1261,10 @@ export function MyWalletPanel({ compact = false, onOpenLogs }: { compact?: boole
                 <Table<CreditLedgerItem>
                     rowKey="id"
                     size="small"
+                    className={ADMIN_TABLE_CLASS}
+                    scroll={ADMIN_TABLE_SCROLL}
                     loading={loading}
                     dataSource={items}
-                    scroll={{ x: 680 }}
                     onRow={(record) => ({
                         onClick: () => setDetailItem(record),
                         className: "cursor-pointer",
@@ -1102,7 +1280,7 @@ export function MyWalletPanel({ compact = false, onOpenLogs }: { compact?: boole
                         {
                             title: "时间",
                             dataIndex: "createdAt",
-                            width: 165,
+                            width: 170,
                             render: (v: string) => new Date(v).toLocaleString("zh-CN"),
                         },
                         {
@@ -1117,36 +1295,42 @@ export function MyWalletPanel({ compact = false, onOpenLogs }: { compact?: boole
                         {
                             title: "明细 / 备注",
                             key: "detail",
-                            render: (_, record) => <Typography.Text type="secondary">{formatLedgerUsageDetail(record)}</Typography.Text>,
+                            width: 240,
+                            render: (_, record) => {
+                                const text = formatLedgerUsageDetail(record);
+                                return (
+                                    <Typography.Text type="secondary" ellipsis={{ tooltip: text }} className="block max-w-[220px]">
+                                        {text}
+                                    </Typography.Text>
+                                );
+                            },
                         },
                         {
                             title: "积分变动",
                             dataIndex: "delta",
-                            width: 110,
+                            width: 100,
                             render: (delta: number) => <Tag color={delta >= 0 ? "green" : "volcano"}>{delta >= 0 ? `+${delta}` : delta}</Tag>,
                         },
                         {
                             title: "结余",
                             dataIndex: "balanceAfter",
-                            width: 100,
+                            width: 90,
                         },
                         {
                             title: "操作",
                             key: "actions",
-                            width: 80,
+                            width: 72,
                             fixed: "right",
                             render: (_, record) => (
-                                <Button
-                                    type="link"
-                                    size="small"
-                                    icon={<Eye className="size-3.5" />}
-                                    onClick={(e) => {
-                                        e.stopPropagation();
-                                        setDetailItem(record);
-                                    }}
-                                >
-                                    详情
-                                </Button>
+                                <TableRowActions
+                                    items={[
+                                        {
+                                            key: "detail",
+                                            label: "详情",
+                                            onClick: () => setDetailItem(record),
+                                        },
+                                    ]}
+                                />
                             ),
                         },
                     ]}
@@ -1428,9 +1612,10 @@ export function UsageLogsPanel({ defaultScope = "self" }: { defaultScope?: "all"
                 <Table<CreditLedgerItem>
                     rowKey="id"
                     size="small"
+                    className={ADMIN_TABLE_CLASS}
+                    scroll={ADMIN_TABLE_SCROLL}
                     loading={loading}
                     dataSource={items}
-                    scroll={{ x: showUserColumn ? 1120 : 980 }}
                     onRow={(record) => ({
                         onClick: () => setDetailItem(record),
                         className: "cursor-pointer",
@@ -1450,10 +1635,10 @@ export function UsageLogsPanel({ defaultScope = "self" }: { defaultScope?: "all"
                                       key: "user",
                                       width: 140,
                                       render: (_: unknown, record: CreditLedgerItem) => (
-                                          <div className="min-w-0">
+                                          <div className="max-w-[130px] min-w-0">
                                               <div className="truncate font-medium">{record.displayName || record.username || record.userId}</div>
                                               {record.username ? (
-                                                  <Typography.Text type="secondary" className="text-xs">
+                                                  <Typography.Text type="secondary" ellipsis className="block text-xs">
                                                       @{record.username}
                                                   </Typography.Text>
                                               ) : null}
@@ -1465,13 +1650,13 @@ export function UsageLogsPanel({ defaultScope = "self" }: { defaultScope?: "all"
                         {
                             title: "时间",
                             dataIndex: "createdAt",
-                            width: 165,
+                            width: 170,
                             render: (v: string) => new Date(v).toLocaleString("zh-CN"),
                         },
                         {
                             title: "类型",
                             dataIndex: "reason",
-                            width: 105,
+                            width: 100,
                             render: (reason: string) => {
                                 const info = ledgerReasonMeta[reason];
                                 return <Tag color={info?.color}>{info?.label || reason}</Tag>;
@@ -1480,7 +1665,7 @@ export function UsageLogsPanel({ defaultScope = "self" }: { defaultScope?: "all"
                         {
                             title: "状态",
                             key: "taskStatus",
-                            width: 90,
+                            width: 85,
                             render: (_, record) => {
                                 const st = getLedgerTaskStatus(record);
                                 return <Tag color={st.color}>{st.label}</Tag>;
@@ -1510,7 +1695,7 @@ export function UsageLogsPanel({ defaultScope = "self" }: { defaultScope?: "all"
                         {
                             title: "耗时 / 速度",
                             key: "timing",
-                            width: 150,
+                            width: 140,
                             render: (_, record) => {
                                 const { isStream, durationText, firstTokenMs, tokPerSec } = getLedgerTimingStats(record.meta);
                                 if (!durationText && !tokPerSec) return <Typography.Text type="secondary">—</Typography.Text>;
@@ -1541,7 +1726,15 @@ export function UsageLogsPanel({ defaultScope = "self" }: { defaultScope?: "all"
                         {
                             title: "用量与详情",
                             key: "detail",
-                            render: (_, record) => <Typography.Text type="secondary">{formatLedgerUsageDetail(record)}</Typography.Text>,
+                            width: 240,
+                            render: (_, record) => {
+                                const text = formatLedgerUsageDetail(record);
+                                return (
+                                    <Typography.Text type="secondary" ellipsis={{ tooltip: text }} className="block max-w-[220px]">
+                                        {text}
+                                    </Typography.Text>
+                                );
+                            },
                         },
                         {
                             title: "积分变动",
@@ -1557,20 +1750,18 @@ export function UsageLogsPanel({ defaultScope = "self" }: { defaultScope?: "all"
                         {
                             title: "操作",
                             key: "actions",
-                            width: 80,
+                            width: 72,
                             fixed: "right",
                             render: (_, record) => (
-                                <Button
-                                    type="link"
-                                    size="small"
-                                    icon={<Eye className="size-3.5" />}
-                                    onClick={(e) => {
-                                        e.stopPropagation();
-                                        setDetailItem(record);
-                                    }}
-                                >
-                                    详情
-                                </Button>
+                                <TableRowActions
+                                    items={[
+                                        {
+                                            key: "detail",
+                                            label: "详情",
+                                            onClick: () => setDetailItem(record),
+                                        },
+                                    ]}
+                                />
                             ),
                         },
                     ]}
@@ -1593,8 +1784,12 @@ export function MyMediaPanel() {
     const [q, setQ] = useState("");
     const [kind, setKind] = useState("");
     const [loading, setLoading] = useState(false);
-    const [mediaByKind, setMediaByKind] = useState<Array<{ kind: string; count: number; bytes: number }>>([]);
     const [usedBytes, setUsedBytes] = useState(user?.storageUsedBytes ?? 0);
+    const [quotaBytes, setQuotaBytes] = useState(user?.storageQuotaBytes ?? 0);
+    const [quotaExpiresAt, setQuotaExpiresAt] = useState<string | null>(user?.storageQuotaExpiresAt ?? null);
+    const [previewItem, setPreviewItem] = useState<MediaItem | null>(null);
+    const [previewOriginalUrl, setPreviewOriginalUrl] = useState("");
+    const [downloadingId, setDownloadingId] = useState<string | null>(null);
 
     const loadData = useCallback(async () => {
         setLoading(true);
@@ -1605,8 +1800,9 @@ export function MyMediaPanel() {
             ]);
             setItems(listRes.items);
             setTotal(listRes.total ?? listRes.items.length);
-            setMediaByKind(profileRes.stats.mediaByKind);
             setUsedBytes(profileRes.user.storageUsedBytes);
+            setQuotaBytes(profileRes.user.storageQuotaBytes ?? 0);
+            setQuotaExpiresAt(profileRes.user.storageQuotaExpiresAt ?? null);
             setUser(profileRes.user);
         } catch (error) {
             message.error(error instanceof Error ? error.message : "加载媒体列表失败");
@@ -1623,35 +1819,83 @@ export function MyMediaPanel() {
         try {
             await storageApi.remove(mediaId);
             message.success("已从云端删除并释放存储空间");
-            void loadData();
+            if (items.length <= 1 && page > 1) {
+                setPage((prev) => Math.max(1, prev - 1));
+            } else {
+                void loadData();
+            }
         } catch (error) {
             message.error(error instanceof Error ? error.message : "删除失败");
         }
     };
 
+    const handleDownloadMedia = async (record: MediaItem, knownUrl?: string) => {
+        setDownloadingId(record.id);
+        try {
+            await downloadCloudMediaFile(record, knownUrl);
+        } catch (error) {
+            message.error(error instanceof Error ? error.message : "下载失败");
+        } finally {
+            setDownloadingId(null);
+        }
+    };
+
+    const handleViewMedia = async (record: MediaItem) => {
+        try {
+            const url = record.url || (await storageApi.getUrl(record.id)).url;
+            if (!url) {
+                message.error("文件链接暂不可用");
+                return;
+            }
+            setPreviewOriginalUrl(url);
+            setPreviewItem(record);
+            if (!record.thumbnailUrl && (record.kind === "image" || record.kind === "video")) {
+                void (async () => {
+                    try {
+                        let thumb: Blob | undefined;
+                        if (record.kind === "image") {
+                            const res = await fetch(url);
+                            if (res.ok) {
+                                const blob = await res.blob();
+                                thumb = (await createImageThumbnail(blob, 480).catch(() => undefined)) || blob;
+                            }
+                        } else {
+                            thumb = await createVideoThumbnail(url, 480).catch(() => undefined);
+                        }
+                        if (!thumb) return;
+                        const uploaded = await storageApi.uploadThumbnail(record.id, thumb);
+                        if (uploaded.thumbnailUrl) {
+                            setItems((prev) => prev.map((it) => (it.id === record.id ? { ...it, thumbnailUrl: uploaded.thumbnailUrl } : it)));
+                        }
+                    } catch {
+                        // ignore backfill error
+                    }
+                })();
+            }
+        } catch (error) {
+            message.error(error instanceof Error ? error.message : "加载原文件失败");
+        }
+    };
+
+    const quotaExpired = Boolean(quotaExpiresAt && new Date(quotaExpiresAt).getTime() <= Date.now());
+    const quotaExceeded = quotaExpired || quotaBytes <= 0 || usedBytes >= quotaBytes;
+    const quotaPercent = quotaBytes > 0 ? Math.min(100, Math.round((usedBytes / quotaBytes) * 100)) : 100;
+
     return (
         <div className="flex flex-col gap-5">
-            <Card title={`我的云端存储占用（总计：${formatBytes(usedBytes)}）`}>
-                <div className="flex flex-col gap-3">
-                    {mediaByKind.length ? (
-                        mediaByKind.map((item) => {
-                            const percent = usedBytes > 0 ? Math.round((item.bytes / usedBytes) * 100) : 0;
-                            return (
-                                <div key={item.kind} className="flex flex-col gap-1">
-                                    <div className="flex items-center justify-between text-sm">
-                                        <span>
-                                            {kindLabels[item.kind] || item.kind}（{item.count} 个）
-                                        </span>
-                                        <Typography.Text type="secondary">{formatBytes(item.bytes)}</Typography.Text>
-                                    </div>
-                                    <Progress percent={percent} size="small" showInfo={false} />
-                                </div>
-                            );
-                        })
+            <Card
+                title={`我的云端存储配额（已用 ${formatBytes(usedBytes)} / 总配额 ${formatBytes(quotaBytes)}${quotaExpiresAt ? ` · 有效期至 ${new Date(quotaExpiresAt).toLocaleString("zh-CN")}` : " · 不限期"}）`}
+                extra={
+                    quotaExpired ? (
+                        <Tag color="red">配额已过期，请联系管理员续期</Tag>
+                    ) : quotaExceeded ? (
+                        <Tag color="red">配额不足，请删除闲置媒体或联系管理员扩容</Tag>
                     ) : (
-                        <Typography.Text type="secondary">暂无云端媒体文件</Typography.Text>
-                    )}
-                </div>
+                        <Tag color="green">剩余可用 {formatBytes(Math.max(0, quotaBytes - usedBytes))}</Tag>
+                    )
+                }
+            >
+                <Progress percent={quotaPercent} status={quotaExceeded ? "exception" : "active"} />
             </Card>
 
             <Card
@@ -1690,6 +1934,8 @@ export function MyMediaPanel() {
             >
                 <Table<MediaItem>
                     rowKey="id"
+                    className={ADMIN_TABLE_CLASS}
+                    scroll={ADMIN_TABLE_SCROLL}
                     loading={loading}
                     dataSource={items}
                     pagination={{
@@ -1702,45 +1948,109 @@ export function MyMediaPanel() {
                         {
                             title: "预览 / 对象路径",
                             key: "preview",
-                            render: (_, record) => (
-                                <div className="flex items-center gap-3">
-                                    {record.kind === "image" && record.url ? (
-                                        <img src={record.url} alt={record.objectKey} className="size-10 rounded object-cover" />
-                                    ) : null}
-                                    <div className="min-w-0">
-                                        <div className="truncate font-mono text-xs">{record.objectKey}</div>
-                                        <Typography.Text type="secondary" className="text-xs">
-                                            {record.mimeType}
-                                        </Typography.Text>
+                            width: 320,
+                            render: (_, record) => {
+                                const thumb = record.thumbnailUrl || previewUrlFor(record.id) || "";
+                                return (
+                                    <div className="flex max-w-[300px] items-center gap-3">
+                                        {thumb ? (
+                                            <img src={thumb} alt={record.objectKey} className="size-10 shrink-0 rounded object-cover" />
+                                        ) : (
+                                            <div className="flex size-10 shrink-0 items-center justify-center rounded bg-black/5 text-stone-400 dark:bg-white/10">
+                                                {record.kind === "video" ? <Video className="size-4" /> : record.kind === "audio" ? <AudioLines className="size-4" /> : record.kind === "image" ? <ImageIcon className="size-4" /> : <FileIcon className="size-4" />}
+                                            </div>
+                                        )}
+                                        <div className="min-w-0">
+                                            <div className="truncate font-mono text-xs">{record.objectKey}</div>
+                                            <Typography.Text type="secondary" className="block truncate text-xs">
+                                                {record.mimeType}
+                                            </Typography.Text>
+                                        </div>
                                     </div>
-                                </div>
-                            ),
+                                );
+                            },
                         },
-                        { title: "类型", dataIndex: "kind", width: 90, render: (v: string) => <Tag>{kindLabels[v] || v}</Tag> },
-                        { title: "大小", dataIndex: "bytes", width: 110, render: (bytes: number) => formatBytes(bytes) },
-                        { title: "上传时间", dataIndex: "createdAt", width: 165, render: (v: string) => new Date(v).toLocaleString("zh-CN") },
+                        { title: "类型", dataIndex: "kind", width: 85, render: (v: string) => <Tag>{kindLabels[v] || v}</Tag> },
+                        { title: "大小", dataIndex: "bytes", width: 100, render: (bytes: number) => formatBytes(bytes) },
+                        { title: "上传时间", dataIndex: "createdAt", width: 170, render: (v: string) => new Date(v).toLocaleString("zh-CN") },
                         {
                             title: "操作",
                             key: "actions",
-                            width: 140,
+                            fixed: "right",
+                            width: 100,
                             render: (_, record) => (
-                                <Space>
-                                    {record.url ? (
-                                        <a href={record.url} target="_blank" rel="noreferrer">
-                                            查看
-                                        </a>
-                                    ) : null}
-                                    <Popconfirm title="确定从云端删除该文件并释放个人空间吗？" onConfirm={() => void handleDelete(record.id)}>
-                                        <Button type="link" danger size="small" icon={<Trash2 className="size-3.5" />}>
-                                            删除
-                                        </Button>
-                                    </Popconfirm>
-                                </Space>
+                                <TableRowActions
+                                    items={[
+                                        {
+                                            key: "view",
+                                            label: "查看",
+                                            onClick: () => void handleViewMedia(record),
+                                        },
+                                        {
+                                            key: "delete",
+                                            label: "删除",
+                                            danger: true,
+                                            confirm: "确定从云端删除该文件并释放个人空间吗？",
+                                            onClick: () => void handleDelete(record.id),
+                                        },
+                                    ]}
+                                />
                             ),
                         },
                     ]}
                 />
             </Card>
+
+            <Modal
+                open={Boolean(previewItem)}
+                title="媒体原文件预览"
+                onCancel={() => {
+                    setPreviewItem(null);
+                    setPreviewOriginalUrl("");
+                }}
+                footer={
+                    <Space>
+                        {previewItem && previewOriginalUrl ? (
+                            <Button
+                                icon={<Download className="size-4" />}
+                                loading={downloadingId === previewItem.id}
+                                onClick={() => void handleDownloadMedia(previewItem, previewOriginalUrl)}
+                            >
+                                下载原文件
+                            </Button>
+                        ) : null}
+                        <Button
+                            type="primary"
+                            onClick={() => {
+                                setPreviewItem(null);
+                                setPreviewOriginalUrl("");
+                            }}
+                        >
+                            关闭
+                        </Button>
+                    </Space>
+                }
+                width={780}
+                destroyOnHidden
+            >
+                {previewItem && previewOriginalUrl ? (
+                    previewItem.kind === "image" ? (
+                        <div className="flex justify-center rounded-lg bg-black/5 p-2 dark:bg-white/5">
+                            <Image src={previewOriginalUrl} alt={previewItem.objectKey} className="max-h-[70vh] object-contain" />
+                        </div>
+                    ) : previewItem.kind === "video" ? (
+                        <video src={previewOriginalUrl} controls autoPlay className="max-h-[70vh] w-full rounded-lg bg-black" />
+                    ) : previewItem.kind === "audio" ? (
+                        <div className="flex justify-center py-6">
+                            <audio src={previewOriginalUrl} controls autoPlay className="w-full max-w-md" />
+                        </div>
+                    ) : (
+                        <a href={previewOriginalUrl} target="_blank" rel="noreferrer">
+                            打开文件链接
+                        </a>
+                    )
+                ) : null}
+            </Modal>
         </div>
     );
 }

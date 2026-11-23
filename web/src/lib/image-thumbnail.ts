@@ -47,3 +47,68 @@ export async function createImageThumbnail(blob: Blob, maxEdge = CANVAS_IMAGE_PR
     bitmap.close();
     return new Promise<Blob | undefined>((resolve) => canvas.toBlob((result) => resolve(result || undefined), "image/webp", 0.86));
 }
+
+export async function createVideoThumbnail(source: Blob | string, maxEdge = 480): Promise<Blob | undefined> {
+    if (typeof document === "undefined") return undefined;
+    const objectUrl = typeof source === "string" ? "" : URL.createObjectURL(source);
+    const src = objectUrl || (typeof source === "string" ? source : "");
+    if (!src) return undefined;
+
+    return new Promise<Blob | undefined>((resolve) => {
+        const video = document.createElement("video");
+        video.muted = true;
+        video.playsInline = true;
+        video.preload = "auto";
+        if (!src.startsWith("blob:") && !src.startsWith("data:")) {
+            video.crossOrigin = "anonymous";
+        }
+
+        let settled = false;
+        const finish = (blob?: Blob) => {
+            if (settled) return;
+            settled = true;
+            window.clearTimeout(timer);
+            video.onloadeddata = null;
+            video.onseeked = null;
+            video.onerror = null;
+            video.src = "";
+            if (objectUrl) URL.revokeObjectURL(objectUrl);
+            resolve(blob);
+        };
+
+        const captureFrame = () => {
+            try {
+                const vw = video.videoWidth;
+                const vh = video.videoHeight;
+                if (!vw || !vh) return finish(undefined);
+                const { width, height } = getThumbnailDimensions(vw, vh, maxEdge);
+                const canvas = document.createElement("canvas");
+                canvas.width = width;
+                canvas.height = height;
+                const ctx = canvas.getContext("2d");
+                if (!ctx) return finish(undefined);
+                ctx.drawImage(video, 0, 0, width, height);
+                canvas.toBlob((blob) => finish(blob || undefined), "image/webp", 0.82);
+            } catch {
+                finish(undefined);
+            }
+        };
+
+        const timer = window.setTimeout(() => finish(undefined), 8000);
+        video.onerror = () => finish(undefined);
+        video.onloadeddata = () => {
+            const seekTarget = Number.isFinite(video.duration) && video.duration > 0.2 ? Math.min(0.2, video.duration * 0.1) : 0;
+            if (seekTarget > 0) {
+                video.onseeked = captureFrame;
+                try {
+                    video.currentTime = seekTarget;
+                    return;
+                } catch {
+                    // fall back to immediate capture
+                }
+            }
+            captureFrame();
+        };
+        video.src = src;
+    });
+}

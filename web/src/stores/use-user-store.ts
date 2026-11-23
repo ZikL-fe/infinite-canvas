@@ -14,6 +14,8 @@ export type LocalUser = {
     role: UserRole;
     status: UserStatus;
     storageUsedBytes: number;
+    storageQuotaBytes?: number;
+    storageQuotaExpiresAt?: string | null;
     creditBalance?: number;
     createdAt?: string;
 };

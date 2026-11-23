@@ -1,12 +1,14 @@
 /** 后台管理与个人后台入口页：采用左侧导航菜单与全宽内容区，管理员支持平台全局管控与个人中心切换。 */
 import { useCallback, useEffect, useState, type ReactNode } from "react";
-import { Alert, App, Button, Card, Col, DatePicker, Descriptions, Drawer, Form, Input, InputNumber, Menu, Modal, Popconfirm, Progress, Radio, Result, Row, Select, Space, Statistic, Switch, Table, Tag, Typography, Upload, theme as antdTheme } from "antd";
+import { Alert, App, Button, Card, Col, DatePicker, Descriptions, Drawer, Form, Image, Input, InputNumber, Menu, Modal, Progress, Radio, Result, Row, Select, Space, Statistic, Switch, Table, Tag, Typography, Upload, theme as antdTheme } from "antd";
 import type { MenuProps, UploadProps } from "antd";
 import dayjs, { type Dayjs } from "dayjs";
-import { Copy, Coins, Cpu, Database, FolderKanban, Gift, HardDrive, LayoutDashboard, Megaphone, Menu as MenuIcon, Pencil, Plus, RefreshCw, ScrollText, Shield, Sliders, Trash2, UploadCloud, UserCheck, Users, Wifi } from "lucide-react";
+import { saveAs } from "file-saver";
+import { AudioLines, Copy, Coins, Cpu, Database, Download, FileIcon, FolderKanban, Gift, HardDrive, ImageIcon, LayoutDashboard, Megaphone, Menu as MenuIcon, Plus, RefreshCw, ScrollText, Shield, Sliders, UploadCloud, UserCheck, Users, Video, Wifi } from "lucide-react";
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 
 import { ChannelEditorDrawer } from "@/components/layout/channel-editor-drawer";
+import { ADMIN_TABLE_CLASS, ADMIN_TABLE_SCROLL, TableRowActions } from "@/pages/admin/components/table-row-actions";
 import { AnnouncementsCard, ConsumptionTrendCard, MyMediaPanel, MyWalletPanel, ProfileSecurityPanel, UsageLogsPanel, UserOverviewPanel } from "@/pages/admin/user-panels";
 import { useCopyText } from "@/hooks/use-copy-text";
 import {
@@ -73,6 +75,12 @@ type UserCreditForm = {
     note: string;
 };
 
+type UserStorageQuotaForm = {
+    quotaMb: number;
+    expiresAt?: Dayjs | null;
+    recalculateUsedBytes?: boolean;
+};
+
 type CreateRedeemForm = {
     count: number;
     credits: number;
@@ -97,7 +105,7 @@ export default function AdminPage() {
     const copyText = useCopyText();
     const navigate = useNavigate();
     const { pathname } = useLocation();
-    const [searchParams] = useSearchParams();
+    const [searchParams, setSearchParams] = useSearchParams();
     const user = useUserStore((state) => state.user);
     const isAdmin = user?.role === "admin";
     const isAdminRoute = pathname.startsWith("/admin");
@@ -106,6 +114,21 @@ export default function AdminPage() {
     const defaultTab = isAdmin && isAdminRoute ? "overview" : "user-overview";
     const [activeTab, setActiveTab] = useState(requestedTab || defaultTab);
     const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+
+    const switchTab = useCallback(
+        (nextTab: string) => {
+            setActiveTab(nextTab);
+            setSearchParams(
+                (prev) => {
+                    const next = new URLSearchParams(prev);
+                    next.set("tab", nextTab);
+                    return next;
+                },
+                { replace: true },
+            );
+        },
+        [setSearchParams],
+    );
 
     useEffect(() => {
         if (requestedTab) {
@@ -137,6 +160,9 @@ export default function AdminPage() {
     const [creditUser, setCreditUser] = useState<AdminUserItem | null>(null);
     const [userCreditForm] = Form.useForm<UserCreditForm>();
     const [userCreditSaving, setUserCreditSaving] = useState(false);
+    const [storageQuotaUser, setStorageQuotaUser] = useState<AdminUserItem | null>(null);
+    const [userStorageQuotaForm] = Form.useForm<UserStorageQuotaForm>();
+    const [userStorageQuotaSaving, setUserStorageQuotaSaving] = useState(false);
 
     const [storageForm] = Form.useForm<S3StorageConfigForm>();
     const [storagePreview, setStoragePreview] = useState("");
@@ -157,6 +183,7 @@ export default function AdminPage() {
     const [mediaKindFilter, setMediaKindFilter] = useState("");
     const [mediaLoading, setMediaLoading] = useState(false);
     const [uploadingTest, setUploadingTest] = useState(false);
+    const [previewMediaItem, setPreviewMediaItem] = useState<MediaItem | null>(null);
 
     const [allowRegister, setAllowRegister] = useState(true);
     const [authPolicySaving, setAuthPolicySaving] = useState(false);
@@ -164,9 +191,9 @@ export default function AdminPage() {
     useEffect(() => {
         const personalKeys = new Set(["user-overview", "usage-logs", "profile", "wallet", "my-media"]);
         if (!isAdmin && !personalKeys.has(activeTab)) {
-            setActiveTab("user-overview");
+            switchTab("user-overview");
         }
-    }, [activeTab, isAdmin]);
+    }, [activeTab, isAdmin, switchTab]);
 
     const [redeemItems, setRedeemItems] = useState<RedeemCodeItem[]>([]);
     const [redeemTotal, setRedeemTotal] = useState(0);
@@ -522,6 +549,45 @@ export default function AdminPage() {
         userCreditForm.setFieldsValue({ mode: "add", amount: 100, note: "" });
     };
 
+    const openConfigStorageQuota = (record: AdminUserItem) => {
+        setStorageQuotaUser(record);
+        const quotaBytes = record.storageQuotaBytes ?? 0;
+        userStorageQuotaForm.setFieldsValue({
+            quotaMb: quotaBytes > 0 ? Math.round((quotaBytes / (1024 * 1024)) * 100) / 100 : 0,
+            expiresAt: record.storageQuotaExpiresAt ? dayjs(record.storageQuotaExpiresAt) : null,
+            recalculateUsedBytes: false,
+        });
+    };
+
+    const handleSaveUserStorageQuota = async (values: UserStorageQuotaForm) => {
+        if (!storageQuotaUser) return;
+        setUserStorageQuotaSaving(true);
+        try {
+            const storageQuotaBytes = Math.max(0, Math.round(Number(values.quotaMb || 0) * 1024 * 1024));
+            const res = await adminApi.updateUserStorageQuota(storageQuotaUser.id, {
+                storageQuotaBytes,
+                storageQuotaExpiresAt: values.expiresAt ? values.expiresAt.toISOString() : null,
+                recalculateUsedBytes: Boolean(values.recalculateUsedBytes),
+            });
+            message.success(`云端存储配额已更新为 ${formatBytes(res.storageQuotaBytes)}`);
+            if (storageQuotaUser.id === user.id) {
+                useUserStore.getState().setUser({
+                    ...user,
+                    storageQuotaBytes: res.storageQuotaBytes,
+                    storageQuotaExpiresAt: res.storageQuotaExpiresAt,
+                    storageUsedBytes: res.storageUsedBytes,
+                });
+            }
+            setStorageQuotaUser(null);
+            void loadUsers();
+            void loadOverview();
+        } catch (error) {
+            message.error(error instanceof Error ? error.message : "更新云端存储配额失败");
+        } finally {
+            setUserStorageQuotaSaving(false);
+        }
+    };
+
     const handleAdjustUserCredits = async (values: UserCreditForm) => {
         if (!creditUser) return;
         const delta = values.mode === "deduct" ? -Math.abs(Number(values.amount)) : Math.abs(Number(values.amount));
@@ -726,7 +792,7 @@ export default function AdminPage() {
                     个人概览
                 </span>
             ),
-            children: <UserOverviewPanel onOpenWallet={() => setActiveTab("wallet")} />,
+            children: <UserOverviewPanel onOpenWallet={() => switchTab("wallet")} />,
         },
         ...(!isAdmin
             ? [
@@ -821,7 +887,7 @@ export default function AdminPage() {
                                             <ConsumptionTrendCard
                                                 title="全站积分消耗趋势"
                                                 days={overviewDays}
-                                                onDaysChange={setOverviewDays}
+                                                onDaysChange={(days) => setOverviewDays(days as 7 | 14 | 30)}
                                                 dailyTrend={overview?.dailyTrend ?? []}
                                                 topModels={overview?.topModels ?? []}
                                                 rangeConsumedCredits={overview?.rangeConsumedCredits ?? 0}
@@ -834,7 +900,7 @@ export default function AdminPage() {
                                                 items={overview?.announcements ?? []}
                                                 loading={overviewLoading}
                                                 extra={
-                                                    <Button type="link" size="small" onClick={() => setActiveTab("announcements")}>
+                                                    <Button type="link" size="small" onClick={() => switchTab("announcements")}>
                                                         管理公告
                                                     </Button>
                                                 }
@@ -961,6 +1027,8 @@ export default function AdminPage() {
                                 >
                                     <Table<AnnouncementItem>
                                         rowKey="id"
+                                        className={ADMIN_TABLE_CLASS}
+                                        scroll={ADMIN_TABLE_SCROLL}
                                         loading={announcementsLoading}
                                         dataSource={announcements}
                                         pagination={{ pageSize: 10 }}
@@ -968,16 +1036,23 @@ export default function AdminPage() {
                                             {
                                                 title: "公告内容",
                                                 key: "title",
+                                                width: 340,
                                                 render: (_, record) => {
                                                     const lv = announcementLevelLabels[record.level] || announcementLevelLabels.info;
                                                     return (
-                                                        <div className="flex flex-col gap-1">
-                                                            <div className="flex flex-wrap items-center gap-2">
-                                                                <Tag color={lv.color}>{lv.label}</Tag>
-                                                                {record.isPinned ? <Tag color="gold">置顶</Tag> : null}
-                                                                <span className="font-medium">{record.title}</span>
+                                                        <div className="flex max-w-[320px] flex-col gap-1">
+                                                            <div className="flex items-center gap-1.5">
+                                                                <Tag color={lv.color} style={{ marginInlineEnd: 0 }}>
+                                                                    {lv.label}
+                                                                </Tag>
+                                                                {record.isPinned ? (
+                                                                    <Tag color="gold" style={{ marginInlineEnd: 0 }}>
+                                                                        置顶
+                                                                    </Tag>
+                                                                ) : null}
+                                                                <span className="truncate font-medium">{record.title}</span>
                                                             </div>
-                                                            <Typography.Text type="secondary" ellipsis={{ tooltip: record.content }} className="max-w-xl text-xs">
+                                                            <Typography.Text type="secondary" ellipsis={{ tooltip: record.content }} className="text-xs">
                                                                 {record.content}
                                                             </Typography.Text>
                                                         </div>
@@ -987,7 +1062,7 @@ export default function AdminPage() {
                                             {
                                                 title: "置顶",
                                                 dataIndex: "isPinned",
-                                                width: 90,
+                                                width: 80,
                                                 render: (checked: boolean, record) => (
                                                     <Switch
                                                         size="small"
@@ -999,7 +1074,7 @@ export default function AdminPage() {
                                             {
                                                 title: "展示状态",
                                                 dataIndex: "isPublished",
-                                                width: 100,
+                                                width: 90,
                                                 render: (checked: boolean, record) => (
                                                     <Switch
                                                         size="small"
@@ -1017,23 +1092,25 @@ export default function AdminPage() {
                                             {
                                                 title: "操作",
                                                 key: "actions",
-                                                width: 140,
+                                                fixed: "right",
+                                                width: 100,
                                                 render: (_, record) => (
-                                                    <Space>
-                                                        <Button
-                                                            type="link"
-                                                            size="small"
-                                                            icon={<Pencil className="size-3.5" />}
-                                                            onClick={() => handleOpenEditAnnouncement(record)}
-                                                        >
-                                                            编辑
-                                                        </Button>
-                                                        <Popconfirm title="确定删除这条公告吗？" onConfirm={() => void handleDeleteAnnouncement(record.id)}>
-                                                            <Button type="link" danger size="small" icon={<Trash2 className="size-3.5" />}>
-                                                                删除
-                                                            </Button>
-                                                        </Popconfirm>
-                                                    </Space>
+                                                    <TableRowActions
+                                                        items={[
+                                                            {
+                                                                key: "edit",
+                                                                label: "编辑",
+                                                                onClick: () => handleOpenEditAnnouncement(record),
+                                                            },
+                                                            {
+                                                                key: "delete",
+                                                                label: "删除",
+                                                                danger: true,
+                                                                confirm: "确定删除这条公告吗？",
+                                                                onClick: () => void handleDeleteAnnouncement(record.id),
+                                                            },
+                                                        ]}
+                                                    />
                                                 ),
                                             },
                                         ]}
@@ -1068,16 +1145,19 @@ export default function AdminPage() {
                                     />
                                     <Table<AdminChannelItem>
                                         rowKey="id"
+                                        className={ADMIN_TABLE_CLASS}
+                                        scroll={ADMIN_TABLE_SCROLL}
                                         dataSource={channels}
                                         pagination={false}
                                         columns={[
                                             {
                                                 title: "渠道名称",
                                                 key: "name",
+                                                width: 260,
                                                 render: (_, record) => (
-                                                    <div>
-                                                        <div className="font-medium">{record.name}</div>
-                                                        <Typography.Text type="secondary" className="text-xs">
+                                                    <div className="max-w-[240px]">
+                                                        <div className="truncate font-medium">{record.name}</div>
+                                                        <Typography.Text type="secondary" ellipsis={{ tooltip: record.baseUrl }} className="block text-xs">
                                                             {record.baseUrl || "未配置 Base URL"}
                                                         </Typography.Text>
                                                     </div>
@@ -1086,26 +1166,26 @@ export default function AdminPage() {
                                             {
                                                 title: "协议",
                                                 dataIndex: "apiFormat",
-                                                width: 100,
+                                                width: 90,
                                                 render: (fmt: string) => <Tag>{fmt === "gemini" ? "Gemini" : "OpenAI"}</Tag>,
                                             },
                                             {
                                                 title: "密钥状态",
                                                 key: "apiKey",
-                                                width: 150,
+                                                width: 140,
                                                 render: (_, record) =>
                                                     record.hasApiKey ? <Tag color="green">{record.apiKeyPreview}</Tag> : <Tag color="red">未配置密钥</Tag>,
                                             },
                                             {
                                                 title: "模型数",
                                                 key: "models",
-                                                width: 90,
+                                                width: 85,
                                                 render: (_, record) => `${record.models.length} 个`,
                                             },
                                             {
                                                 title: "启用",
                                                 dataIndex: "enabled",
-                                                width: 90,
+                                                width: 80,
                                                 render: (enabled: boolean, record) => (
                                                     <Switch checked={enabled} loading={channelsSaving} onChange={(checked) => void handleToggleChannelEnabled(record.id, checked)} />
                                                 ),
@@ -1113,16 +1193,25 @@ export default function AdminPage() {
                                             {
                                                 title: "操作",
                                                 key: "actions",
-                                                width: 150,
+                                                fixed: "right",
+                                                width: 100,
                                                 render: (_, record) => (
-                                                    <Space>
-                                                        <Button size="small" icon={<Pencil className="size-3.5" />} onClick={() => handleEditChannel(record)}>
-                                                            编辑
-                                                        </Button>
-                                                        <Popconfirm title="确定删除该渠道吗？" onConfirm={() => void handleDeleteChannel(record.id)}>
-                                                            <Button size="small" danger icon={<Trash2 className="size-3.5" />} />
-                                                        </Popconfirm>
-                                                    </Space>
+                                                    <TableRowActions
+                                                        items={[
+                                                            {
+                                                                key: "edit",
+                                                                label: "编辑",
+                                                                onClick: () => handleEditChannel(record),
+                                                            },
+                                                            {
+                                                                key: "delete",
+                                                                label: "删除",
+                                                                danger: true,
+                                                                confirm: "确定删除该渠道吗？",
+                                                                onClick: () => void handleDeleteChannel(record.id),
+                                                            },
+                                                        ]}
+                                                    />
                                                 ),
                                             },
                                         ]}
@@ -1140,7 +1229,7 @@ export default function AdminPage() {
                             ),
                             children: (
                                 <Card
-                                    title="账号列表与 WebDAV 分配"
+                                    title="账号列表与云端存储配额管理"
                                     extra={
                                         <Space wrap>
                                             <Select
@@ -1195,6 +1284,8 @@ export default function AdminPage() {
                                 >
                                     <Table<AdminUserItem>
                                         rowKey="id"
+                                        className={ADMIN_TABLE_CLASS}
+                                        scroll={ADMIN_TABLE_SCROLL}
                                         loading={usersLoading}
                                         dataSource={usersList}
                                         pagination={{
@@ -1207,13 +1298,14 @@ export default function AdminPage() {
                                             {
                                                 title: "账号",
                                                 key: "account",
+                                                width: 220,
                                                 render: (_, record) => (
-                                                    <div>
-                                                        <div className="font-medium">
+                                                    <div className="max-w-[200px]">
+                                                        <div className="truncate font-medium">
                                                             {record.displayName || record.username}
                                                             {record.id === user.id ? <Tag className="ml-2">当前</Tag> : null}
                                                         </div>
-                                                        <Typography.Text type="secondary" className="text-xs">
+                                                        <Typography.Text type="secondary" ellipsis className="block text-xs">
                                                             @{record.username}
                                                             {record.email ? ` · ${record.email}` : ""}
                                                         </Typography.Text>
@@ -1223,92 +1315,101 @@ export default function AdminPage() {
                                             {
                                                 title: "角色",
                                                 dataIndex: "role",
-                                                width: 95,
+                                                width: 90,
                                                 render: (role: string) => <Tag color={role === "admin" ? "blue" : "default"}>{role === "admin" ? "管理员" : "普通用户"}</Tag>,
                                             },
                                             {
                                                 title: "状态",
                                                 dataIndex: "status",
-                                                width: 85,
+                                                width: 80,
                                                 render: (status: string) => <Tag color={status === "active" ? "green" : "red"}>{status === "active" ? "正常" : "已禁用"}</Tag>,
                                             },
                                             {
-                                                title: "WebDAV",
-                                                key: "webdav",
-                                                width: 190,
+                                                title: "积分余额",
+                                                dataIndex: "creditBalance",
+                                                width: 95,
+                                                render: (balance?: number) => <Tag color="gold">{balance ?? 0}</Tag>,
+                                            },
+                                            {
+                                                title: "画布 / 媒体",
+                                                key: "counts",
+                                                width: 100,
+                                                render: (_, record) => `${record.projectCount ?? 0} / ${record.mediaCount ?? 0}`,
+                                            },
+                                            {
+                                                title: "云端存储配额",
+                                                key: "storageQuota",
+                                                width: 205,
                                                 render: (_, record) => {
-                                                    const wd = record.webdavConfig;
-                                                    if (!wd?.enabled) return <Tag>未分配</Tag>;
-                                                    const expired = Boolean(wd.expiresAt && new Date(wd.expiresAt).getTime() <= Date.now());
+                                                    const used = record.storageUsedBytes ?? 0;
+                                                    const quota = record.storageQuotaBytes ?? 0;
+                                                    const expired = Boolean(record.storageQuotaExpiresAt && new Date(record.storageQuotaExpiresAt).getTime() <= Date.now());
+                                                    const exceeded = expired || quota <= 0 || used >= quota;
                                                     return (
-                                                        <div className="flex flex-col gap-0.5">
-                                                            <div className="flex flex-wrap items-center gap-1">
-                                                                <Tag color={expired ? "red" : "cyan"} style={{ marginInlineEnd: 0 }}>
-                                                                    {wd.directory || "已分配"}
-                                                                </Tag>
+                                                        <div className="flex w-[180px] flex-col gap-0.5">
+                                                            <div className="flex items-center gap-1.5">
+                                                                <span className="text-xs font-medium">
+                                                                    {formatBytes(used)} / {formatBytes(quota)}
+                                                                </span>
                                                                 {expired ? (
                                                                     <Tag color="red" style={{ marginInlineEnd: 0 }}>
                                                                         已过期
                                                                     </Tag>
+                                                                ) : exceeded ? (
+                                                                    <Tag color="red" style={{ marginInlineEnd: 0 }}>
+                                                                        {quota <= 0 ? "0MB" : "已满"}
+                                                                    </Tag>
                                                                 ) : null}
                                                             </div>
+                                                            <Progress
+                                                                percent={quota > 0 ? Math.min(100, Math.round((used / quota) * 100)) : 100}
+                                                                size="small"
+                                                                showInfo={false}
+                                                                status={exceeded ? "exception" : "normal"}
+                                                            />
                                                             <Typography.Text type="secondary" className="text-[11px]">
-                                                                {wd.quotaBytes
-                                                                    ? `${formatBytes(wd.usedBytes ?? 0)} / ${formatBytes(wd.quotaBytes)}`
-                                                                    : `${formatBytes(wd.usedBytes ?? 0)} · 不限`}
-                                                                {wd.expiresAt ? ` · 至 ${new Date(wd.expiresAt).toLocaleDateString("zh-CN")}` : " · 永久"}
+                                                                {record.storageQuotaExpiresAt
+                                                                    ? `至 ${new Date(record.storageQuotaExpiresAt).toLocaleDateString("zh-CN")}`
+                                                                    : "永久有效"}
                                                             </Typography.Text>
                                                         </div>
                                                     );
                                                 },
                                             },
                                             {
-                                                title: "积分余额",
-                                                dataIndex: "creditBalance",
-                                                width: 100,
-                                                render: (balance?: number) => <Tag color="gold">{balance ?? 0}</Tag>,
-                                            },
-                                            {
-                                                title: "画布 / 媒体",
-                                                key: "counts",
-                                                width: 105,
-                                                render: (_, record) => `${record.projectCount ?? 0} / ${record.mediaCount ?? 0}`,
-                                            },
-                                            {
-                                                title: "已用存储",
-                                                dataIndex: "storageUsedBytes",
-                                                width: 105,
-                                                render: (bytes: number) => formatBytes(bytes),
-                                            },
-                                            {
                                                 title: "操作",
                                                 key: "actions",
-                                                width: 310,
+                                                fixed: "right",
+                                                width: 150,
                                                 render: (_, record) => (
-                                                    <Space size={4}>
-                                                        <Button size="small" type="link" onClick={() => openAdjustCredits(record)}>
-                                                            调整积分
-                                                        </Button>
-                                                        <Button size="small" type="link" onClick={() => openAssignWebdav(record)}>
-                                                            分配 WebDAV
-                                                        </Button>
-                                                        <Popconfirm
-                                                            title={record.role === "admin" ? "确定将其降为普通用户吗？" : "确定将其设为系统管理员吗？"}
-                                                            onConfirm={() => void handleUpdateUser(record.id, { role: record.role === "admin" ? "user" : "admin" })}
-                                                        >
-                                                            <Button size="small" type="link">
-                                                                {record.role === "admin" ? "降为用户" : "设为管理"}
-                                                            </Button>
-                                                        </Popconfirm>
-                                                        <Popconfirm
-                                                            title={record.status === "active" ? "确定禁用该账号吗？其登录会话将立即失效。" : "确定重新启用该账号吗？"}
-                                                            onConfirm={() => void handleUpdateUser(record.id, { status: record.status === "active" ? "disabled" : "active" })}
-                                                        >
-                                                            <Button size="small" type="link" danger={record.status === "active"} disabled={record.id === user.id}>
-                                                                {record.status === "active" ? "禁用" : "启用"}
-                                                            </Button>
-                                                        </Popconfirm>
-                                                    </Space>
+                                                    <TableRowActions
+                                                        items={[
+                                                            {
+                                                                key: "quota",
+                                                                label: "配额",
+                                                                onClick: () => openConfigStorageQuota(record),
+                                                            },
+                                                            {
+                                                                key: "credits",
+                                                                label: "积分",
+                                                                onClick: () => openAdjustCredits(record),
+                                                            },
+                                                            {
+                                                                key: "role",
+                                                                label: record.role === "admin" ? "降级" : "提权",
+                                                                confirm: record.role === "admin" ? "确定将其降为普通用户吗？" : "确定将其设为系统管理员吗？",
+                                                                onClick: () => void handleUpdateUser(record.id, { role: record.role === "admin" ? "user" : "admin" }),
+                                                            },
+                                                            {
+                                                                key: "status",
+                                                                label: record.status === "active" ? "禁用" : "启用",
+                                                                danger: record.status === "active",
+                                                                disabled: record.id === user.id,
+                                                                confirm: record.status === "active" ? "确定禁用该账号吗？其登录会话将立即失效。" : "确定重新启用该账号吗？",
+                                                                onClick: () => void handleUpdateUser(record.id, { status: record.status === "active" ? "disabled" : "active" }),
+                                                            },
+                                                        ]}
+                                                    />
                                                 ),
                                             },
                                         ]}
@@ -1387,6 +1488,8 @@ export default function AdminPage() {
                                     >
                                         <Table<RedeemCodeItem>
                                             rowKey="id"
+                                            className={ADMIN_TABLE_CLASS}
+                                            scroll={ADMIN_TABLE_SCROLL}
                                             loading={redeemLoading}
                                             dataSource={redeemItems}
                                             pagination={{
@@ -1399,6 +1502,7 @@ export default function AdminPage() {
                                                 {
                                                     title: "兑换码",
                                                     dataIndex: "code",
+                                                    width: 210,
                                                     render: (code: string) => (
                                                         <Space size={4}>
                                                             <Typography.Text code>{code}</Typography.Text>
@@ -1409,19 +1513,19 @@ export default function AdminPage() {
                                                 {
                                                     title: "面值积分",
                                                     dataIndex: "credits",
-                                                    width: 100,
+                                                    width: 95,
                                                     render: (credits: number) => <Tag color="gold">+{credits}</Tag>,
                                                 },
                                                 {
                                                     title: "已兑 / 上限",
                                                     key: "uses",
-                                                    width: 110,
+                                                    width: 100,
                                                     render: (_, record) => `${record.usedCount} / ${record.maxUses}`,
                                                 },
                                                 {
                                                     title: "状态",
                                                     key: "state",
-                                                    width: 100,
+                                                    width: 90,
                                                     render: (_, record) => {
                                                         if (record.status === "disabled") return <Tag color="default">已停用</Tag>;
                                                         if (record.usedCount >= record.maxUses) return <Tag color="orange">已兑完</Tag>;
@@ -1432,30 +1536,41 @@ export default function AdminPage() {
                                                 {
                                                     title: "过期时间",
                                                     dataIndex: "expiresAt",
-                                                    width: 165,
+                                                    width: 170,
                                                     render: (v?: string | null) => (v ? new Date(v).toLocaleString("zh-CN") : "永不过期"),
                                                 },
                                                 {
                                                     title: "备注",
                                                     dataIndex: "note",
-                                                    ellipsis: true,
-                                                    render: (v: string) => v || "—",
+                                                    width: 180,
+                                                    render: (v: string) => (
+                                                        <Typography.Text ellipsis={{ tooltip: v || "—" }} className="block max-w-[160px]">
+                                                            {v || "—"}
+                                                        </Typography.Text>
+                                                    ),
                                                 },
                                                 {
                                                     title: "操作",
                                                     key: "actions",
-                                                    width: 150,
+                                                    fixed: "right",
+                                                    width: 100,
                                                     render: (_, record) => (
-                                                        <Space>
-                                                            <Button size="small" type="link" onClick={() => void handleToggleRedeemStatus(record)}>
-                                                                {record.status === "active" ? "停用" : "启用"}
-                                                            </Button>
-                                                            <Popconfirm title="确定删除该兑换码吗？" onConfirm={() => void handleDeleteRedeemCode(record.id)}>
-                                                                <Button size="small" type="link" danger>
-                                                                    删除
-                                                                </Button>
-                                                            </Popconfirm>
-                                                        </Space>
+                                                        <TableRowActions
+                                                            items={[
+                                                                {
+                                                                    key: "toggle",
+                                                                    label: record.status === "active" ? "停用" : "启用",
+                                                                    onClick: () => void handleToggleRedeemStatus(record),
+                                                                },
+                                                                {
+                                                                    key: "delete",
+                                                                    label: "删除",
+                                                                    danger: true,
+                                                                    confirm: "确定删除该兑换码吗？",
+                                                                    onClick: () => void handleDeleteRedeemCode(record.id),
+                                                                },
+                                                            ]}
+                                                        />
                                                     ),
                                                 },
                                             ]}
@@ -1513,6 +1628,8 @@ export default function AdminPage() {
                                 >
                                     <Table<MediaItem>
                                         rowKey="id"
+                                        className={ADMIN_TABLE_CLASS}
+                                        scroll={ADMIN_TABLE_SCROLL}
                                         loading={mediaLoading}
                                         dataSource={mediaItems}
                                         pagination={{
@@ -1525,14 +1642,19 @@ export default function AdminPage() {
                                             {
                                                 title: "预览 / 对象路径",
                                                 key: "preview",
+                                                width: 320,
                                                 render: (_, record) => (
-                                                    <div className="flex items-center gap-3">
-                                                        {record.kind === "image" && record.url ? (
-                                                            <img src={record.url} alt={record.objectKey} className="size-10 rounded object-cover" />
-                                                        ) : null}
+                                                    <div className="flex max-w-[300px] items-center gap-3">
+                                                        {record.thumbnailUrl ? (
+                                                            <img src={record.thumbnailUrl} alt={record.objectKey} className="size-10 shrink-0 rounded object-cover" />
+                                                        ) : (
+                                                            <div className="flex size-10 shrink-0 items-center justify-center rounded bg-black/5 text-stone-400 dark:bg-white/10">
+                                                                {record.kind === "video" ? <Video className="size-4" /> : record.kind === "audio" ? <AudioLines className="size-4" /> : record.kind === "image" ? <ImageIcon className="size-4" /> : <FileIcon className="size-4" />}
+                                                            </div>
+                                                        )}
                                                         <div className="min-w-0">
                                                             <div className="truncate font-mono text-xs">{record.objectKey}</div>
-                                                            <Typography.Text type="secondary" className="text-xs">
+                                                            <Typography.Text type="secondary" className="block truncate text-xs">
                                                                 {record.mimeType}
                                                             </Typography.Text>
                                                         </div>
@@ -1543,38 +1665,47 @@ export default function AdminPage() {
                                             {
                                                 title: "类型",
                                                 dataIndex: "kind",
-                                                width: 90,
+                                                width: 85,
                                                 render: (kind: string) => <Tag>{kindLabels[kind] || kind}</Tag>,
                                             },
                                             {
                                                 title: "大小",
                                                 dataIndex: "bytes",
-                                                width: 110,
+                                                width: 100,
                                                 render: (bytes: number) => formatBytes(bytes),
                                             },
                                             {
                                                 title: "上传时间",
                                                 dataIndex: "createdAt",
-                                                width: 165,
+                                                width: 170,
                                                 render: (value: string) => new Date(value).toLocaleString("zh-CN"),
                                             },
                                             {
                                                 title: "操作",
                                                 key: "actions",
-                                                width: 140,
+                                                fixed: "right",
+                                                width: 100,
                                                 render: (_, record) => (
-                                                    <Space>
-                                                        {record.url ? (
-                                                            <a href={record.url} target="_blank" rel="noreferrer">
-                                                                查看
-                                                            </a>
-                                                        ) : null}
-                                                        <Popconfirm title="确定从对象存储中删除该文件并扣减用户已用容量吗？" onConfirm={() => void handleDeleteMedia(record.id)}>
-                                                            <Button type="link" danger size="small" icon={<Trash2 className="size-3.5" />}>
-                                                                删除
-                                                            </Button>
-                                                        </Popconfirm>
-                                                    </Space>
+                                                    <TableRowActions
+                                                        items={[
+                                                            ...(record.url
+                                                                ? [
+                                                                      {
+                                                                          key: "view",
+                                                                          label: "查看",
+                                                                          onClick: () => setPreviewMediaItem(record),
+                                                                      },
+                                                                  ]
+                                                                : []),
+                                                            {
+                                                                key: "delete",
+                                                                label: "删除",
+                                                                danger: true,
+                                                                confirm: "确定从对象存储中删除该文件并扣减用户已用容量吗？",
+                                                                onClick: () => void handleDeleteMedia(record.id),
+                                                            },
+                                                        ]}
+                                                    />
                                                 ),
                                             },
                                         ]}
@@ -1802,7 +1933,7 @@ export default function AdminPage() {
         : personalTabs.map(toMenuItem);
 
     const handleMenuSelect: MenuProps["onClick"] = ({ key }) => {
-        setActiveTab(key);
+        switchTab(key);
         setMobileMenuOpen(false);
     };
 
@@ -1954,6 +2085,48 @@ export default function AdminPage() {
             </Modal>
 
             <Modal
+                open={Boolean(storageQuotaUser)}
+                title={
+                    storageQuotaUser
+                        ? `配置 ${storageQuotaUser.displayName || storageQuotaUser.username} 的云端存储配额`
+                        : "配置云端存储配额"
+                }
+                onCancel={() => setStorageQuotaUser(null)}
+                onOk={() => userStorageQuotaForm.submit()}
+                confirmLoading={userStorageQuotaSaving}
+            >
+                <Form form={userStorageQuotaForm} layout="vertical" onFinish={handleSaveUserStorageQuota}>
+                    <Alert
+                        type="info"
+                        showIcon
+                        className="mb-4"
+                        message={`当前已用空间：${formatBytes(storageQuotaUser?.storageUsedBytes ?? 0)} / 当前配额：${formatBytes(storageQuotaUser?.storageQuotaBytes ?? 0)}`}
+                        description="新注册用户默认配额为 0 MB。当已用空间达到或超过配额时，画布生图、生图工作台及我的资产将提示用户扩容并停止上传到云端对象存储。"
+                    />
+                    <Form.Item
+                        name="quotaMb"
+                        label="云端对象存储配额上限（MB，设为 0 表示禁止上传云端）"
+                        rules={[{ required: true, message: "请输入配额大小（MB）" }]}
+                    >
+                        <InputNumber min={0} step={100} className="w-full" placeholder="例如：500（表示 500 MB）" />
+                    </Form.Item>
+                    <div className="mb-4 flex flex-wrap gap-2">
+                        {[0, 100, 500, 1024, 5120, 10240].map((mb) => (
+                            <Button key={mb} size="small" onClick={() => userStorageQuotaForm.setFieldValue("quotaMb", mb)}>
+                                {mb === 0 ? "0 MB" : mb >= 1024 ? `${mb / 1024} GB` : `${mb} MB`}
+                            </Button>
+                        ))}
+                    </div>
+                    <Form.Item name="expiresAt" label="有效期限（可选，不填写则不限制时间）">
+                        <DatePicker showTime allowClear className="w-full" placeholder="不填写表示永久有效" />
+                    </Form.Item>
+                    <Form.Item name="recalculateUsedBytes" label="根据当前云端有效媒体重新核算已用空间" valuePropName="checked">
+                        <Switch />
+                    </Form.Item>
+                </Form>
+            </Modal>
+
+            <Modal
                 open={Boolean(creditUser)}
                 title={creditUser ? `调整 ${creditUser.displayName || creditUser.username} 的积分（当前：${creditUser.creditBalance ?? 0}）` : "调整积分"}
                 onCancel={() => setCreditUser(null)}
@@ -2022,6 +2195,51 @@ export default function AdminPage() {
                         <Input placeholder="例如：内测用户礼包 / 活动兑换码" maxLength={200} />
                     </Form.Item>
                 </Form>
+            </Modal>
+
+            <Modal
+                open={Boolean(previewMediaItem)}
+                title="媒体原文件预览"
+                onCancel={() => setPreviewMediaItem(null)}
+                footer={
+                    <Space>
+                        {previewMediaItem?.url ? (
+                            <Button
+                                icon={<Download className="size-4" />}
+                                onClick={() => {
+                                    const ext = previewMediaItem.mimeType?.split("/")[1]?.split("+")[0] || "bin";
+                                    const filename = previewMediaItem.objectKey.split("/").pop() || `media-${previewMediaItem.id.replace(/:/g, "_")}.${ext}`;
+                                    saveAs(previewMediaItem.url!, filename);
+                                }}
+                            >
+                                下载原文件
+                            </Button>
+                        ) : null}
+                        <Button type="primary" onClick={() => setPreviewMediaItem(null)}>
+                            关闭
+                        </Button>
+                    </Space>
+                }
+                width={780}
+                destroyOnHidden
+            >
+                {previewMediaItem?.url ? (
+                    previewMediaItem.kind === "image" ? (
+                        <div className="flex justify-center rounded-lg bg-black/5 p-2 dark:bg-white/5">
+                            <Image src={previewMediaItem.url} alt={previewMediaItem.objectKey} className="max-h-[70vh] object-contain" />
+                        </div>
+                    ) : previewMediaItem.kind === "video" ? (
+                        <video src={previewMediaItem.url} controls autoPlay className="max-h-[70vh] w-full rounded-lg bg-black" />
+                    ) : previewMediaItem.kind === "audio" ? (
+                        <div className="flex justify-center py-6">
+                            <audio src={previewMediaItem.url} controls autoPlay className="w-full max-w-md" />
+                        </div>
+                    ) : (
+                        <a href={previewMediaItem.url} target="_blank" rel="noreferrer">
+                            打开文件链接
+                        </a>
+                    )
+                ) : null}
             </Modal>
 
             <Modal

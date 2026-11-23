@@ -43,6 +43,8 @@ function sanitizeUser(user: {
   role: UserRole;
   status: string;
   storageUsedBytes: number;
+  storageQuotaBytes: number;
+  storageQuotaExpiresAt?: Date | null;
   createdAt: Date;
 }) {
   return {
@@ -54,6 +56,8 @@ function sanitizeUser(user: {
     role: user.role,
     status: user.status,
     storageUsedBytes: user.storageUsedBytes,
+    storageQuotaBytes: user.storageQuotaBytes ?? 0,
+    storageQuotaExpiresAt: user.storageQuotaExpiresAt ? user.storageQuotaExpiresAt.toISOString() : null,
     createdAt: user.createdAt,
   };
 }

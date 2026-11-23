@@ -1,10 +1,11 @@
 /** 平台 AI 代理转发网关：隐藏上游渠道密钥、拦截计费预扣、流式首字/速率采样及异步视频任务状态跟踪。 */
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { Hono } from "hono";
 import { parseBuffer } from "music-metadata";
 import { nanoid } from "nanoid";
 
-import { aiBillingTasks, db, users } from "../db/index.ts";
+import { aiBillingTasks, db, mediaObjects, users } from "../db/index.ts";
+import { persistCloudMediaBuffer, persistGeneratedImagesFromPayload } from "../lib/ai-media-persist.ts";
 import {
   adjustWalletCredits,
   calculateAudioCredits,
@@ -194,6 +195,76 @@ function isVideoPollingOrContentRequest(method: string, subPath: string) {
   return false;
 }
 
+async function persistCompletedVideoIfNeeded(params: {
+  userId: string;
+  taskId: string;
+  model: string;
+  payload: Record<string, unknown>;
+  channelBaseUrl: string;
+  channelApiFormat: "openai" | "gemini";
+  channelApiKey: string;
+}): Promise<string | null> {
+  try {
+    const existing = await db.query.mediaObjects.findFirst({
+      where: and(
+        eq(mediaObjects.userId, params.userId),
+        eq(mediaObjects.status, "active"),
+        sql`${mediaObjects.meta}->>'videoTaskId' = ${params.taskId}`,
+      ),
+      columns: { id: true },
+    });
+    if (existing) return existing.id;
+
+    const data = (params.payload.data && typeof params.payload.data === "object"
+      ? (params.payload.data as Record<string, unknown>)
+      : params.payload) as Record<string, unknown>;
+    const contentObj = data.content && typeof data.content === "object" ? (data.content as Record<string, unknown>) : undefined;
+    const geminiSamples = (
+      (data.response as Record<string, unknown> | undefined)?.generateVideoResponse as Record<string, unknown> | undefined
+    )?.generatedSamples as Array<{ video?: { uri?: string } }> | undefined;
+    const geminiUri = geminiSamples?.[0]?.video?.uri;
+    const directUrl = [data.video_url, data.result_url, data.url, contentObj?.video_url, contentObj?.url, geminiUri].find(
+      (v): v is string => typeof v === "string" && /^https?:\/\//i.test(v),
+    );
+
+    let videoRes: Response | null = null;
+    if (directUrl) {
+      const target =
+        params.channelApiFormat === "gemini" && !directUrl.includes("key=")
+          ? `${directUrl}${directUrl.includes("?") ? "&" : "?"}key=${encodeURIComponent(params.channelApiKey)}`
+          : directUrl;
+      videoRes = await fetch(target);
+    } else if (params.channelApiFormat === "openai") {
+      const contentUrl = buildUpstreamUrl(params.channelBaseUrl, `/v1/videos/${encodeURIComponent(params.taskId)}/content`, "", "openai", params.channelApiKey);
+      videoRes = await fetch(contentUrl, {
+        headers: { Authorization: `Bearer ${params.channelApiKey}` },
+      });
+    }
+
+    if (!videoRes || !videoRes.ok) return null;
+    const mimeType = videoRes.headers.get("content-type")?.split(";")[0]?.trim() || "video/mp4";
+    if (mimeType.includes("application/json")) return null;
+
+    const buffer = Buffer.from(await videoRes.arrayBuffer());
+    const saved = await persistCloudMediaBuffer({
+      userId: params.userId,
+      kind: "video",
+      buffer,
+      mimeType: mimeType.startsWith("video/") ? mimeType : "video/mp4",
+      sourceType: "ai_generated",
+      meta: {
+        model: params.model,
+        videoTaskId: params.taskId,
+        clientTaskId: params.taskId,
+      },
+    });
+    return saved?.mediaId ?? null;
+  } catch (error) {
+    console.warn("[ai-media-persist] 服务端转存完成视频失败:", error);
+    return null;
+  }
+}
+
 async function handleVideoPollTaskState(userId: string, taskId: string, payload: unknown) {
   if (!taskId || !payload || typeof payload !== "object") return;
   const nextStatus = mapUpstreamTaskStatus(payload);
@@ -273,10 +344,12 @@ aiRoutes.all("/proxy/:channelId/*", async (c) => {
   let rawBody: ArrayBuffer | undefined;
   let jsonBody: Record<string, unknown> | null = null;
   let formModel = "";
+  let formPrompt = "";
   let formCount = 1;
   let formSize = "";
   let formSeconds = 0;
   let formHasRefVideo = false;
+  const clientTaskId = c.req.header("X-Client-Task-Id")?.trim() || "";
 
   if (method !== "GET" && method !== "HEAD") {
     if (contentType.includes("application/json")) {
@@ -292,6 +365,7 @@ aiRoutes.all("/proxy/:channelId/*", async (c) => {
       try {
         const form = await cloned.formData();
         formModel = String(form.get("model") || "");
+        formPrompt = String(form.get("prompt") || "");
         formCount = Math.max(1, Number(form.get("n") || 1));
         formSize = String(form.get("size") || "");
         formSeconds = Number(form.get("seconds") || 0);
@@ -303,6 +377,16 @@ aiRoutes.all("/proxy/:channelId/*", async (c) => {
       rawBody = await c.req.arrayBuffer();
     }
   }
+
+  const promptText =
+    (typeof jsonBody?.prompt === "string" ? jsonBody.prompt : "") ||
+    formPrompt ||
+    (Array.isArray(jsonBody?.contents)
+      ? ((jsonBody.contents[0] as { parts?: Array<{ text?: string }> } | undefined)?.parts || [])
+          .map((p) => (typeof p.text === "string" ? p.text : ""))
+          .filter(Boolean)
+          .join("\n")
+      : "");
 
   const modelName =
     extractGeminiModelFromPath(subPath) ||
@@ -340,6 +424,7 @@ aiRoutes.all("/proxy/:channelId/*", async (c) => {
     "authorization",
     "x-goog-api-key",
     "x-canvas-model",
+    "x-client-task-id",
     "x-billing-resolution",
     "x-billing-ref-video-seconds",
   ].forEach((key) => forwardHeaders.delete(key));
@@ -375,7 +460,15 @@ aiRoutes.all("/proxy/:channelId/*", async (c) => {
         delta: -preCharged,
         reason: "image_gen",
         forceLedger: true,
-        meta: { model: modelName, count: requestedImageCount, resolutionTier, size: sizeStr, isStream: false, taskStatus: "processing" },
+        meta: {
+          model: modelName,
+          count: requestedImageCount,
+          resolutionTier,
+          size: sizeStr,
+          isStream: false,
+          taskStatus: "processing",
+          ...(clientTaskId ? { clientTaskId } : {}),
+        },
       });
       if (!deduct.ok) {
         const msg = `积分不足（当前余额 ${deduct.balance}，本次预计需要 ${preCharged}）`;
@@ -451,7 +544,7 @@ aiRoutes.all("/proxy/:channelId/*", async (c) => {
   responseHeaders.delete("content-length");
   const respType = (upstream.headers.get("content-type") || "").toLowerCase();
 
-  // 轮询视频状态时检查任务是否失败并自动退回预扣积分
+  // 轮询视频状态时检查任务是否失败并自动退回预扣积分；若视频完成则尝试服务端自动归档对象存储
   if (method === "GET" && upstream.ok && respType.includes("application/json") && !subPath.endsWith("/content")) {
     const text = await upstream.text();
     try {
@@ -461,6 +554,21 @@ aiRoutes.all("/proxy/:channelId/*", async (c) => {
       const taskId = videoMatch?.[1] || (typeof parsed.name === "string" ? parsed.name : geminiMatch?.[1] || "");
       if (taskId) {
         await handleVideoPollTaskState(user.id, taskId, parsed);
+        if (mapUpstreamTaskStatus(parsed) === "completed") {
+          const savedVideoId = await persistCompletedVideoIfNeeded({
+            userId: user.id,
+            taskId,
+            model: modelName,
+            payload: parsed,
+            channelBaseUrl: channel.baseUrl,
+            channelApiFormat: channel.apiFormat,
+            channelApiKey: channel.apiKey,
+          });
+          if (savedVideoId) {
+            responseHeaders.set("X-Cloud-Media-Ids", JSON.stringify([savedVideoId]));
+            await patchLedgerMetaByTaskId(user.id, taskId, { mediaIds: [savedVideoId] }).catch(() => undefined);
+          }
+        }
       }
     } catch {
       // ignore poll inspect error
@@ -490,11 +598,12 @@ aiRoutes.all("/proxy/:channelId/*", async (c) => {
     return new Response(upstream.body, { status: upstream.status, headers: responseHeaders });
   }
 
-  // 图片生成成功校验实际出图张数并回写耗时与状态
+  // 图片生成成功校验实际出图张数并自动转存至云端对象存储（防止前端网络卡顿/刷新丢失结果）
   if (channelModel.capability === "image") {
     if (respType.includes("application/json")) {
       const text = await upstream.text();
       let imageTaskStatus: "completed" | "failed" = "completed";
+      let savedMediaIds: string[] = [];
       try {
         const parsed = JSON.parse(text);
         const actualCount = countReturnedImages(parsed);
@@ -513,6 +622,17 @@ aiRoutes.all("/proxy/:channelId/*", async (c) => {
             });
           }
         }
+        const savedIds = await persistGeneratedImagesFromPayload({
+          userId: user.id,
+          payload: parsed,
+          model: modelName,
+          prompt: promptText,
+          clientTaskId: clientTaskId || undefined,
+        });
+        savedMediaIds = savedIds.filter((id): id is string => Boolean(id));
+        if (savedMediaIds.length) {
+          responseHeaders.set("X-Cloud-Media-Ids", JSON.stringify(savedIds));
+        }
       } catch {
         // ignore parse failure
       }
@@ -521,6 +641,7 @@ aiRoutes.all("/proxy/:channelId/*", async (c) => {
           durationMs: Math.max(1, Date.now() - startedAt),
           isStream: false,
           taskStatus: imageTaskStatus,
+          ...(savedMediaIds.length ? { mediaIds: savedMediaIds } : {}),
         }).catch(() => undefined);
       }
       return new Response(text, { status: upstream.status, headers: responseHeaders });
@@ -571,7 +692,7 @@ aiRoutes.all("/proxy/:channelId/*", async (c) => {
     return new Response(text, { status: upstream.status, headers: responseHeaders });
   }
 
-  // 语音模型：使用 music-metadata 读取真实音频秒数并记录日志/扣费
+  // 语音模型：使用 music-metadata 读取真实音频秒数并记录日志/扣费，同时自动转存云端
   if (channelModel.capability === "audio") {
     const buffer = await upstream.arrayBuffer();
     const durationMs = Math.max(1, Date.now() - startedAt);
@@ -591,6 +712,21 @@ aiRoutes.all("/proxy/:channelId/*", async (c) => {
       forceLedger: true,
       meta: { model: modelName, durationSeconds: Math.round(duration * 100) / 100, isStream: false, durationMs, taskStatus: "completed" },
     }).catch(() => undefined);
+    const savedAudio = await persistCloudMediaBuffer({
+      userId: user.id,
+      kind: "audio",
+      buffer: Buffer.from(buffer),
+      mimeType: respType || "audio/mpeg",
+      durationMs: Math.round(duration * 1000) || null,
+      sourceType: "ai_generated",
+      meta: {
+        model: modelName,
+        ...(clientTaskId ? { clientTaskId } : {}),
+      },
+    }).catch(() => null);
+    if (savedAudio?.mediaId) {
+      responseHeaders.set("X-Cloud-Media-Ids", JSON.stringify([savedAudio.mediaId]));
+    }
     return new Response(buffer, { status: upstream.status, headers: responseHeaders });
   }
 

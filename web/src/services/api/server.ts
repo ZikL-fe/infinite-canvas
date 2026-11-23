@@ -36,8 +36,10 @@ export type MediaItem = {
     height?: number | null;
     durationMs?: number | null;
     sourceType: string;
+    meta?: Record<string, unknown>;
     createdAt: string;
     url: string;
+    thumbnailUrl?: string;
 };
 
 export type AdminMediaByKind = {
@@ -52,6 +54,7 @@ export type AdminTopStorageUser = {
     displayName: string;
     role: UserRole;
     storageUsedBytes: number;
+    storageQuotaBytes?: number;
 };
 
 export type DailyTrendItem = {
@@ -103,6 +106,8 @@ export type AdminOverview = {
 export type AccountOverviewResponse = {
     creditBalance: number;
     storageUsedBytes: number;
+    storageQuotaBytes: number;
+    storageQuotaExpiresAt?: string | null;
     canvasProjectCount: number;
     assetCount: number;
     days: number;
@@ -365,21 +370,39 @@ export const storageApi = {
     presignUpload: (payload: { mediaId?: string; filename?: string; kind: "image" | "video" | "audio" | "file"; mimeType: string; bytes?: number; width?: number; height?: number; durationMs?: number; sourceType?: "upload" | "ai_generated" | "canvas_import" }) =>
         requestServer<{ alreadyExists?: boolean; mediaId: string; objectKey: string; uploadUrl: string; expiresIn: number; headers: Record<string, string> }>("/storage/presign-upload", { method: "POST", body: JSON.stringify(payload) }),
     confirmUpload: (payload: { mediaId: string; width?: number; height?: number; durationMs?: number }) =>
-        requestServer<{ media: MediaItem; url: string }>("/storage/confirm", { method: "POST", body: JSON.stringify(payload) }),
+        requestServer<{ media: MediaItem; url: string; storageUsedBytes?: number; storageQuotaBytes?: number }>("/storage/confirm", { method: "POST", body: JSON.stringify(payload) }),
     checkExists: (mediaIds: string[]) =>
         requestServer<{ existingIds: string[] }>("/storage/check-exists", { method: "POST", body: JSON.stringify({ mediaIds }) }),
     ingestUrl: (payload: { url: string; kind?: "image" | "video" | "audio" | "file"; sourceType?: "upload" | "ai_generated" | "canvas_import" }) =>
         requestServer<{ media: MediaItem; url: string }>("/storage/ingest-url", { method: "POST", body: JSON.stringify(payload) }),
-    list: (params?: { q?: string; kind?: string; page?: number; pageSize?: number }) => {
+    list: (params?: { q?: string; kind?: string; sourceType?: string; page?: number; pageSize?: number }) => {
         const query = new URLSearchParams();
         if (params?.q) query.set("q", params.q);
         if (params?.kind) query.set("kind", params.kind);
+        if (params?.sourceType) query.set("sourceType", params.sourceType);
         if (params?.page) query.set("page", String(params.page));
         if (params?.pageSize) query.set("pageSize", String(params.pageSize));
         const suffix = query.size ? `?${query.toString()}` : "";
         return requestServer<{ items: MediaItem[]; total?: number; page?: number; pageSize?: number }>(`/storage/list${suffix}`);
     },
+    getByTasks: (taskIds: string[]) => {
+        const clean = Array.from(new Set(taskIds.map((id) => id.trim()).filter(Boolean)));
+        if (!clean.length) return Promise.resolve({ itemsByTask: {} as Record<string, MediaItem[]>, processingTaskIds: [] as string[] });
+        return requestServer<{ itemsByTask: Record<string, MediaItem[]>; processingTaskIds: string[] }>(
+            `/storage/by-tasks?taskIds=${encodeURIComponent(clean.join(","))}`,
+        );
+    },
     getUrl: (mediaId: string) => requestServer<{ mediaId: string; url: string; expiresIn: number }>(`/storage/url/${encodeURIComponent(mediaId)}`),
+    getLedgerMedia: (ledgerId: string) => requestServer<{ items: MediaItem[] }>(`/storage/ledger-media/${encodeURIComponent(ledgerId)}`),
+    getThumbnailUrl: (mediaId: string) => requestServer<{ mediaId: string; thumbnailUrl: string }>(`/storage/thumbnail/${encodeURIComponent(mediaId)}`),
+    uploadThumbnail: (mediaId: string, blob: Blob) => {
+        const form = new FormData();
+        form.append("file", blob, "thumb.webp");
+        return requestServer<{ ok: boolean; thumbnailUrl: string }>(`/storage/thumbnail/${encodeURIComponent(mediaId)}`, {
+            method: "POST",
+            body: form,
+        });
+    },
     getUrls: (mediaIds: string[]) => requestServer<{ urls: Record<string, string> }>("/storage/urls", { method: "POST", body: JSON.stringify({ mediaIds }) }),
     remove: (mediaId: string) => requestServer<{ ok: boolean }>(`/storage/${encodeURIComponent(mediaId)}`, { method: "DELETE" }),
     async uploadBlobWithKey(
@@ -417,6 +440,14 @@ export const storageApi = {
             height: meta?.height,
             durationMs: meta?.durationMs,
         });
+        const currentUser = useUserStore.getState().user;
+        if (currentUser && typeof confirmed.storageUsedBytes === "number") {
+            useUserStore.getState().setUser({
+                ...currentUser,
+                storageUsedBytes: confirmed.storageUsedBytes,
+                ...(typeof confirmed.storageQuotaBytes === "number" ? { storageQuotaBytes: confirmed.storageQuotaBytes } : {}),
+            });
+        }
         return { mediaId: confirmed.media.id, url: confirmed.url };
     },
     async uploadFile(file: File, kind?: "image" | "video" | "audio" | "file") {
@@ -530,6 +561,8 @@ export const adminApi = {
         requestServer<{ user: AdminUserItem }>(`/admin/users/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(payload) }),
     adjustUserCredits: (id: string, payload: { delta: number; note?: string }) =>
         requestServer<{ ok: boolean; balance: number }>(`/admin/users/${encodeURIComponent(id)}/credits`, { method: "POST", body: JSON.stringify(payload) }),
+    updateUserStorageQuota: (id: string, payload: { storageQuotaBytes: number; storageQuotaExpiresAt?: string | null; recalculateUsedBytes?: boolean }) =>
+        requestServer<{ ok: boolean; storageQuotaBytes: number; storageQuotaExpiresAt: string | null; storageUsedBytes: number }>(`/admin/users/${encodeURIComponent(id)}/storage-quota`, { method: "PUT", body: JSON.stringify(payload) }),
     getStorageSettings: () => requestServer<S3StorageSettingsResponse>("/admin/settings/storage"),
     saveStorageSettings: (payload: S3StorageConfigForm) =>
         requestServer<{ ok: boolean; secretAccessKeyPreview: string }>("/admin/settings/storage", { method: "PUT", body: JSON.stringify(payload) }),

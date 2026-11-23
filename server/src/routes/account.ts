@@ -45,7 +45,7 @@ accountRoutes.get("/overview", async (c) => {
     }),
     db.query.users.findFirst({
       where: eq(users.id, authUser.id),
-      columns: { storageUsedBytes: true },
+      columns: { storageUsedBytes: true, storageQuotaBytes: true, storageQuotaExpiresAt: true },
     }),
     db
       .select({ count: count() })
@@ -60,6 +60,8 @@ accountRoutes.get("/overview", async (c) => {
   return c.json({
     creditBalance,
     storageUsedBytes: userRow?.storageUsedBytes ?? 0,
+    storageQuotaBytes: userRow?.storageQuotaBytes ?? 0,
+    storageQuotaExpiresAt: userRow?.storageQuotaExpiresAt ? userRow.storageQuotaExpiresAt.toISOString() : null,
     canvasProjectCount: Number(projectStats?.count ?? 0),
     assetCount: Number(assetStats?.count ?? 0),
     ...consumption,
@@ -108,6 +110,8 @@ accountRoutes.get("/profile", async (c) => {
       role: userRow.role,
       status: userRow.status,
       storageUsedBytes: userRow.storageUsedBytes,
+      storageQuotaBytes: userRow.storageQuotaBytes ?? 0,
+      storageQuotaExpiresAt: userRow.storageQuotaExpiresAt ? userRow.storageQuotaExpiresAt.toISOString() : null,
       creditBalance,
       lastLoginAt: userRow.lastLoginAt,
       createdAt: userRow.createdAt,
@@ -175,6 +179,8 @@ accountRoutes.patch("/profile", zValidator("json", updateProfileSchema), async (
       role: updated.role,
       status: updated.status,
       storageUsedBytes: updated.storageUsedBytes,
+      storageQuotaBytes: updated.storageQuotaBytes ?? 0,
+      storageQuotaExpiresAt: updated.storageQuotaExpiresAt ? updated.storageQuotaExpiresAt.toISOString() : null,
       creditBalance,
       lastLoginAt: updated.lastLoginAt,
       createdAt: updated.createdAt,

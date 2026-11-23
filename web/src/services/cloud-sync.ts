@@ -1,6 +1,6 @@
 /** 工作区云端同步与平台运行时配置拉取：管理画布/资产合并、定时去抖推送及模型渠道自愈同步。 */
-import { assetsApi, canvasApi, runtimeApi, storageApi } from "@/services/api/server";
-import { inferCloudMediaKind, isCloudAuthenticated, setCloudSyncHydrated, uploadBlobToCloud } from "@/services/cloud-media";
+import { assetsApi, authApi, canvasApi, runtimeApi, storageApi } from "@/services/api/server";
+import { inferCloudMediaKind, isCloudAuthenticated, isUserCloudQuotaExceeded, notifyCloudStorageQuotaExceeded, setCloudSyncHydrated, uploadBlobToCloud } from "@/services/cloud-media";
 import { getMediaBlob, resolveMediaUrl, clearLocalMediaFileCache } from "@/services/file-storage";
 import { ensureImagePreview, getImageBlob, resolveImageUrl, clearLocalImageAndWorkbenchCaches } from "@/services/image-storage";
 import { useCanvasStore, type CanvasDeletedProject, type CanvasProject } from "@/stores/canvas/use-canvas-store";
@@ -55,17 +55,27 @@ function stripBlobUrls<T>(value: T): T {
     return next as T;
 }
 
-async function ensureCloudMediaUploaded(payload: unknown) {
+async function ensureCloudMediaUploaded(payload: unknown): Promise<boolean> {
     const keys = collectStorageKeys(payload);
-    if (!keys.length) return;
+    if (!keys.length) return true;
     const { existingIds } = await storageApi.checkExists(keys).catch(() => ({ existingIds: [] as string[] }));
     const existing = new Set(existingIds);
     const missing = keys.filter((key) => !existing.has(key));
+    if (!missing.length) return true;
+    if (isUserCloudQuotaExceeded(0)) {
+        notifyCloudStorageQuotaExceeded();
+        return false;
+    }
     for (const key of missing) {
         const blob = key.startsWith("image:") ? await getImageBlob(key) : await getMediaBlob(key);
         if (!blob) continue;
+        if (isUserCloudQuotaExceeded(blob.size)) {
+            notifyCloudStorageQuotaExceeded();
+            return false;
+        }
         await uploadBlobToCloud(key, blob, inferCloudMediaKind(key, blob.type));
     }
+    return true;
 }
 
 async function hydrateAsset(asset: Asset): Promise<Asset> {
@@ -91,13 +101,15 @@ async function hydrateAsset(asset: Asset): Promise<Asset> {
 
 async function pushProjectToCloud(project: CanvasProject) {
     if (!isCloudAuthenticated()) return;
-    await ensureCloudMediaUploaded(project);
+    const ok = await ensureCloudMediaUploaded(project);
+    if (!ok) return;
     await canvasApi.saveProject(project.id, stripBlobUrls(project) as unknown as Record<string, unknown>);
 }
 
 async function pushAssetToCloud(asset: Asset) {
     if (!isCloudAuthenticated()) return;
-    await ensureCloudMediaUploaded(asset);
+    const ok = await ensureCloudMediaUploaded(asset);
+    if (!ok) return;
     await assetsApi.save(asset.id, stripBlobUrls(asset) as unknown as Record<string, unknown>);
 }
 
@@ -244,7 +256,15 @@ export async function syncCloudWorkspace() {
 
     syncInFlight = (async () => {
         try {
-            await Promise.all([waitForHydration(useCanvasStore), waitForHydration(useAssetStore), syncRuntimeSettings()]);
+            await Promise.all([
+                waitForHydration(useCanvasStore),
+                waitForHydration(useAssetStore),
+                syncRuntimeSettings(),
+                authApi
+                    .me()
+                    .then((res) => useUserStore.getState().setUser(res.user))
+                    .catch(() => undefined),
+            ]);
             const currentUser = useUserStore.getState().user;
             if (!currentUser || !isCloudAuthenticated()) return;
 

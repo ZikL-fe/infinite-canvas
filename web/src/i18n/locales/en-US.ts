@@ -327,6 +327,7 @@ export default {
         canvas: "My Canvases",
         image: "Image Studio",
         video: "Video Studio",
+        results: "Results",
         prompts: "Prompt Library",
         assets: "My Assets",
         config: "Settings",

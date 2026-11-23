@@ -5,7 +5,7 @@ import i18n from "@/i18n";
 import { dataUrlToFile, readFileAsDataUrl } from "@/lib/image-utils";
 import { clampVideoSeconds, computeVideoSize, inferVideoRatio } from "@/lib/media-size";
 import { getMediaBlob, resolveMediaUrl, uploadMediaFile, type UploadedFile } from "@/services/file-storage";
-import { aiAxios } from "@/services/api/ai-http";
+import { aiAxios, readCloudMediaIdsHeader } from "@/services/api/ai-http";
 import { imageToDataUrl } from "@/services/image-storage";
 import { scheduleRefreshUserBalance } from "@/services/api/server";
 import { boolConfig, buildApiUrl, modelOptionName, resolveModelRequestConfig, resolveModelScript, withLocalProxy, type AiConfig } from "@/stores/use-config-store";
@@ -20,7 +20,7 @@ type RequestOptions = { signal?: AbortSignal };
 type VideoMediaOptions = RequestOptions & { videos?: ReferenceVideo[]; audios?: ReferenceAudio[] };
 const apiText = (key: string, options?: Record<string, unknown>) => i18n.t(`apiErrors.${key}`, options);
 
-export type VideoGenerationResult = { blob?: Blob; url?: string; mimeType?: string };
+export type VideoGenerationResult = { blob?: Blob; url?: string; mimeType?: string; storageKey?: string };
 export type VideoGenerationTask = { id: string; provider: "openai" | "gemini" | "plugin"; model: string };
 type GeminiInlineData = { bytesBase64Encoded: string; mimeType: string };
 type GeminiVideoOperation = {
@@ -141,12 +141,12 @@ function videoPluginResult(result: unknown): VideoGenerationResult {
 }
 
 export async function storeGeneratedVideo(result: VideoGenerationResult): Promise<UploadedFile> {
-    if (result.blob) return uploadMediaFile(result.blob, "video", { sourceType: "ai_generated" });
+    if (result.blob) return uploadMediaFile(result.blob, "video", { sourceType: "ai_generated", existingStorageKey: result.storageKey });
     if (result.url) {
         try {
-            return await uploadMediaFile(result.url, "video", { sourceType: "ai_generated" });
+            return await uploadMediaFile(result.url, "video", { sourceType: "ai_generated", existingStorageKey: result.storageKey });
         } catch {
-            return { url: result.url, storageKey: "", bytes: 0, mimeType: result.mimeType || "video/mp4" };
+            return { url: result.url, storageKey: result.storageKey || "", bytes: 0, mimeType: result.mimeType || "video/mp4" };
         }
     }
     throw new Error(apiText("noPlayableVideo"));
@@ -207,13 +207,18 @@ async function createOpenAIVideoTask(config: AiConfig, model: string, prompt: st
 
 async function pollOpenAIVideoTask(config: AiConfig, task: VideoGenerationTask, options?: RequestOptions): Promise<VideoGenerationTaskState> {
     try {
-        const video = unwrapVideoResponse((await aiAxios.get<ApiVideoResponse>(aiApiUrl(config, `/videos/${task.id}`), { headers: aiHeaders(config), signal: options?.signal })).data);
+        const pollRes = await aiAxios.get<ApiVideoResponse>(aiApiUrl(config, `/videos/${task.id}`), { headers: aiHeaders(config), signal: options?.signal });
+        const cloudMediaId = readCloudMediaIdsHeader(pollRes.headers)[0] || undefined;
+        const video = unwrapVideoResponse(pollRes.data);
         const url = videoResultUrl(video);
-        if (url) return { status: "completed", result: await videoResultFromUrl(url, options) };
+        if (url) {
+            const result = await videoResultFromUrl(url, options);
+            return { status: "completed", result: cloudMediaId ? { ...result, storageKey: cloudMediaId } : result };
+        }
         if (video.status === "completed") {
             const content = await aiAxios.get<Blob>(aiApiUrl(config, `/videos/${task.id}/content`), { headers: aiHeaders(config), responseType: "blob", signal: options?.signal });
             await assertVideoBlob(content.data);
-            return { status: "completed", result: { blob: content.data } };
+            return { status: "completed", result: { blob: content.data, ...(cloudMediaId ? { storageKey: cloudMediaId } : {}) } };
         }
         if (video.status === "failed" || video.status === "cancelled") {
             scheduleRefreshUserBalance();
@@ -279,7 +284,9 @@ async function createGeminiVideoTask(config: AiConfig, model: string, prompt: st
 
 async function pollGeminiVideoTask(config: AiConfig, task: VideoGenerationTask, options?: RequestOptions): Promise<VideoGenerationTaskState> {
     try {
-        const state = unwrapEnvelope((await aiAxios.get<ApiEnvelope<GeminiVideoOperation>>(geminiOperationUrl(config, task.id), { headers: geminiVideoHeaders(config), signal: options?.signal })).data, apiText("videoTaskQueryFailed"));
+        const pollRes = await aiAxios.get<ApiEnvelope<GeminiVideoOperation>>(geminiOperationUrl(config, task.id), { headers: geminiVideoHeaders(config), signal: options?.signal });
+        const cloudMediaId = readCloudMediaIdsHeader(pollRes.headers)[0] || undefined;
+        const state = unwrapEnvelope(pollRes.data, apiText("videoTaskQueryFailed"));
         if (state.error) {
             scheduleRefreshUserBalance();
             return { status: "failed", error: readApiErrorMessage(state.error.message) || apiText("videoGenerationFailed") };
@@ -291,7 +298,8 @@ async function pollGeminiVideoTask(config: AiConfig, task: VideoGenerationTask, 
             return { status: "failed", error: apiText("noPlayableVideo") };
         }
         const url = uri.includes("key=") ? uri : `${uri}${uri.includes("?") ? "&" : "?"}key=${config.apiKey}`;
-        return { status: "completed", result: await videoResultFromUrl(url, options) };
+        const result = await videoResultFromUrl(url, options);
+        return { status: "completed", result: cloudMediaId ? { ...result, storageKey: cloudMediaId } : result };
     } catch (error) {
         throw new Error(readAxiosError(error, apiText("videoTaskQueryFailed")));
     }

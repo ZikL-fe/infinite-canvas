@@ -1,5 +1,7 @@
 /** 云端媒体读写桥接：负责对象存储直传/读取/清理，并将 AI 生成素材自动归档至已授权的 WebDAV。 */
-import { storageApi } from "@/services/api/server";
+import { message as antdMessage } from "antd";
+
+import { authApi, storageApi } from "@/services/api/server";
 import { useConfigStore } from "@/stores/use-config-store";
 import { useUserStore } from "@/stores/use-user-store";
 
@@ -8,9 +10,38 @@ type CloudKind = "image" | "video" | "audio" | "file";
 const inFlightUrls = new Map<string, Promise<string>>();
 const inFlightBlobs = new Map<string, Promise<Blob | null>>();
 let cloudSyncHydrated = false;
+let lastQuotaWarningAt = 0;
 
 export function isCloudAuthenticated() {
     return Boolean(useUserStore.getState().accessToken);
+}
+
+export function isUserCloudQuotaExpired() {
+    const user = useUserStore.getState().user;
+    if (!user?.storageQuotaExpiresAt) return false;
+    return new Date(user.storageQuotaExpiresAt).getTime() <= Date.now();
+}
+
+export function isUserCloudQuotaExceeded(incomingBytes = 0) {
+    const user = useUserStore.getState().user;
+    if (!user) return false;
+    if (isUserCloudQuotaExpired()) return true;
+    const quota = Math.max(0, Number(user.storageQuotaBytes ?? 0));
+    const used = Math.max(0, Number(user.storageUsedBytes ?? 0));
+    const incoming = Math.max(0, Number(incomingBytes ?? 0));
+    if (quota <= 0 || used >= quota) return true;
+    return incoming > 0 && used + incoming > quota;
+}
+
+export function notifyCloudStorageQuotaExceeded() {
+    const now = Date.now();
+    if (now - lastQuotaWarningAt < 3500) return;
+    lastQuotaWarningAt = now;
+    if (isUserCloudQuotaExpired()) {
+        antdMessage.warning("您的云端存储配额已过期，已暂停云端上传（内容仍保存在本地），请联系管理员续期或扩容");
+        return;
+    }
+    antdMessage.warning("云端存储配额不足，已暂停云端上传（内容仍保存在本地），请清理云端媒体或联系管理员扩容");
 }
 
 export function setCloudSyncHydrated(value: boolean) {
@@ -33,13 +64,55 @@ export async function uploadBlobToCloud(
     storageKey: string,
     blob: Blob,
     kind: CloudKind,
-    meta?: { width?: number; height?: number; durationMs?: number; filename?: string; sourceType?: "upload" | "ai_generated" | "canvas_import" },
+    meta?: {
+        width?: number;
+        height?: number;
+        durationMs?: number;
+        filename?: string;
+        sourceType?: "upload" | "ai_generated" | "canvas_import";
+        alreadyInS3?: boolean;
+        thumbnailBlob?: Blob;
+    },
 ) {
     if (!isCloudAuthenticated()) return;
-    try {
-        await storageApi.uploadBlobWithKey(storageKey, blob, kind, meta);
-    } catch (error) {
-        console.warn("[cloud-media] 上传对象存储失败（已保留本地缓存）:", error);
+
+    let user = useUserStore.getState().user;
+    if (user && typeof user.storageQuotaBytes !== "number") {
+        const refreshed = await authApi.me().catch(() => null);
+        if (refreshed?.user) {
+            useUserStore.getState().setUser(refreshed.user);
+            user = refreshed.user;
+        }
+    }
+
+    let uploadedToS3 = Boolean(meta?.alreadyInS3);
+    if (meta?.alreadyInS3) {
+        void authApi
+            .me()
+            .then((res) => useUserStore.getState().setUser(res.user))
+            .catch(() => undefined);
+    } else if (isUserCloudQuotaExceeded(blob.size)) {
+        notifyCloudStorageQuotaExceeded();
+    } else {
+        try {
+            await storageApi.uploadBlobWithKey(storageKey, blob, kind, meta);
+            uploadedToS3 = true;
+        } catch (error) {
+            const msg = error instanceof Error ? error.message : "";
+            if (msg.includes("配额不足") || msg.includes("已过期") || msg.includes("扩容") || msg.includes("续期")) {
+                notifyCloudStorageQuotaExceeded();
+                void authApi
+                    .me()
+                    .then((res) => useUserStore.getState().setUser(res.user))
+                    .catch(() => undefined);
+            } else {
+                console.warn("[cloud-media] 上传对象存储失败（已保留本地缓存）:", error);
+            }
+        }
+    }
+
+    if (uploadedToS3 && meta?.thumbnailBlob) {
+        void storageApi.uploadThumbnail(storageKey, meta.thumbnailBlob).catch(() => undefined);
     }
 
     if (meta?.sourceType === "ai_generated") {
@@ -98,6 +171,19 @@ export async function fetchCloudMediaBlob(storageKey: string, cacheLocal: (blob:
     })();
     inFlightBlobs.set(storageKey, promise);
     return promise;
+}
+
+export async function fetchCloudThumbnailBlob(storageKey: string): Promise<Blob | null> {
+    if (!isCloudAuthenticated() || !storageKey) return null;
+    try {
+        const { thumbnailUrl } = await storageApi.getThumbnailUrl(storageKey);
+        if (!thumbnailUrl) return null;
+        const res = await fetch(thumbnailUrl);
+        if (!res.ok) return null;
+        return await res.blob();
+    } catch {
+        return null;
+    }
 }
 
 export async function deleteCloudMedia(keys: Iterable<string>) {

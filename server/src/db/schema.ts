@@ -27,6 +27,8 @@ export const users = pgTable("users", {
   role: text("role").$type<UserRole>().notNull().default("user"),
   status: text("status").$type<UserStatus>().notNull().default("active"),
   storageUsedBytes: bigint("storage_used_bytes", { mode: "number" }).notNull().default(0),
+  storageQuotaBytes: bigint("storage_quota_bytes", { mode: "number" }).notNull().default(0),
+  storageQuotaExpiresAt: timestamp("storage_quota_expires_at", { withTimezone: true }),
   webdavConfig: jsonb("webdav_config").$type<UserWebdavConfig | null>(),
   lastLoginAt: timestamp("last_login_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
@@ -61,6 +63,7 @@ export const mediaObjects = pgTable("media_objects", {
   durationMs: integer("duration_ms"),
   sourceType: text("source_type").notNull().default("upload"),
   status: text("status").$type<MediaStatus>().notNull().default("pending"),
+  meta: jsonb("meta").$type<Record<string, unknown>>().notNull().default({}),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 

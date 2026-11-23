@@ -6,7 +6,7 @@ import { normalizePluginImages, runModelPlugin } from "./model-plugin";
 import { nanoid } from "nanoid";
 import { dataUrlToFile } from "@/lib/image-utils";
 import { buildImageReferencePromptText } from "@/lib/image-reference-prompt";
-import { aiAxios, fetchAiWithRefresh } from "@/services/api/ai-http";
+import { aiAxios, fetchAiWithRefresh, readCloudMediaIdsHeader } from "@/services/api/ai-http";
 import { imageToDataUrl } from "@/services/image-storage";
 import { scheduleRefreshUserBalance } from "@/services/api/server";
 import { imageSizePresets, inferMediaScale } from "@/lib/media-size";
@@ -97,7 +97,7 @@ type GeminiPayload = {
     promptFeedback?: { blockReason?: string };
 };
 type GeminiStreamState = { buffer: string; text: string; toolCalls: ResponseToolCall[]; error?: string };
-type RequestOptions = { signal?: AbortSignal };
+type RequestOptions = { signal?: AbortSignal; clientTaskId?: string };
 
 const IMAGE_QUALITY_VALUES = ["low", "medium", "high", "xhigh", "max"];
 const DEFAULT_IMAGE_SHORT_SIDE = 1024;
@@ -222,7 +222,7 @@ function resolveImageSource(item: Record<string, unknown>) {
     return null;
 }
 
-function parseImagePayload(payload: ImageApiResponse) {
+function parseImagePayload(payload: ImageApiResponse, cloudMediaIds: Array<string | null> = []) {
     if (typeof payload.code === "number" && payload.code !== 0) {
         throw new Error(payload.msg || apiText("requestFailed"));
     }
@@ -232,9 +232,13 @@ function parseImagePayload(payload: ImageApiResponse) {
         || (payload as Record<string, unknown>).results as Array<Record<string, unknown>> | undefined
         || [];
     const images = imageList
-        .map(resolveImageSource)
-        .filter((value): value is string => Boolean(value))
-        .map((dataUrl) => ({ id: nanoid(), dataUrl }));
+        .map((item, idx) => {
+            const dataUrl = resolveImageSource(item);
+            if (!dataUrl) return null;
+            const storageKey = cloudMediaIds[idx] || undefined;
+            return { id: nanoid(), dataUrl, ...(storageKey ? { storageKey } : {}) };
+        })
+        .filter((value): value is { id: string; dataUrl: string; storageKey?: string } => Boolean(value));
 
     if (images.length === 0) {
         // Check whether the response contains data in an unrecognized format.
@@ -672,14 +676,21 @@ async function requestGeminiImagesOnce(config: AiConfig, prompt: string, referen
             ...toGeminiBody(config, [{ role: "user", content: prompt }], { generationConfig: { responseModalities: ["TEXT", "IMAGE"], ...resolveGeminiImageConfig(config) } }),
             contents: [{ role: "user", parts }],
         },
-        { headers: geminiHeaders(config), signal: options?.signal, timeout: IMAGE_REQUEST_TIMEOUT_MS },
+        {
+            headers: {
+                ...geminiHeaders(config),
+                ...(options?.clientTaskId ? { "X-Client-Task-Id": options.clientTaskId } : {}),
+            },
+            signal: options?.signal,
+            timeout: IMAGE_REQUEST_TIMEOUT_MS,
+        },
     );
-    return parseGeminiImagePayload(response.data);
+    return parseGeminiImagePayload(response.data, readCloudMediaIdsHeader(response.headers));
 }
 
-function parseGeminiImagePayload(payload: GeminiPayload) {
+function parseGeminiImagePayload(payload: GeminiPayload, cloudMediaIds: Array<string | null> = []) {
     validateGeminiPayload(payload);
-    const images =
+    const sources =
         payload.candidates
             ?.flatMap((candidate) => candidate.content?.parts || [])
             .map((part) => {
@@ -687,13 +698,26 @@ function parseGeminiImagePayload(payload: GeminiPayload) {
                 if (inlineData?.data) return `data:${inlineData.mimeType || "image/png"};base64,${inlineData.data}`;
                 return part.fileData?.fileUri || null;
             })
-            .filter((value): value is string => Boolean(value))
-            .map((dataUrl) => ({ id: nanoid(), dataUrl })) || [];
+            .filter((value): value is string => Boolean(value)) || [];
+    const images = sources.map((dataUrl, idx) => {
+        const storageKey = cloudMediaIds[idx] || undefined;
+        return { id: nanoid(), dataUrl, ...(storageKey ? { storageKey } : {}) };
+    });
     if (!images.length) throw new Error(apiText("geminiNoImage"));
     return images;
 }
 
-export async function requestGeneration(config: AiConfig, prompt: string, options?: RequestOptions) {
+export type GeneratedImageItem = {
+    id: string;
+    dataUrl: string;
+    storageKey?: string;
+};
+
+export async function requestGeneration(
+    config: AiConfig,
+    prompt: string,
+    options?: RequestOptions,
+): Promise<GeneratedImageItem[]> {
     const requestConfig = resolveModelRequestConfig(config, config.model || config.imageModel);
     const n = Math.max(1, Math.min(15, Math.floor(Math.abs(Number(config.count)) || 1)));
     const script = resolveModelScript(config, config.model || config.imageModel);
@@ -711,7 +735,7 @@ export async function requestGeneration(config: AiConfig, prompt: string, option
                 params: { size: requestSize, resolution: inferMediaScale(config.size), quality, count: n, ...(background ? { background } : {}) },
                 signal: options?.signal,
             });
-            return normalizePluginImages(result).map((dataUrl) => ({ id: nanoid(), dataUrl }));
+            return normalizePluginImages(result).map((dataUrl): GeneratedImageItem => ({ id: nanoid(), dataUrl }));
         }
         if (requestConfig.apiFormat === "gemini") {
             return await requestGeminiImages(requestConfig, prompt, [], n, options);
@@ -737,12 +761,13 @@ export async function requestGeneration(config: AiConfig, prompt: string, option
                 headers: {
                     ...aiHeaders(requestConfig, "application/json"),
                     ...(resolutionScale !== "auto" ? { "X-Billing-Resolution": resolutionScale } : {}),
+                    ...(options?.clientTaskId ? { "X-Client-Task-Id": options.clientTaskId } : {}),
                 },
                 signal: options?.signal,
                 timeout: IMAGE_REQUEST_TIMEOUT_MS,
             },
         );
-        return await parseImagePayload(response.data);
+        return await parseImagePayload(response.data, readCloudMediaIdsHeader(response.headers));
     } catch (error) {
         throw new Error(readAxiosError(error, apiText("requestFailed")));
     } finally {
@@ -750,7 +775,12 @@ export async function requestGeneration(config: AiConfig, prompt: string, option
     }
 }
 
-export async function requestEdit(config: AiConfig, prompt: string, references: ReferenceImage[], options?: RequestOptions) {
+export async function requestEdit(
+    config: AiConfig,
+    prompt: string,
+    references: ReferenceImage[],
+    options?: RequestOptions,
+): Promise<GeneratedImageItem[]> {
     const requestConfig = resolveModelRequestConfig(config, config.model || config.imageModel);
     const n = Math.max(1, Math.min(15, Math.floor(Math.abs(Number(config.count)) || 1)));
     const requestPrompt = buildImageReferencePromptText(prompt, references);
@@ -770,7 +800,7 @@ export async function requestEdit(config: AiConfig, prompt: string, references: 
                 params: { size: requestSize, resolution: inferMediaScale(config.size), quality, count: n, ...(background ? { background } : {}) },
                 signal: options?.signal,
             });
-            return normalizePluginImages(result).map((dataUrl) => ({ id: nanoid(), dataUrl }));
+            return normalizePluginImages(result).map((dataUrl): GeneratedImageItem => ({ id: nanoid(), dataUrl }));
         }
         if (requestConfig.apiFormat === "gemini") {
             return await requestGeminiImages(requestConfig, requestPrompt, references, n, options);
@@ -805,11 +835,12 @@ export async function requestEdit(config: AiConfig, prompt: string, references: 
             headers: {
                 ...aiHeaders(requestConfig),
                 ...(inferMediaScale(config.size) !== "auto" ? { "X-Billing-Resolution": inferMediaScale(config.size) } : {}),
+                ...(options?.clientTaskId ? { "X-Client-Task-Id": options.clientTaskId } : {}),
             },
             signal: options?.signal,
             timeout: IMAGE_REQUEST_TIMEOUT_MS,
         });
-        return await parseImagePayload(response.data);
+        return await parseImagePayload(response.data, readCloudMediaIdsHeader(response.headers));
     } catch (error) {
         throw new Error(readAxiosError(error, apiText("requestFailed")));
     } finally {

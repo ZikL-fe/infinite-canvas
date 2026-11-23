@@ -14,6 +14,8 @@ export type AuthUser = {
   role: UserRole;
   status: UserStatus;
   storageUsedBytes: number;
+  storageQuotaBytes: number;
+  storageQuotaExpiresAt: Date | null;
   createdAt: Date;
 };
 
@@ -50,6 +52,8 @@ export const requireAuth: MiddlewareHandler<AppEnv> = async (c, next) => {
       role: true,
       status: true,
       storageUsedBytes: true,
+      storageQuotaBytes: true,
+      storageQuotaExpiresAt: true,
       createdAt: true,
     },
   });

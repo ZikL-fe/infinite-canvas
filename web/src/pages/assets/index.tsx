@@ -1,8 +1,9 @@
-import { Copy, Download, PencilLine, Search, Trash2, Upload } from "lucide-react";
+import { Copy, Download, HardDrive, PencilLine, Search, Trash2, Upload } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
-import { App, Button, Card, Drawer, Empty, Form, Image, Input, Modal, Pagination, Select, Space, Tag, Typography } from "antd";
+import { App, Button, Card, Drawer, Empty, Form, Image, Input, Modal, Pagination, Progress, Select, Space, Tag, Typography } from "antd";
 import { saveAs } from "file-saver";
 import { useTranslation } from "react-i18next";
+import { useNavigate } from "react-router-dom";
 
 import { useCopyText } from "@/hooks/use-copy-text";
 import { formatBytes, readFileAsDataUrl } from "@/lib/image-utils";
@@ -10,6 +11,7 @@ import { getMediaBlob } from "@/services/file-storage";
 import { getImageBlob, getImagePreviewRevision, subscribeImagePreviews, uploadImage } from "@/services/image-storage";
 import { cn } from "@/lib/utils";
 import { assetCoverUrl, useAssetStore, type Asset, type AssetKind, type ImageAsset } from "@/stores/use-asset-store";
+import { useUserStore } from "@/stores/use-user-store";
 import { exportAssets, readAssetPackage } from "./asset-transfer";
 
 type AssetFormValues = {
@@ -29,7 +31,9 @@ const kindOptions = ["all", "text", "image", "video"] as const;
 export default function AssetsPage() {
     const { message } = App.useApp();
     const { t } = useTranslation();
+    const navigate = useNavigate();
     const copyText = useCopyText();
+    const user = useUserStore((state) => state.user);
     const [form] = Form.useForm<AssetFormValues>();
     const coverInputRef = useRef<HTMLInputElement>(null);
     const imageInputRef = useRef<HTMLInputElement>(null);
@@ -48,6 +52,9 @@ export default function AssetsPage() {
     const [deletingAsset, setDeletingAsset] = useState<Asset | null>(null);
     const [formKind, setFormKind] = useState<AssetKind>("text");
     const [imageDraft, setImageDraft] = useState<ImageDraft>(null);
+    const [uploadingImage, setUploadingImage] = useState(false);
+    const [uploadingCover, setUploadingCover] = useState(false);
+    const [importingAssets, setImportingAssets] = useState(false);
     const coverUrl = Form.useWatch("coverUrl", form) || "";
     const title = Form.useWatch("title", form) || "";
     const tags = Form.useWatch("tags", form) || [];
@@ -126,17 +133,31 @@ export default function AssetsPage() {
 
     const readCoverFile = async (file?: File) => {
         if (!file) return;
-        const dataUrl = await readFileAsDataUrl(file);
-        form.setFieldValue("coverUrl", dataUrl);
+        setUploadingCover(true);
+        try {
+            const dataUrl = await readFileAsDataUrl(file);
+            form.setFieldValue("coverUrl", dataUrl);
+        } catch (error) {
+            message.error(error instanceof Error ? error.message : t("common.imageReadFailed"));
+        } finally {
+            setUploadingCover(false);
+        }
     };
 
     const readImageFile = async (file?: File) => {
         if (!file || !file.type.startsWith("image/")) return;
-        const image = await uploadImage(file);
-        const draft = { dataUrl: image.url, storageKey: image.storageKey, width: image.width, height: image.height, bytes: image.bytes, mimeType: image.mimeType };
-        setImageDraft(draft);
-        if (!form.getFieldValue("coverUrl")) form.setFieldValue("coverUrl", draft.dataUrl);
-        if (!form.getFieldValue("title")) form.setFieldValue("title", file.name);
+        setUploadingImage(true);
+        try {
+            const image = await uploadImage(file);
+            const draft = { dataUrl: image.url, storageKey: image.storageKey, width: image.width, height: image.height, bytes: image.bytes, mimeType: image.mimeType };
+            setImageDraft(draft);
+            if (!form.getFieldValue("coverUrl")) form.setFieldValue("coverUrl", draft.dataUrl);
+            if (!form.getFieldValue("title")) form.setFieldValue("title", file.name);
+        } catch (error) {
+            message.error(error instanceof Error ? error.message : t("common.imageReadFailed"));
+        } finally {
+            setUploadingImage(false);
+        }
     };
 
     const copyAssetText = async (asset: Asset) => {
@@ -169,6 +190,7 @@ export default function AssetsPage() {
 
     const importAssetZip = async (file?: File) => {
         if (!file) return;
+        setImportingAssets(true);
         try {
             const importedAssets = await readAssetPackage(file);
             importedAssets.forEach((asset) => {
@@ -182,6 +204,7 @@ export default function AssetsPage() {
         } catch {
             message.error(t("assets.importFailed"));
         } finally {
+            setImportingAssets(false);
             if (assetInputRef.current) assetInputRef.current.value = "";
         }
     };
@@ -200,6 +223,51 @@ export default function AssetsPage() {
                     <div className="mx-auto max-w-5xl text-center">
                         <h1 className="text-4xl font-semibold tracking-tight text-stone-950 dark:text-stone-100">{t("assets.title")}</h1>
                         <p className="mt-3 text-sm text-stone-500 dark:text-stone-400">{t("assets.description")}</p>
+                        {user ? (
+                            <div className="mx-auto mt-4 inline-flex flex-wrap items-center justify-center gap-3 rounded-full border border-stone-200 bg-background/90 px-4 py-1.5 text-xs shadow-sm dark:border-stone-800">
+                                {(() => {
+                                    const expired = Boolean(user.storageQuotaExpiresAt && new Date(user.storageQuotaExpiresAt).getTime() <= Date.now());
+                                    const exceeded = expired || (user.storageQuotaBytes ?? 0) <= 0 || (user.storageUsedBytes ?? 0) >= (user.storageQuotaBytes ?? 0);
+                                    return (
+                                        <>
+                                            <span className="inline-flex items-center gap-1.5 font-medium text-stone-700 dark:text-stone-200">
+                                                <HardDrive className="size-3.5" />
+                                                云端存储配额：{formatBytes(user.storageUsedBytes ?? 0)} / {formatBytes(user.storageQuotaBytes ?? 0)}
+                                            </span>
+                                            <div className="w-24">
+                                                <Progress
+                                                    percent={
+                                                        (user.storageQuotaBytes ?? 0) > 0
+                                                            ? Math.min(100, Math.round(((user.storageUsedBytes ?? 0) / (user.storageQuotaBytes ?? 1)) * 100))
+                                                            : 100
+                                                    }
+                                                    size="small"
+                                                    showInfo={false}
+                                                    status={exceeded ? "exception" : "active"}
+                                                />
+                                            </div>
+                                            {expired ? (
+                                                <Tag color="red" className="m-0">
+                                                    配额已过期，请联系管理员续期
+                                                </Tag>
+                                            ) : exceeded ? (
+                                                <Tag color="red" className="m-0">
+                                                    配额不足，请联系管理员扩容
+                                                </Tag>
+                                            ) : null}
+                                            <Button
+                                                type="link"
+                                                size="small"
+                                                className="!h-auto !p-0 text-xs"
+                                                onClick={() => navigate(user.role === "admin" ? "/admin?tab=my-media" : "/console?tab=my-media")}
+                                            >
+                                                管理云端媒体
+                                            </Button>
+                                        </>
+                                    );
+                                })()}
+                            </div>
+                        ) : null}
                     </div>
 
                     <div className="mx-auto mt-8 w-full max-w-2xl">
@@ -251,10 +319,11 @@ export default function AssetsPage() {
                                 </button>
                                 <button
                                     type="button"
-                                    className="cursor-pointer text-sm font-medium text-stone-700 underline-offset-4 hover:underline focus-visible:outline-none focus-visible:underline dark:text-stone-300"
+                                    disabled={importingAssets}
+                                    className="cursor-pointer text-sm font-medium text-stone-700 underline-offset-4 hover:underline focus-visible:outline-none focus-visible:underline disabled:cursor-not-allowed disabled:opacity-50 dark:text-stone-300"
                                     onClick={() => assetInputRef.current?.click()}
                                 >
-                                    {t("assets.import")}
+                                    {importingAssets ? "导入中..." : t("assets.import")}
                                 </button>
                                 <button
                                     type="button"
@@ -293,7 +362,17 @@ export default function AssetsPage() {
                 </div>
             </main>
 
-            <Modal title={editingAsset ? t("assets.edit") : t("assets.add")} open={isAssetOpen} width={980} onCancel={() => setIsAssetOpen(false)} onOk={() => void saveAsset()} okText={t("common.save")} cancelText={t("common.cancel")} destroyOnHidden>
+            <Modal
+                title={editingAsset ? t("assets.edit") : t("assets.add")}
+                open={isAssetOpen}
+                width={980}
+                onCancel={() => setIsAssetOpen(false)}
+                onOk={() => void saveAsset()}
+                okText={t("common.save")}
+                okButtonProps={{ disabled: uploadingImage || uploadingCover }}
+                cancelText={t("common.cancel")}
+                destroyOnHidden
+            >
                 <div className="grid gap-6 pt-1 lg:grid-cols-[minmax(0,1fr)_320px]">
                     <Form form={form} layout="vertical" requiredMark={false} initialValues={{ kind: "text", tags: [] }}>
                         <Form.Item name="kind" label={t("assets.type")}>
@@ -311,8 +390,8 @@ export default function AssetsPage() {
                         <Form.Item name="coverUrl" label={t("assets.fields.coverUrl")}>
                             <Space.Compact className="w-full">
                                 <Input placeholder={t("assets.fields.coverPlaceholder")} />
-                                <Button icon={<Upload className="size-3.5" />} onClick={() => coverInputRef.current?.click()}>
-                                    {t("common.upload")}
+                                <Button icon={<Upload className="size-3.5" />} loading={uploadingCover} onClick={() => coverInputRef.current?.click()}>
+                                    {uploadingCover ? "上传中..." : t("common.upload")}
                                 </Button>
                             </Space.Compact>
                         </Form.Item>
@@ -334,10 +413,14 @@ export default function AssetsPage() {
                         ) : (
                             <Form.Item label={t("assets.fields.imageContent")} required>
                                 <div className="rounded-lg border border-dashed border-stone-300 p-4 dark:border-stone-700">
-                                    <Button icon={<Upload className="size-4" />} onClick={() => imageInputRef.current?.click()}>
-                                        {t("assets.selectImageFile")}
+                                    <Button icon={<Upload className="size-4" />} loading={uploadingImage} onClick={() => imageInputRef.current?.click()}>
+                                        {uploadingImage ? "上传中..." : t("assets.selectImageFile")}
                                     </Button>
-                                    {imageDraft ? (
+                                    {uploadingImage ? (
+                                        <Typography.Text type="secondary" className="ml-3 text-xs">
+                                            正在处理并上传图片，请稍候...
+                                        </Typography.Text>
+                                    ) : imageDraft ? (
                                         <Typography.Text type="secondary" className="ml-3 text-xs">
                                             {imageDraft.width}x{imageDraft.height} · {formatBytes(imageDraft.bytes)}
                                         </Typography.Text>

@@ -29,6 +29,12 @@ const updateUserSchema = z.object({
   status: z.enum(["active", "disabled"]).optional(),
 });
 
+const userStorageQuotaSchema = z.object({
+  storageQuotaBytes: z.number().int().nonnegative(),
+  storageQuotaExpiresAt: z.string().nullable().optional(),
+  recalculateUsedBytes: z.boolean().optional(),
+});
+
 const userWebdavSchema = z.object({
   enabled: z.boolean(),
   url: z.string().trim().optional(),
@@ -196,6 +202,7 @@ adminRoutes.get("/overview", async (c) => {
         displayName: users.displayName,
         role: users.role,
         storageUsedBytes: users.storageUsedBytes,
+        storageQuotaBytes: users.storageQuotaBytes,
       })
       .from(users)
       .orderBy(desc(users.storageUsedBytes), desc(users.createdAt))
@@ -307,6 +314,8 @@ adminRoutes.get("/users", async (c) => {
         role: true,
         status: true,
         storageUsedBytes: true,
+        storageQuotaBytes: true,
+        storageQuotaExpiresAt: true,
         webdavConfig: true,
         lastLoginAt: true,
         createdAt: true,
@@ -342,6 +351,7 @@ adminRoutes.get("/users", async (c) => {
   return c.json({
     items: rows.map((row) => ({
       ...row,
+      storageQuotaExpiresAt: row.storageQuotaExpiresAt ? row.storageQuotaExpiresAt.toISOString() : null,
       webdavConfig: row.webdavConfig
         ? {
             enabled: row.webdavConfig.enabled,
@@ -379,6 +389,49 @@ adminRoutes.post("/users/:id/credits", zValidator("json", adjustCreditsSchema), 
     meta: { adminId: c.get("user").id, note: body.note || "" },
   });
   return c.json({ ok: true, balance: result.balance });
+});
+
+adminRoutes.put("/users/:id/storage-quota", zValidator("json", userStorageQuotaSchema), async (c) => {
+  const targetId = c.req.param("id");
+  const body = c.req.valid("json");
+  const target = await db.query.users.findFirst({ where: eq(users.id, targetId) });
+  if (!target) {
+    return c.json({ error: "用户不存在" }, 404);
+  }
+
+  const parsedExpiresAt = body.storageQuotaExpiresAt ? new Date(body.storageQuotaExpiresAt) : null;
+  if (parsedExpiresAt && Number.isNaN(parsedExpiresAt.getTime())) {
+    return c.json({ error: "有效期限格式无效" }, 400);
+  }
+
+  let storageUsedBytes = target.storageUsedBytes;
+  if (body.recalculateUsedBytes) {
+    const [mediaSum] = await db
+      .select({
+        bytes: sql<number>`COALESCE(SUM(${mediaObjects.bytes}), 0)::bigint`,
+      })
+      .from(mediaObjects)
+      .where(and(eq(mediaObjects.userId, targetId), eq(mediaObjects.status, "active")));
+    storageUsedBytes = Number(mediaSum?.bytes ?? 0);
+  }
+
+  const storageQuotaBytes = Math.max(0, Math.round(body.storageQuotaBytes));
+  await db
+    .update(users)
+    .set({
+      storageQuotaBytes,
+      storageQuotaExpiresAt: parsedExpiresAt,
+      storageUsedBytes,
+      updatedAt: new Date(),
+    })
+    .where(eq(users.id, targetId));
+
+  return c.json({
+    ok: true,
+    storageQuotaBytes,
+    storageQuotaExpiresAt: parsedExpiresAt ? parsedExpiresAt.toISOString() : null,
+    storageUsedBytes,
+  });
 });
 
 adminRoutes.get("/redeem-codes", async (c) => {
@@ -548,6 +601,7 @@ adminRoutes.patch("/users/:id", zValidator("json", updateUserSchema), async (c) 
       role: users.role,
       status: users.status,
       storageUsedBytes: users.storageUsedBytes,
+      storageQuotaBytes: users.storageQuotaBytes,
       lastLoginAt: users.lastLoginAt,
       createdAt: users.createdAt,
     });
@@ -808,6 +862,7 @@ adminRoutes.get("/media", async (c) => {
         mimeType: mediaObjects.mimeType,
         bytes: mediaObjects.bytes,
         sourceType: mediaObjects.sourceType,
+        meta: mediaObjects.meta,
         createdAt: mediaObjects.createdAt,
       })
       .from(mediaObjects)
@@ -828,10 +883,18 @@ adminRoutes.get("/media", async (c) => {
   ]);
 
   const items = await Promise.all(
-    rows.map(async (row) => ({
-      ...row,
-      url: config ? await createMediaReadUrl(config, row.objectKey) : "",
-    })),
+    rows.map(async (row) => {
+      const thumbKey = typeof row.meta?.thumbObjectKey === "string" ? row.meta.thumbObjectKey : "";
+      const [url, thumbnailUrl] = await Promise.all([
+        config ? createMediaReadUrl(config, row.objectKey) : Promise.resolve(""),
+        config && thumbKey ? createMediaReadUrl(config, thumbKey) : Promise.resolve(""),
+      ]);
+      return {
+        ...row,
+        url,
+        thumbnailUrl,
+      };
+    }),
   );
 
   return c.json({
@@ -853,6 +916,10 @@ adminRoutes.delete("/media/:id", async (c) => {
   const config = await getS3StorageConfig();
   if (config) {
     await deleteS3Object(config, media.objectKey).catch(() => undefined);
+    const thumbKey = typeof media.meta?.thumbObjectKey === "string" ? media.meta.thumbObjectKey : "";
+    if (thumbKey) {
+      await deleteS3Object(config, thumbKey).catch(() => undefined);
+    }
   }
 
   await db.transaction(async (tx) => {

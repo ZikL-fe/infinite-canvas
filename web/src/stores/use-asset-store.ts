@@ -35,11 +35,17 @@ type AssetStore = {
     cleanupImages: (extra?: unknown) => void;
 };
 
-// 卡片用缩略图渲染，自定义封面（远程地址或单独上传的封面）保持原样。
+// 卡片用缩略图渲染，云端图片优先等待本地/云端缩略图避免列表中直接下载原图，自定义封面保持原样。
 export function assetCoverUrl(asset: Asset) {
     const own = asset.kind === "image" ? asset.data.dataUrl : "";
     const cover = asset.coverUrl || own;
-    return asset.kind === "image" && cover === own ? previewUrlFor(asset.data.storageKey) || cover : cover;
+    if (asset.kind !== "image") return cover;
+    const preview = previewUrlFor(asset.data.storageKey);
+    if (preview) return preview;
+    if (asset.data.storageKey && cover === own && /^https?:\/\//i.test(cover)) {
+        return "";
+    }
+    return cover;
 }
 
 const ASSET_STORE_KEY = "infinite-canvas:asset_store";

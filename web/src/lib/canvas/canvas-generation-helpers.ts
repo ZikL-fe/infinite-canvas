@@ -1,8 +1,11 @@
 import { defaultConfig, resolveModelForCapability, type AiConfig } from "@/stores/use-config-store";
 import i18n from "@/i18n";
+import { storageApi } from "@/services/api/server";
+import { isCloudAuthenticated } from "@/services/cloud-media";
 import { ensureImagePreview, resolveImageUrl, uploadImage } from "@/services/image-storage";
 import { resolveMediaUrl } from "@/services/file-storage";
 import { imageMetadata, referenceUrl } from "@/lib/canvas/canvas-node-factory";
+import { fitNodeSize } from "@/lib/canvas/canvas-node-size";
 import type { NodeGenerationInput } from "@/components/canvas/canvas-node-generation";
 import type { CanvasNodeGenerationMode } from "@/components/canvas/canvas-node-prompt-panel";
 import type { CanvasImageAngleParams } from "@/components/canvas/canvas-node-angle-dialog";
@@ -127,23 +130,149 @@ export function hasResumableVideoTask(node: CanvasNodeData) {
     return node.type === CanvasNodeType.Video && Boolean(node.metadata?.videoTaskId) && !node.metadata?.content;
 }
 
-export function resetInterruptedGeneration(nodes: CanvasNodeData[], activeNodeIds?: Set<string>) {
-    return nodes.map((node) =>
-        node.metadata?.status === "loading"
-            ? hasResumableVideoTask(node) || activeNodeIds?.has(node.id)
-                ? node
-                : {
-                      ...node,
-                      metadata: {
-                          ...node.metadata,
-                          status: "error" as const,
-                          errorDetails: i18n.t("canvas.generation.interrupted"),
-                          images: node.metadata.images?.map((image) => (image.status === "loading" ? { ...image, status: "error" as const, errorDetails: i18n.t("canvas.generation.interrupted") } : image)),
-                          texts: node.metadata.texts?.map((text) => (text.status === "loading" ? { ...text, status: "error" as const, errorDetails: i18n.t("canvas.generation.interrupted") } : text)),
-                      },
-                  }
-            : node,
-    );
+export function collectInterruptedImageTaskIds(nodes: CanvasNodeData[], activeNodeIds?: Set<string>) {
+    const taskIds: string[] = [];
+    for (const node of nodes) {
+        if (node.type !== CanvasNodeType.Image || node.metadata?.status !== "loading" || activeNodeIds?.has(node.id)) continue;
+        const slotIds = (node.metadata.images || []).filter((img) => img.status === "loading").map((img) => img.id);
+        if (slotIds.length) taskIds.push(...slotIds);
+        else taskIds.push(node.id);
+    }
+    return Array.from(new Set(taskIds));
+}
+
+export async function recoverCloudInterruptedImages(
+    nodes: CanvasNodeData[],
+    activeNodeIds?: Set<string>,
+): Promise<{ nodes: CanvasNodeData[]; processingTaskIds: string[] }> {
+    if (!isCloudAuthenticated()) return { nodes, processingTaskIds: [] };
+    const candidateIds = collectInterruptedImageTaskIds(nodes, activeNodeIds);
+    if (!candidateIds.length) return { nodes, processingTaskIds: [] };
+
+    try {
+        const res = await storageApi.getByTasks(candidateIds);
+        const processingSet = new Set(res.processingTaskIds);
+        const nextNodes = await Promise.all(
+            nodes.map(async (node) => {
+                if (node.type !== CanvasNodeType.Image || node.metadata?.status !== "loading" || activeNodeIds?.has(node.id)) return node;
+
+                const images = node.metadata.images;
+                if (images?.length) {
+                    let changed = false;
+                    const nextImages = await Promise.all(
+                        images.map(async (img) => {
+                            if (img.status !== "loading") return img;
+                            const media = res.itemsByTask[img.id]?.[0];
+                            if (!media?.url) return img;
+                            changed = true;
+                            const resolved = await uploadImage(media.url, { existingStorageKey: media.id, sourceType: "ai_generated" }).catch(() => null);
+                            const nextUrl = resolved?.url || media.url;
+                            const width = resolved?.width || media.width || node.width;
+                            const height = resolved?.height || media.height || node.height;
+                            return {
+                                id: img.id,
+                                status: "success" as const,
+                                content: nextUrl,
+                                storageKey: media.id,
+                                naturalWidth: width,
+                                naturalHeight: height,
+                                bytes: resolved?.bytes || media.bytes || 0,
+                                mimeType: resolved?.mimeType || media.mimeType || "image/png",
+                            };
+                        }),
+                    );
+                    if (!changed) return node;
+                    const stillLoading = nextImages.some((img) => img.status === "loading" && processingSet.has(img.id));
+                    const hasSuccess = nextImages.some((img) => img.status === "success");
+                    const primaryBuilt = !node.metadata?.primaryImageId ? nextImages.find((img) => img.status === "success" && img.content) : null;
+                    const primaryPatch = primaryBuilt
+                        ? (() => {
+                              const imageSize = fitNodeSize(primaryBuilt.naturalWidth || node.width, primaryBuilt.naturalHeight || node.height, node.width, node.height);
+                              const center = { x: node.position.x + node.width / 2, y: node.position.y + node.height / 2 };
+                              return {
+                                  position: { x: center.x - imageSize.width / 2, y: center.y - imageSize.height / 2 },
+                                  ...imageSize,
+                                  metadata: {
+                                      ...node.metadata,
+                                      content: primaryBuilt.content,
+                                      storageKey: primaryBuilt.storageKey,
+                                      naturalWidth: primaryBuilt.naturalWidth,
+                                      naturalHeight: primaryBuilt.naturalHeight,
+                                      bytes: primaryBuilt.bytes,
+                                      mimeType: primaryBuilt.mimeType,
+                                      primaryImageId: primaryBuilt.id,
+                                  },
+                              };
+                          })()
+                        : null;
+                    const baseMeta = primaryPatch?.metadata || node.metadata;
+                    return {
+                        ...node,
+                        ...(primaryPatch ? { position: primaryPatch.position, width: primaryPatch.width, height: primaryPatch.height } : {}),
+                        metadata: {
+                            ...baseMeta,
+                            images: nextImages,
+                            status: stillLoading ? ("loading" as const) : hasSuccess ? ("success" as const) : ("error" as const),
+                        },
+                    };
+                }
+
+                const media = res.itemsByTask[node.id]?.[0];
+                if (!media?.url) return node;
+                const resolved = await uploadImage(media.url, { existingStorageKey: media.id, sourceType: "ai_generated" }).catch(() => null);
+                const width = resolved?.width || media.width || node.width;
+                const height = resolved?.height || media.height || node.height;
+                const imageSize = fitNodeSize(width, height, node.width, node.height);
+                return {
+                    ...node,
+                    width: imageSize.width,
+                    height: imageSize.height,
+                    metadata: {
+                        ...node.metadata,
+                        content: resolved?.url || media.url,
+                        storageKey: media.id,
+                        naturalWidth: width,
+                        naturalHeight: height,
+                        bytes: resolved?.bytes || media.bytes || 0,
+                        mimeType: resolved?.mimeType || media.mimeType || "image/png",
+                        status: "success" as const,
+                        errorDetails: undefined,
+                    },
+                };
+            }),
+        );
+        return { nodes: nextNodes, processingTaskIds: res.processingTaskIds };
+    } catch {
+        return { nodes, processingTaskIds: [] };
+    }
+}
+
+export function resetInterruptedGeneration(nodes: CanvasNodeData[], activeNodeIds?: Set<string>, processingTaskIds?: string[]) {
+    const processingSet = new Set(processingTaskIds || []);
+    return nodes.map((node) => {
+        if (node.metadata?.status !== "loading") return node;
+        if (hasResumableVideoTask(node) || activeNodeIds?.has(node.id)) return node;
+        const slotStillProcessing =
+            node.type === CanvasNodeType.Image &&
+            (processingSet.has(node.id) || Boolean(node.metadata.images?.some((img) => img.status === "loading" && processingSet.has(img.id))));
+        if (slotStillProcessing) return node;
+        return {
+            ...node,
+            metadata: {
+                ...node.metadata,
+                status: "error" as const,
+                errorDetails: i18n.t("canvas.generation.interrupted"),
+                images: node.metadata.images?.map((image) =>
+                    image.status === "loading" && !processingSet.has(image.id)
+                        ? { ...image, status: "error" as const, errorDetails: i18n.t("canvas.generation.interrupted") }
+                        : image,
+                ),
+                texts: node.metadata.texts?.map((text) =>
+                    text.status === "loading" ? { ...text, status: "error" as const, errorDetails: i18n.t("canvas.generation.interrupted") } : text,
+                ),
+            },
+        };
+    });
 }
 
 export function isGenerationCanceled(error: unknown) {

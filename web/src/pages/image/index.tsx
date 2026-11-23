@@ -1,9 +1,10 @@
-import { ArrowLeft, ArrowRight, BookOpen, CheckSquare, ClipboardPaste, Download, FolderPlus, History, ImagePlus, LoaderCircle, PenLine, Plus, SlidersHorizontal, Sparkles, Trash2, Upload } from "lucide-react";
+import { ArrowLeft, ArrowRight, BookOpen, CheckSquare, ClipboardPaste, Download, FolderPlus, HardDrive, History, ImagePlus, LoaderCircle, PenLine, Plus, SlidersHorizontal, Sparkles, Trash2, Upload } from "lucide-react";
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { App, Button, Checkbox, Drawer, Empty, Image, Input, Modal, Tag, Tooltip, Typography } from "antd";
 import localforage from "localforage";
 import { saveAs } from "file-saver";
 import { useTranslation } from "react-i18next";
+import { useNavigate } from "react-router-dom";
 
 import { ImageSettingsPanel } from "@/components/image-settings-panel";
 import { ModelPicker } from "@/components/model-picker";
@@ -13,9 +14,12 @@ import { canvasThemes } from "@/lib/canvas-theme";
 import { imageReferenceLabel } from "@/lib/image-reference-prompt";
 import { modelOptionLabel, useConfigStore, useEffectiveConfig, type AiConfig } from "@/stores/use-config-store";
 import { useThemeStore } from "@/stores/use-theme-store";
+import { useUserStore } from "@/stores/use-user-store";
 import { nanoid } from "nanoid";
 import { formatBytes, formatDuration } from "@/lib/image-utils";
 import { requestEdit, requestGeneration } from "@/services/api/image";
+import { storageApi } from "@/services/api/server";
+import { isCloudAuthenticated } from "@/services/cloud-media";
 import { ensureRuntimeConfigForGeneration } from "@/services/cloud-sync";
 import { deleteStoredImages, ensureImagePreview, getImagePreviewRevision, previewUrlFor, resolveImageUrl, subscribeImagePreviews, uploadImage } from "@/services/image-storage";
 import { useAssetStore } from "@/stores/use-asset-store";
@@ -56,7 +60,8 @@ type GenerationLog = {
     imageCount: number;
     size: string;
     quality: string;
-    status: "success" | "failed";
+    status: "pending" | "success" | "failed";
+    slotTaskIds?: string[];
     images: GeneratedImage[];
 };
 
@@ -71,9 +76,11 @@ const logStore = localforage.createInstance({ name: "infinite-canvas", storeName
 export default function ImagePage() {
     const { message } = App.useApp();
     const { t } = useTranslation();
+    const navigate = useNavigate();
     useSyncExternalStore(subscribeImagePreviews, getImagePreviewRevision);
     const fileInputRef = useRef<HTMLInputElement>(null);
     const dragDepthRef = useRef(0);
+    const user = useUserStore((state) => state.user);
     const config = useConfigStore((state) => state.config);
     const effectiveConfig = useEffectiveConfig();
     const updateConfig = useConfigStore((state) => state.updateConfig);
@@ -95,12 +102,14 @@ export default function ImagePage() {
     const [previewLog, setPreviewLog] = useState<GenerationLog | null>(null);
     const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
     const [isReferenceDragActive, setIsReferenceDragActive] = useState(false);
+    const [uploadingRefs, setUploadingRefs] = useState(false);
     const [autoRunToken, setAutoRunToken] = useState(0);
     const imageCommand = useWorkbenchAgentStore((state) => state.imageCommand);
     const clearImageCommand = useWorkbenchAgentStore((state) => state.clearImageCommand);
     const updateAgentTask = useWorkbenchAgentStore((state) => state.updateTask);
     const processedCommandRef = useRef(0);
     const agentTaskIdRef = useRef<string | undefined>(undefined);
+    const activeLogIdsRef = useRef<Set<string>>(new Set());
 
     const model = effectiveConfig.imageModel || effectiveConfig.model;
     const canGenerate = Boolean(prompt.trim());
@@ -127,13 +136,21 @@ export default function ImagePage() {
 
     const addReferences = async (files?: FileList | null) => {
         const imageFiles = Array.from(files || []).filter((file) => file.type.startsWith("image/"));
-        const nextReferences = await Promise.all(
-            imageFiles.map(async (file) => {
-                const image = await uploadImage(file);
-                return { id: nanoid(), name: file.name, type: image.mimeType, dataUrl: image.url, storageKey: image.storageKey };
-            }),
-        );
-        setReferences((value) => [...value, ...nextReferences]);
+        if (!imageFiles.length) return;
+        setUploadingRefs(true);
+        try {
+            const nextReferences = await Promise.all(
+                imageFiles.map(async (file) => {
+                    const image = await uploadImage(file);
+                    return { id: nanoid(), name: file.name, type: image.mimeType, dataUrl: image.url, storageKey: image.storageKey };
+                }),
+            );
+            setReferences((value) => [...value, ...nextReferences]);
+        } catch (error) {
+            message.error(error instanceof Error ? error.message : t("common.imageReadFailed"));
+        } finally {
+            setUploadingRefs(false);
+        }
     };
 
     const addReferencesFromClipboard = async () => {
@@ -180,7 +197,25 @@ export default function ImagePage() {
         const batchStartedAt = performance.now();
         setStartedAt(batchStartedAt);
 
-        const tasks = Array.from({ length: generationCount }, (_, index) => runGenerationSlot(index, snapshot));
+        const logId = nanoid();
+        const slotTaskIds = Array.from({ length: generationCount }, () => nanoid());
+        activeLogIdsRef.current.add(logId);
+        const pendingLog = buildLog({
+            id: logId,
+            prompt: text,
+            model,
+            config: { ...snapshot.config, count: String(generationCount) },
+            references: snapshot.references,
+            durationMs: 0,
+            successCount: 0,
+            failCount: 0,
+            status: "pending",
+            slotTaskIds,
+            images: [],
+        });
+        saveLog(pendingLog);
+
+        const tasks = Array.from({ length: generationCount }, (_, index) => runGenerationSlot(index, snapshot, slotTaskIds[index]));
 
         const result = await Promise.allSettled(tasks);
         const successImages = result.filter((item): item is PromiseFulfilledResult<GeneratedImage> => item.status === "fulfilled").map((item) => item.value);
@@ -191,21 +226,18 @@ export default function ImagePage() {
         if (agentTaskId) updateAgentTask(agentTaskId, { status: successCount ? "succeeded" : "failed", successCount, failCount, error: successCount ? undefined : error });
 
         try {
-            saveLog(
-                buildLog({
-                    prompt: text,
-                    model,
-                    config: { ...snapshot.config, count: String(generationCount) },
-                    references: snapshot.references,
-                    durationMs: performance.now() - batchStartedAt,
-                    successCount,
-                    failCount,
-                    status: successCount ? "success" : "failed",
-                    images: successImages,
-                }),
-            );
+            activeLogIdsRef.current.delete(logId);
+            saveLog({
+                ...pendingLog,
+                durationMs: performance.now() - batchStartedAt,
+                successCount,
+                failCount,
+                status: successCount ? "success" : "failed",
+                images: successImages,
+            });
             successCount ? message.success(t("imageWorkbench.generated")) : message.error(failed?.reason instanceof Error ? failed.reason.message : t("workbench.generationFailed"));
         } finally {
+            activeLogIdsRef.current.delete(logId);
             setRunning(false);
         }
     };
@@ -293,7 +325,101 @@ export default function ImagePage() {
         void logStore.setItem(log.id, serializeLog(log)).then(refreshLogs);
     };
 
-    const refreshLogs = async () => setLogs(await readStoredLogs());
+    const refreshLogs = async () => {
+        const stored = await readStoredLogs();
+        setLogs(stored);
+        return stored;
+    };
+
+    useEffect(() => {
+        if (!isCloudAuthenticated()) return;
+        const pendingLogs = logs.filter(
+            (log) =>
+                log.status === "pending" &&
+                !activeLogIdsRef.current.has(log.id) &&
+                log.slotTaskIds?.length &&
+                Date.now() - log.createdAt < 30 * 60_000,
+        );
+        if (!pendingLogs.length) return;
+
+        let cancelled = false;
+        let timer: ReturnType<typeof setTimeout> | null = null;
+        let attempt = 0;
+
+        const recover = async () => {
+            if (cancelled) return;
+            const taskIds = pendingLogs.flatMap((log) => log.slotTaskIds || []);
+            try {
+                const res = await storageApi.getByTasks(taskIds);
+                if (cancelled) return;
+
+                let changed = false;
+                for (const log of pendingLogs) {
+                    const slotIds = log.slotTaskIds || [];
+                    const recoveredImages: GeneratedImage[] = [];
+                    let hasStillProcessing = false;
+
+                    for (const tid of slotIds) {
+                        const mediaList = res.itemsByTask[tid] || [];
+                        if (mediaList.length) {
+                            for (const media of mediaList) {
+                                if (!media.url) continue;
+                                const stored = await uploadImage(media.url, { existingStorageKey: media.id, sourceType: "ai_generated" }).catch(() => null);
+                                if (stored) {
+                                    recoveredImages.push({
+                                        id: media.id,
+                                        dataUrl: stored.url,
+                                        storageKey: stored.storageKey || media.id,
+                                        durationMs: Date.now() - log.createdAt,
+                                        width: stored.width || media.width || 0,
+                                        height: stored.height || media.height || 0,
+                                        bytes: stored.bytes || media.bytes || 0,
+                                        mimeType: stored.mimeType || media.mimeType || "image/png",
+                                    });
+                                }
+                            }
+                        } else if (res.processingTaskIds.includes(tid)) {
+                            hasStillProcessing = true;
+                        }
+                    }
+
+                    if (recoveredImages.length > 0 && (!hasStillProcessing || attempt >= 20)) {
+                        const updated: GenerationLog = {
+                            ...log,
+                            status: "success",
+                            successCount: recoveredImages.length,
+                            failCount: Math.max(0, slotIds.length - recoveredImages.length),
+                            durationMs: Date.now() - log.createdAt,
+                            images: recoveredImages,
+                        };
+                        await logStore.setItem(log.id, serializeLog(updated));
+                        changed = true;
+                        setResults((prev) => (prev.length ? prev : recoveredImages.map((img) => ({ id: img.id, status: "success", image: img }))));
+                    } else if (!hasStillProcessing && !recoveredImages.length && attempt >= 1) {
+                        await logStore.setItem(log.id, serializeLog({ ...log, status: "failed", failCount: slotIds.length }));
+                        changed = true;
+                    }
+                }
+
+                if (changed) {
+                    await refreshLogs();
+                }
+                if (res.processingTaskIds.length > 0 && attempt < 24 && !cancelled) {
+                    attempt += 1;
+                    timer = setTimeout(() => void recover(), 2500);
+                }
+            } catch {
+                // ignore network recovery error
+            }
+        };
+
+        void recover();
+        return () => {
+            cancelled = true;
+            if (timer) clearTimeout(timer);
+        };
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [logs.map((l) => `${l.id}:${l.status}`).join(",")]);
 
     const previewGenerationLog = async (log: GenerationLog) => {
         setPreviewLog(log);
@@ -313,7 +439,7 @@ export default function ImagePage() {
             message.error(t("imageWorkbench.promptRequired"));
             return null;
         }
-        let snapshotConfig = { ...effectiveConfig, model, count: "1" };
+        let snapshotConfig: AiConfig = { ...effectiveConfig, model, count: "1" };
         if (!isAiConfigReady(snapshotConfig, snapshotConfig.model)) {
             const refreshed = await ensureRuntimeConfigForGeneration(snapshotConfig, snapshotConfig.model, isAiConfigReady);
             if (!refreshed) {
@@ -326,13 +452,15 @@ export default function ImagePage() {
         return { text, config: snapshotConfig, references: [...references] };
     };
 
-    const runGenerationSlot = async (index: number, snapshot: { text: string; config: AiConfig; references: ReferenceImage[] }) => {
+    const runGenerationSlot = async (index: number, snapshot: { text: string; config: AiConfig; references: ReferenceImage[] }, clientTaskId?: string) => {
         const itemStartedAt = performance.now();
         try {
-            const result = snapshot.references.length ? await requestEdit(snapshot.config, snapshot.text, snapshot.references) : await requestGeneration(snapshot.config, snapshot.text);
+            const result = snapshot.references.length
+                ? await requestEdit(snapshot.config, snapshot.text, snapshot.references, { clientTaskId })
+                : await requestGeneration(snapshot.config, snapshot.text, { clientTaskId });
             const image = result[0];
             if (!image) throw new Error(t("imageWorkbench.missingResult"));
-            const stored = await uploadImage(image.dataUrl, { sourceType: "ai_generated" });
+            const stored = await uploadImage(image.dataUrl, { sourceType: "ai_generated", existingStorageKey: image.storageKey });
             const nextImage: GeneratedImage = { id: image.id, dataUrl: stored.url, ...(stored.storageKey ? { storageKey: stored.storageKey } : {}), durationMs: performance.now() - itemStartedAt, width: stored.width, height: stored.height, bytes: stored.bytes, mimeType: stored.mimeType };
             setResults((value) => updateResultAt(value, index, { status: "success", image: nextImage }));
             return nextImage;
@@ -349,7 +477,7 @@ export default function ImagePage() {
         setResults((value) => updateResultAt(value, index, { status: "pending", error: undefined, image: undefined }));
         const retryStartedAt = performance.now();
         try {
-            const image = await runGenerationSlot(index, snapshot);
+            const image = await runGenerationSlot(index, snapshot, nanoid());
             saveLog(
                 buildLog({
                     prompt: snapshot.text,
@@ -390,6 +518,27 @@ export default function ImagePage() {
                             <div className="flex items-start justify-between gap-3">
                                 <div className="min-w-0">
                                     <h1 className="text-2xl font-semibold text-stone-950 dark:text-stone-100">{t("imageWorkbench.title")}</h1>
+                                    {user ? (
+                                        <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                                            {(() => {
+                                                const expired = Boolean(user.storageQuotaExpiresAt && new Date(user.storageQuotaExpiresAt).getTime() <= Date.now());
+                                                const exceeded = expired || (user.storageQuotaBytes ?? 0) <= 0 || (user.storageUsedBytes ?? 0) >= (user.storageQuotaBytes ?? 0);
+                                                return (
+                                                    <Tag
+                                                        color={exceeded ? "red" : "blue"}
+                                                        className="m-0 cursor-pointer"
+                                                        onClick={() => navigate(user.role === "admin" ? "/admin?tab=my-media" : "/console?tab=my-media")}
+                                                    >
+                                                        <span className="inline-flex items-center gap-1">
+                                                            <HardDrive className="size-3" />
+                                                            云端配额：{formatBytes(user.storageUsedBytes ?? 0)} / {formatBytes(user.storageQuotaBytes ?? 0)}
+                                                            {expired ? "（已过期）" : exceeded ? "（需扩容）" : ""}
+                                                        </span>
+                                                    </Tag>
+                                                );
+                                            })()}
+                                        </div>
+                                    ) : null}
                                 </div>
                                 <div className="flex shrink-0 gap-2 lg:hidden">
                                     <Button icon={<History className="size-4" />} onClick={() => setLogsOpen(true)}>
@@ -425,8 +574,8 @@ export default function ImagePage() {
                                         <Button size="small" icon={<ClipboardPaste className="size-3.5" />} onClick={() => void addReferencesFromClipboard()}>
                                             {t("workbench.clipboard")}
                                         </Button>
-                                        <Button size="small" icon={<Upload className="size-3.5" />} onClick={() => fileInputRef.current?.click()}>
-                                            {t("workbench.upload")}
+                                        <Button size="small" icon={<Upload className="size-3.5" />} loading={uploadingRefs} onClick={() => fileInputRef.current?.click()}>
+                                            {uploadingRefs ? "上传中..." : t("workbench.upload")}
                                         </Button>
                                     </div>
                                 </div>
@@ -862,6 +1011,7 @@ function ReferenceOrderButtons({ index, total, onMove }: { index: number; total:
 }
 
 function buildLog({
+    id,
     prompt,
     model,
     config,
@@ -870,8 +1020,10 @@ function buildLog({
     successCount,
     failCount,
     status,
+    slotTaskIds,
     images,
 }: {
+    id?: string;
     prompt: string;
     model: string;
     config: GenerationLogConfig;
@@ -880,6 +1032,7 @@ function buildLog({
     successCount: number;
     failCount: number;
     status: GenerationLog["status"];
+    slotTaskIds?: string[];
     images: GeneratedImage[];
 }): GenerationLog {
     const logConfig = {
@@ -890,7 +1043,7 @@ function buildLog({
         count: config.count,
     };
     return {
-        id: nanoid(),
+        id: id || nanoid(),
         createdAt: Date.now(),
         title: prompt.slice(0, 12) || i18n.t("workbench.untitled"),
         prompt,
@@ -905,6 +1058,7 @@ function buildLog({
         size: logConfig.size,
         quality: logConfig.quality,
         status,
+        ...(slotTaskIds ? { slotTaskIds } : {}),
         images,
     };
 }

@@ -31,9 +31,11 @@ if (env.CORS_ORIGIN) {
         "X-Billing-Ref-Video-Seconds",
         "X-Billing-Video-Seconds",
         "X-Canvas-Model",
+        "X-Client-Task-Id",
         "X-Refresh-Token",
         "x-goog-api-key",
       ],
+      exposeHeaders: ["X-Cloud-Media-Ids"],
       allowMethods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     }),
   );

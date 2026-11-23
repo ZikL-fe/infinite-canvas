@@ -77,3 +77,17 @@ export async function fetchAiWithRefresh(input: RequestInfo | URL, init?: Reques
     if (!freshToken) return response;
     return fetch(input, withFreshFetchAuth(input, init, freshToken));
 }
+
+/** 解析服务端 AI 代理响应头中附带的云端转存媒体 ID 列表。 */
+export function readCloudMediaIdsHeader(headers?: unknown): Array<string | null> {
+    if (!headers || typeof headers !== "object") return [];
+    const rec = headers as Record<string, unknown>;
+    const raw = rec["x-cloud-media-ids"] ?? rec["X-Cloud-Media-Ids"];
+    if (typeof raw !== "string" || !raw.trim()) return [];
+    try {
+        const parsed = JSON.parse(raw);
+        return Array.isArray(parsed) ? parsed.map((id) => (typeof id === "string" && id ? id : null)) : [];
+    } catch {
+        return [];
+    }
+}

@@ -4,7 +4,7 @@ import { nanoid } from "nanoid";
 import i18n from "@/i18n";
 import { withLocalProxy } from "@/stores/use-config-store";
 import { createImageThumbnail } from "@/lib/image-thumbnail";
-import { deleteCloudMedia, fetchCloudMediaBlob, resolveCloudMediaUrl, uploadBlobToCloud } from "@/services/cloud-media";
+import { deleteCloudMedia, fetchCloudMediaBlob, fetchCloudThumbnailBlob, resolveCloudMediaUrl, uploadBlobToCloud } from "@/services/cloud-media";
 
 export type UploadedImage = {
     url: string;
@@ -33,7 +33,7 @@ const IMAGE_TIMEOUT_ERROR = "ImageTimeoutError";
 
 type StoredImagePreview = { version: number; blob?: Blob };
 
-type ImageReadOptions = { signal?: AbortSignal; sourceType?: "upload" | "ai_generated" | "canvas_import"; filename?: string };
+type ImageReadOptions = { signal?: AbortSignal; sourceType?: "upload" | "ai_generated" | "canvas_import"; filename?: string; existingStorageKey?: string };
 
 export async function uploadImage(input: string | Blob, options?: ImageReadOptions): Promise<UploadedImage> {
     if (typeof input !== "string") return storeImage(input, options);
@@ -45,13 +45,14 @@ export async function uploadImage(input: string | Blob, options?: ImageReadOptio
         if (options?.signal?.aborted || isNamedError(error, IMAGE_RESPONSE_ERROR) || isNamedError(error, IMAGE_TIMEOUT_ERROR) || !/^https?:\/\//i.test(input)) throw error;
         const meta = await loadImageMeta(input, options, IMAGE_REMOTE_LOAD_TIMEOUT_MS);
         if (!meta) throw error;
-        return { url: input, width: meta.width, height: meta.height, bytes: 0, mimeType: "" };
+        return { url: input, ...(options?.existingStorageKey ? { storageKey: options.existingStorageKey } : {}), width: meta.width, height: meta.height, bytes: 0, mimeType: "" };
     }
     return storeImage(blob, options);
 }
 
 async function storeImage(blob: Blob, options?: ImageReadOptions): Promise<UploadedImage> {
-    const storageKey = `image:${nanoid()}`;
+    const storageKey = options?.existingStorageKey || `image:${nanoid()}`;
+    const alreadyInS3 = Boolean(options?.existingStorageKey);
     const url = URL.createObjectURL(blob);
     try {
         const meta = await loadImageMeta(url, options);
@@ -61,11 +62,14 @@ async function storeImage(blob: Blob, options?: ImageReadOptions): Promise<Uploa
         throwIfAborted(options?.signal);
         objectUrls.set(storageKey, url);
         await storeImagePreview(storageKey, blob);
+        const cloudThumb = (await createImageThumbnail(blob, 480).catch(() => undefined)) || blob;
         await uploadBlobToCloud(storageKey, blob, "image", {
             width: meta.width,
             height: meta.height,
             filename: options?.filename,
             sourceType: options?.sourceType,
+            alreadyInS3,
+            thumbnailBlob: cloudThumb,
         });
         return { url, storageKey, width: meta.width, height: meta.height, bytes: blob.size, mimeType: blob.type.startsWith("image/") ? blob.type : "" };
     } catch (error) {
@@ -197,10 +201,16 @@ export async function ensureImagePreview(storageKey?: string) {
     return undefined;
 }
 
-// 缩略图生成排成一队，避免一次打开大量图片时同时解码。
+// 缩略图生成排成一队，避免一次打开大量图片时同时解码；云端图片优先拉取云端缩略图，避免下载原图。
 function queueImagePreview(storageKey: string) {
     previewQueue = previewQueue
         .then(async () => {
+            const cloudThumb = await fetchCloudThumbnailBlob(storageKey);
+            if (cloudThumb) {
+                await previewStore.setItem<StoredImagePreview>(storageKey, { version: IMAGE_PREVIEW_VERSION, blob: cloudThumb }).catch(() => undefined);
+                cacheImagePreview(storageKey, cloudThumb);
+                return;
+            }
             const original = await getImageBlob(storageKey);
             if (original) await storeImagePreview(storageKey, original);
         })
