@@ -43,6 +43,7 @@ export default function ResultsPage() {
     const [keyword, setKeyword] = useState("");
     const [loading, setLoading] = useState(false);
     const [savingId, setSavingId] = useState<string | null>(null);
+    const [deletingId, setDeletingId] = useState<string | null>(null);
     const [previewItem, setPreviewItem] = useState<MediaItem | null>(null);
     const [previewOriginalUrl, setPreviewOriginalUrl] = useState("");
     const [loadingOriginalId, setLoadingOriginalId] = useState<string | null>(null);
@@ -200,6 +201,7 @@ export default function ResultsPage() {
     };
 
     const handleDelete = async (mediaId: string) => {
+        setDeletingId(mediaId);
         try {
             await storageApi.remove(mediaId);
             void authApi
@@ -211,6 +213,8 @@ export default function ResultsPage() {
             void loadResults();
         } catch (error) {
             message.error(error instanceof Error ? error.message : "删除失败");
+        } finally {
+            setDeletingId(null);
         }
     };
 
@@ -427,7 +431,7 @@ export default function ResultsPage() {
                                                         下载
                                                     </Button>
                                                     <Popconfirm title="确定从云端删除该成果并释放空间吗？" onConfirm={() => void handleDelete(item.id)}>
-                                                        <Button size="small" danger icon={<Trash2 className="size-3.5" />} />
+                                                        <Button size="small" danger loading={deletingId === item.id} icon={<Trash2 className="size-3.5" />} />
                                                     </Popconfirm>
                                                 </Space>
                                             </div>

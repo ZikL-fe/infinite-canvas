@@ -56,6 +56,8 @@ export default function AssetsPage() {
     const [uploadingImage, setUploadingImage] = useState(false);
     const [uploadingCover, setUploadingCover] = useState(false);
     const [importingAssets, setImportingAssets] = useState(false);
+    const [exportingAssets, setExportingAssets] = useState(false);
+    const [downloadingId, setDownloadingId] = useState<string | null>(null);
     const coverUrl = Form.useWatch("coverUrl", form) || "";
     const title = Form.useWatch("title", form) || "";
     const tags = Form.useWatch("tags", form) || [];
@@ -167,7 +169,9 @@ export default function AssetsPage() {
     };
 
     const downloadImage = async (asset: Asset) => {
-        if (asset.kind !== "image" && asset.kind !== "video") return;
+        if ((asset.kind !== "image" && asset.kind !== "video") || downloadingId) return;
+        setDownloadingId(asset.id);
+        const hide = message.loading("正在下载资源…", 0);
         try {
             const blob = await readAssetMediaBlob(asset);
             if (!blob) {
@@ -178,6 +182,9 @@ export default function AssetsPage() {
             saveAs(blob, `${asset.title || "asset"}.${ext}`);
         } catch {
             message.error(t("assets.downloadFailed"));
+        } finally {
+            hide();
+            setDownloadingId(null);
         }
     };
 
@@ -186,7 +193,17 @@ export default function AssetsPage() {
             message.warning(t("assets.noneToExport"));
             return;
         }
-        await exportAssets(validAssets, t("assets.packageName"));
+        if (exportingAssets) return;
+        setExportingAssets(true);
+        const hide = message.loading("正在打包导出资产…", 0);
+        try {
+            await exportAssets(validAssets, t("assets.packageName"));
+        } catch {
+            message.error("导出失败，请重试");
+        } finally {
+            hide();
+            setExportingAssets(false);
+        }
     };
 
     const importAssetZip = async (file?: File) => {
@@ -320,10 +337,11 @@ export default function AssetsPage() {
                             <div className="flex flex-wrap gap-4">
                                 <button
                                     type="button"
-                                    className="cursor-pointer text-sm font-medium text-stone-700 underline-offset-4 hover:underline focus-visible:outline-none focus-visible:underline dark:text-stone-300"
+                                    disabled={exportingAssets}
+                                    className="cursor-pointer text-sm font-medium text-stone-700 underline-offset-4 hover:underline focus-visible:outline-none focus-visible:underline disabled:cursor-not-allowed disabled:opacity-50 dark:text-stone-300"
                                     onClick={() => void exportAllAssets()}
                                 >
-                                    {t("assets.export")}
+                                    {exportingAssets ? "导出中..." : t("assets.export")}
                                 </button>
                                 <button
                                     type="button"
@@ -348,7 +366,7 @@ export default function AssetsPage() {
                 <div className="mx-auto flex max-w-7xl flex-col gap-5">
                     <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
                         {visibleAssets.map((asset) => (
-                            <AssetCard key={asset.id} asset={asset} onOpen={() => setPreviewAsset(asset)} onEdit={() => openEdit(asset)} onCopy={copyAssetText} onDownload={downloadImage} onDelete={() => setDeletingAsset(asset)} />
+                            <AssetCard key={asset.id} asset={asset} downloading={downloadingId === asset.id} onOpen={() => setPreviewAsset(asset)} onEdit={() => openEdit(asset)} onCopy={copyAssetText} onDownload={downloadImage} onDelete={() => setDeletingAsset(asset)} />
                         ))}
                     </div>
 
@@ -490,7 +508,7 @@ export default function AssetsPage() {
                 />
             </Modal>
 
-            <AssetDrawer asset={previewAsset} onClose={() => setPreviewAsset(null)} onCopy={copyAssetText} onDownload={downloadImage} />
+            <AssetDrawer asset={previewAsset} downloading={Boolean(previewAsset && downloadingId === previewAsset.id)} onClose={() => setPreviewAsset(null)} onCopy={copyAssetText} onDownload={downloadImage} />
 
             <input ref={assetInputRef} type="file" accept="application/zip,.zip" className="hidden" onChange={(event) => void importAssetZip(event.target.files?.[0])} />
 
@@ -513,7 +531,7 @@ export default function AssetsPage() {
     );
 }
 
-function AssetCard({ asset, onOpen, onEdit, onCopy, onDownload, onDelete }: { asset: Asset; onOpen: () => void; onEdit: () => void; onCopy: (asset: Asset) => void; onDownload: (asset: Asset) => void; onDelete: () => void }) {
+function AssetCard({ asset, downloading, onOpen, onEdit, onCopy, onDownload, onDelete }: { asset: Asset; downloading?: boolean; onOpen: () => void; onEdit: () => void; onCopy: (asset: Asset) => void; onDownload: (asset: Asset) => void; onDelete: () => void }) {
     const { t } = useTranslation();
     useSyncExternalStore(subscribeImagePreviews, getImagePreviewRevision);
     const cover = assetCoverUrl(asset);
@@ -572,7 +590,7 @@ function AssetCard({ asset, onOpen, onEdit, onCopy, onDownload, onDelete }: { as
                     </Button>
                 ) : null}
                 {asset.kind === "image" || asset.kind === "video" ? (
-                    <Button size="small" icon={<Download className="size-3.5" />} onClick={() => onDownload(asset)}>
+                    <Button size="small" icon={<Download className="size-3.5" />} loading={downloading} onClick={() => onDownload(asset)}>
                         {t("common.download")}
                     </Button>
                 ) : null}
@@ -584,7 +602,7 @@ function AssetCard({ asset, onOpen, onEdit, onCopy, onDownload, onDelete }: { as
     );
 }
 
-function AssetDrawer({ asset, onClose, onCopy, onDownload }: { asset: Asset | null; onClose: () => void; onCopy: (asset: Asset) => void; onDownload: (asset: Asset) => void }) {
+function AssetDrawer({ asset, downloading, onClose, onCopy, onDownload }: { asset: Asset | null; downloading?: boolean; onClose: () => void; onCopy: (asset: Asset) => void; onDownload: (asset: Asset) => void }) {
     const { t } = useTranslation();
     useSyncExternalStore(subscribeImagePreviews, getImagePreviewRevision);
     const cover = asset ? asset.coverUrl || (asset.kind === "image" ? asset.data.dataUrl : "") : "";
@@ -635,7 +653,7 @@ function AssetDrawer({ asset, onClose, onCopy, onDownload }: { asset: Asset | nu
                             </Button>
                         ) : null}
                         {asset.kind === "image" || asset.kind === "video" ? (
-                            <Button type="primary" icon={<Download className="size-4" />} onClick={() => onDownload(asset)}>
+                            <Button type="primary" icon={<Download className="size-4" />} loading={downloading} onClick={() => onDownload(asset)}>
                                 {asset.kind === "video" ? t("assets.downloadVideo") : t("assets.downloadImage")}
                             </Button>
                         ) : null}

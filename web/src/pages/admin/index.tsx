@@ -1703,7 +1703,7 @@ export default function AdminPage() {
                                                         setMediaQuery(value.trim());
                                                     }}
                                                 />
-                                                <Button icon={<RefreshCw className="size-4" />} onClick={() => void loadMedia()}>
+                                                <Button icon={<RefreshCw className="size-4" />} loading={mediaLoading} onClick={() => void loadMedia()}>
                                                     刷新
                                                 </Button>
                                             </Space>
@@ -1718,7 +1718,7 @@ export default function AdminPage() {
                                                         setWorkspaceDataQuery(value.trim());
                                                     }}
                                                 />
-                                                <Button icon={<RefreshCw className="size-4" />} onClick={() => void loadWorkspaceData()}>
+                                                <Button icon={<RefreshCw className="size-4" />} loading={workspaceDataLoading} onClick={() => void loadWorkspaceData()}>
                                                     刷新
                                                 </Button>
                                             </Space>

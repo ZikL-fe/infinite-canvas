@@ -35,6 +35,24 @@ type StoredImagePreview = { version: number; blob?: Blob };
 
 type ImageReadOptions = { signal?: AbortSignal; sourceType?: "upload" | "ai_generated" | "canvas_import"; filename?: string; existingStorageKey?: string };
 
+export async function resolvePickedImage(payload: { dataUrl: string; storageKey?: string }): Promise<{ url: string; storageKey?: string; mimeType: string }> {
+    if (payload.storageKey) {
+        const blob = await getImageBlob(payload.storageKey).catch(() => null);
+        if (blob) {
+            void ensureImagePreview(payload.storageKey);
+            const url = await resolveImageUrl(payload.storageKey, payload.dataUrl);
+            return {
+                url,
+                storageKey: payload.storageKey,
+                mimeType: blob.type.startsWith("image/") ? blob.type : "",
+            };
+        }
+    }
+    if (!payload.dataUrl) throw new Error(i18n.t("common.imageReadFailed"));
+    const stored = await uploadImage(payload.dataUrl, { existingStorageKey: payload.storageKey });
+    return { url: stored.url, storageKey: stored.storageKey, mimeType: stored.mimeType };
+}
+
 export async function uploadImage(input: string | Blob, options?: ImageReadOptions): Promise<UploadedImage> {
     if (typeof input !== "string") return storeImage(input, options);
 

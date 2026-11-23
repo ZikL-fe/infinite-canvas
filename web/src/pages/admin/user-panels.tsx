@@ -739,7 +739,7 @@ export function ProfileSecurityPanel() {
                         <Popconfirm title="确定下线除当前浏览器之外的所有登录设备吗？" onConfirm={() => void handleRevokeOtherSessions()}>
                             <Button size="small">退出其他所有设备</Button>
                         </Popconfirm>
-                        <Button size="small" icon={<RefreshCw className="size-3.5" />} onClick={() => void loadSessions()}>
+                        <Button size="small" icon={<RefreshCw className="size-3.5" />} loading={sessionsLoading} onClick={() => void loadSessions()}>
                             刷新
                         </Button>
                     </Space>
@@ -1272,7 +1272,7 @@ export function MyWalletPanel({ compact = false, onOpenLogs }: { compact?: boole
                 size={compact ? "small" : "default"}
                 title={`充值与额度变动日志（共 ${summary.recordCount} 条）`}
                 extra={
-                    <Button size="small" icon={<RefreshCw className="size-3.5" />} onClick={() => void loadLedger()}>
+                    <Button size="small" icon={<RefreshCw className="size-3.5" />} loading={loading} onClick={() => void loadLedger()}>
                         刷新
                     </Button>
                 }
@@ -1506,7 +1506,7 @@ export function UsageLogsPanel({ defaultScope = "self" }: { defaultScope?: "all"
                                 ]}
                             />
                         ) : null}
-                        <Button size="small" icon={<RefreshCw className="size-3.5" />} onClick={() => void loadLogs()}>
+                        <Button size="small" icon={<RefreshCw className="size-3.5" />} loading={loading} onClick={() => void loadLogs()}>
                             刷新
                         </Button>
                     </Space>
@@ -2070,7 +2070,7 @@ export function MyMediaPanel() {
                                                 }}
                                             />
                                         </Space>
-                                        <Button icon={<RefreshCw className="size-4" />} onClick={() => void loadData()}>
+                                        <Button icon={<RefreshCw className="size-4" />} loading={loading} onClick={() => void loadData()}>
                                             刷新
                                         </Button>
                                     </div>

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import { Empty, Input, Modal, Pagination, Tag } from "antd";
-import { Search } from "lucide-react";
+import { LoaderCircle, Search } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { cn } from "@/lib/utils";
@@ -12,7 +12,7 @@ export type InsertAssetPayload = { kind: "text"; content: string; title: string 
 type Props = {
     open: boolean;
     defaultTab?: string;
-    onInsert: (payload: InsertAssetPayload) => void;
+    onInsert: (payload: InsertAssetPayload) => void | Promise<void>;
     onClose: () => void;
 };
 
@@ -29,12 +29,16 @@ const PAGE_SIZE = 8;
 
 const kindOptions = ["all", "text", "image", "video"];
 
-function PickerCard({ title, kind, cover, onClick }: { title: string; kind: string; cover: string; onClick: () => void }) {
+function PickerCard({ title, kind, cover, loading, disabled, onClick }: { title: string; kind: string; cover: string; loading?: boolean; disabled?: boolean; onClick: () => void }) {
     const { t } = useTranslation();
     return (
         <button
             type="button"
-            className="group relative cursor-pointer overflow-hidden rounded-lg border border-stone-200 bg-white text-left transition hover:border-stone-400 hover:shadow-md dark:border-stone-700 dark:bg-stone-900 dark:hover:border-stone-500"
+            disabled={disabled}
+            className={cn(
+                "group relative overflow-hidden rounded-lg border border-stone-200 bg-white text-left transition dark:border-stone-700 dark:bg-stone-900",
+                disabled ? (loading ? "cursor-wait border-stone-400 dark:border-stone-500" : "cursor-not-allowed opacity-60") : "cursor-pointer hover:border-stone-400 hover:shadow-md dark:hover:border-stone-500",
+            )}
             onClick={onClick}
         >
             {cover ? (
@@ -48,18 +52,33 @@ function PickerCard({ title, kind, cover, onClick }: { title: string; kind: stri
                     <Tag className="m-0 shrink-0 text-[10px]">{t(`assets.kinds.${kind}`)}</Tag>
                 </div>
             </div>
-            <div className="pointer-events-none absolute inset-0 flex items-center justify-center bg-stone-950/0 text-sm font-medium text-white opacity-0 transition group-hover:bg-stone-950/55 group-hover:opacity-100">{t("canvas.assetPicker.insert")}</div>
+            <div
+                className={cn(
+                    "pointer-events-none absolute inset-0 flex items-center justify-center gap-1.5 text-sm font-medium text-white transition",
+                    loading ? "bg-stone-950/60 opacity-100" : "bg-stone-950/0 opacity-0 group-hover:bg-stone-950/55 group-hover:opacity-100",
+                )}
+            >
+                {loading ? (
+                    <>
+                        <LoaderCircle className="size-4 animate-spin" />
+                        <span>{t("canvas.assetPicker.inserting")}</span>
+                    </>
+                ) : (
+                    t("canvas.assetPicker.insert")
+                )}
+            </div>
         </button>
     );
 }
 
-function MyAssetsTab({ onInsert }: { onInsert: (payload: InsertAssetPayload) => void }) {
+function MyAssetsTab({ onInsert }: { onInsert: (payload: InsertAssetPayload) => void | Promise<void> }) {
     const { t } = useTranslation();
     useSyncExternalStore(subscribeImagePreviews, getImagePreviewRevision);
     const assets = useAssetStore((state) => state.assets);
     const [keyword, setKeyword] = useState("");
     const [kindFilter, setKindFilter] = useState("all");
     const [page, setPage] = useState(1);
+    const [insertingId, setInsertingId] = useState<string | null>(null);
 
     const filtered = useMemo(() => {
         const query = keyword.trim().toLowerCase();
@@ -76,11 +95,17 @@ function MyAssetsTab({ onInsert }: { onInsert: (payload: InsertAssetPayload) => 
         setPage((v) => Math.min(v, maxPage));
     }, [filtered.length]);
 
-    const handleInsert = (asset: Asset) => {
-        if (asset.kind === "text") {
-            onInsert({ kind: "text", content: asset.data.content, title: asset.title });
-        } else {
-            onInsert(asset.kind === "video" ? { kind: "video", url: asset.data.url, storageKey: asset.data.storageKey, title: asset.title, width: asset.data.width, height: asset.data.height } : { kind: "image", dataUrl: asset.data.dataUrl, storageKey: asset.data.storageKey, title: asset.title });
+    const handleInsert = async (asset: Asset) => {
+        if (insertingId) return;
+        setInsertingId(asset.id);
+        try {
+            if (asset.kind === "text") {
+                await onInsert({ kind: "text", content: asset.data.content, title: asset.title });
+            } else {
+                await onInsert(asset.kind === "video" ? { kind: "video", url: asset.data.url, storageKey: asset.data.storageKey, title: asset.title, width: asset.data.width, height: asset.data.height } : { kind: "image", dataUrl: asset.data.dataUrl, storageKey: asset.data.storageKey, title: asset.title });
+            }
+        } finally {
+            setInsertingId(null);
         }
     };
 
@@ -119,7 +144,15 @@ function MyAssetsTab({ onInsert }: { onInsert: (payload: InsertAssetPayload) => 
             {visible.length ? (
                 <div className="grid grid-cols-4 gap-3">
                     {visible.map((asset) => (
-                        <PickerCard key={asset.id} title={asset.title} kind={asset.kind} cover={assetCoverUrl(asset)} onClick={() => handleInsert(asset)} />
+                        <PickerCard
+                            key={asset.id}
+                            title={asset.title}
+                            kind={asset.kind}
+                            cover={assetCoverUrl(asset)}
+                            loading={insertingId === asset.id}
+                            disabled={Boolean(insertingId)}
+                            onClick={() => void handleInsert(asset)}
+                        />
                     ))}
                 </div>
             ) : (

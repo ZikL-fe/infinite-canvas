@@ -20,7 +20,7 @@ import { requestEdit, requestGeneration } from "@/services/api/image";
 import { storageApi } from "@/services/api/server";
 import { isCloudAuthenticated, WORKSPACE_CHANGED_EVENT, type WorkspaceChangeScope } from "@/services/cloud-media";
 import { ensureRuntimeConfigForGeneration } from "@/services/cloud-sync";
-import { ensureImagePreview, getImagePreviewRevision, previewUrlFor, resolveImageUrl, subscribeImagePreviews, uploadImage } from "@/services/image-storage";
+import { ensureImagePreview, getImagePreviewRevision, previewUrlFor, resolveImageUrl, resolvePickedImage, subscribeImagePreviews, uploadImage } from "@/services/image-storage";
 import { deleteWorkbenchLogsWithCloud, pushWorkbenchLogToCloud, syncWorkbenchLogsWithCloud } from "@/services/workbench-sync";
 import { useAssetStore } from "@/stores/use-asset-store";
 import { useWorkbenchAgentStore } from "@/stores/use-workbench-agent-store";
@@ -103,6 +103,7 @@ export default function ImagePage() {
     const [deletingLogs, setDeletingLogs] = useState(false);
     const [isReferenceDragActive, setIsReferenceDragActive] = useState(false);
     const [uploadingRefs, setUploadingRefs] = useState(false);
+    const [pastingRefs, setPastingRefs] = useState(false);
     const [autoRunToken, setAutoRunToken] = useState(0);
     const imageCommand = useWorkbenchAgentStore((state) => state.imageCommand);
     const clearImageCommand = useWorkbenchAgentStore((state) => state.clearImageCommand);
@@ -181,6 +182,7 @@ export default function ImagePage() {
     };
 
     const addReferencesFromClipboard = async () => {
+        setPastingRefs(true);
         try {
             const items = await navigator.clipboard.read();
             const blobs = await Promise.all(items.flatMap((item) => item.types.filter((type) => type.startsWith("image/")).map((type) => item.getType(type))));
@@ -198,6 +200,8 @@ export default function ImagePage() {
             message.success(t("imageWorkbench.clipboardAdded", { count: nextReferences.length }));
         } catch {
             message.error(t("imageWorkbench.clipboardEmpty"));
+        } finally {
+            setPastingRefs(false);
         }
     };
 
@@ -296,35 +300,55 @@ export default function ImagePage() {
     };
 
     const addResultToReferences = async (image: GeneratedImage, index: number) => {
-        const stored = await uploadImage(image.dataUrl);
-        setReferences((value) => [...value, { id: nanoid(), name: `result-${index + 1}.png`, type: stored.mimeType, dataUrl: stored.url, storageKey: stored.storageKey }]);
-        message.success(t("imageWorkbench.addedReference"));
+        try {
+            const stored = await resolvePickedImage(image);
+            setReferences((value) => [...value, { id: nanoid(), name: `result-${index + 1}.png`, type: stored.mimeType, dataUrl: stored.url, storageKey: stored.storageKey }]);
+            message.success(t("imageWorkbench.addedReference"));
+        } catch (error) {
+            message.error(error instanceof Error ? error.message : t("common.imageReadFailed"));
+        }
     };
 
     const saveResultToAssets = async (image: GeneratedImage, index: number) => {
-        const stored = await uploadImage(image.dataUrl);
-        addAsset({
-            kind: "image",
-            title: t("imageWorkbench.resultTitle", { count: index + 1 }),
-            coverUrl: stored.url,
-            tags: [],
-            source: t("imageWorkbench.source"),
-            data: { dataUrl: stored.url, storageKey: stored.storageKey, width: stored.width, height: stored.height, bytes: stored.bytes, mimeType: stored.mimeType },
-            metadata: { source: "image-page", prompt },
-        });
-        message.success(t("common.addedToAssets"));
+        try {
+            const stored = image.storageKey ? await resolvePickedImage(image) : await uploadImage(image.dataUrl);
+            addAsset({
+                kind: "image",
+                title: t("imageWorkbench.resultTitle", { count: index + 1 }),
+                coverUrl: stored.url,
+                tags: [],
+                source: t("imageWorkbench.source"),
+                data: { dataUrl: stored.url, storageKey: stored.storageKey, width: image.width, height: image.height, bytes: image.bytes, mimeType: stored.mimeType || image.mimeType || "image/png" },
+                metadata: { source: "image-page", prompt },
+            });
+            message.success(t("common.addedToAssets"));
+        } catch (error) {
+            message.error(error instanceof Error ? error.message : t("common.imageReadFailed"));
+        }
     };
 
     const insertPickedAsset = async (payload: InsertAssetPayload) => {
         if (payload.kind === "text") {
             setPrompt(payload.content);
-        } else if (payload.kind === "image") {
-            const stored = await uploadImage(payload.dataUrl);
-            setReferences((value) => [...value, { id: nanoid(), name: payload.title, type: stored.mimeType, dataUrl: stored.url, storageKey: stored.storageKey }]);
-        } else {
-            message.warning(t("imageWorkbench.unsupportedAsset"));
+            setAssetPickerOpen(false);
+            return;
         }
-        setAssetPickerOpen(false);
+        if (payload.kind !== "image") {
+            message.warning(t("imageWorkbench.unsupportedAsset"));
+            setAssetPickerOpen(false);
+            return;
+        }
+        const hide = message.loading(t("workbench.importingReference"), 0);
+        try {
+            const stored = await resolvePickedImage(payload);
+            setReferences((value) => [...value, { id: nanoid(), name: payload.title, type: stored.mimeType, dataUrl: stored.url, storageKey: stored.storageKey }]);
+            setAssetPickerOpen(false);
+            message.success(t("imageWorkbench.addedReference"));
+        } catch (error) {
+            message.error(error instanceof Error ? error.message : t("common.imageReadFailed"));
+        } finally {
+            hide();
+        }
     };
 
     const createSession = () => {
@@ -589,7 +613,7 @@ export default function ImagePage() {
                                 <div className="mb-2 flex items-center justify-between gap-3">
                                     <span className="text-base font-semibold">{t("imageWorkbench.references")}</span>
                                     <div className="flex gap-2">
-                                        <Button size="small" icon={<ClipboardPaste className="size-3.5" />} onClick={() => void addReferencesFromClipboard()}>
+                                        <Button size="small" icon={<ClipboardPaste className="size-3.5" />} loading={pastingRefs} onClick={() => void addReferencesFromClipboard()}>
                                             {t("workbench.clipboard")}
                                         </Button>
                                         <Button size="small" icon={<Upload className="size-3.5" />} loading={uploadingRefs} onClick={() => fileInputRef.current?.click()}>
@@ -721,7 +745,7 @@ export default function ImagePage() {
                 </div>
             </Drawer>
             <PromptSelectDialog open={promptDialogOpen} onOpenChange={setPromptDialogOpen} onSelect={setPrompt} />
-            <AssetPickerModal open={assetPickerOpen} defaultTab="my-assets" onInsert={(payload) => void insertPickedAsset(payload)} onClose={() => setAssetPickerOpen(false)} />
+            <AssetPickerModal open={assetPickerOpen} defaultTab="my-assets" onInsert={insertPickedAsset} onClose={() => setAssetPickerOpen(false)} />
             <Modal
                 title={t("workbench.deleteLogs")}
                 open={deleteConfirmOpen}
@@ -767,12 +791,14 @@ function ResultImageCard({
 }: {
     image: GeneratedImage;
     index: number;
-    onEdit: (image: GeneratedImage, index: number) => void;
+    onEdit: (image: GeneratedImage, index: number) => Promise<void>;
     onDownload: (image: GeneratedImage, index: number) => void;
-    onSaveAsset: (image: GeneratedImage, index: number) => void;
+    onSaveAsset: (image: GeneratedImage, index: number) => Promise<void>;
 }) {
     const { t } = useTranslation();
     useSyncExternalStore(subscribeImagePreviews, getImagePreviewRevision);
+    const [saving, setSaving] = useState(false);
+    const [addingRef, setAddingRef] = useState(false);
     return (
         <div className="overflow-hidden rounded-lg border border-stone-200 bg-background dark:border-stone-800">
             <Image src={previewUrlFor(image.storageKey) || image.dataUrl} preview={{ src: image.dataUrl }} alt={t("imageWorkbench.resultAlt", { count: index + 1 })} className="aspect-square object-cover" />
@@ -786,12 +812,38 @@ function ResultImageCard({
                 </div>
                 <div className="grid min-w-0 grid-cols-3 gap-2">
                     <Tooltip title={t("common.addToAssets")}>
-                        <Button className={RESULT_ACTION_BUTTON_CLASS} size="small" icon={<FolderPlus className="size-3.5" />} onClick={() => void onSaveAsset(image, index)}>
+                        <Button
+                            className={RESULT_ACTION_BUTTON_CLASS}
+                            size="small"
+                            icon={<FolderPlus className="size-3.5" />}
+                            loading={saving}
+                            onClick={async () => {
+                                setSaving(true);
+                                try {
+                                    await onSaveAsset(image, index);
+                                } finally {
+                                    setSaving(false);
+                                }
+                            }}
+                        >
                             {t("common.addToAssets")}
                         </Button>
                     </Tooltip>
                     <Tooltip title={t("imageWorkbench.addReference")}>
-                        <Button className={RESULT_ACTION_BUTTON_CLASS} size="small" icon={<PenLine className="size-3.5" />} onClick={() => void onEdit(image, index)}>
+                        <Button
+                            className={RESULT_ACTION_BUTTON_CLASS}
+                            size="small"
+                            icon={<PenLine className="size-3.5" />}
+                            loading={addingRef}
+                            onClick={async () => {
+                                setAddingRef(true);
+                                try {
+                                    await onEdit(image, index);
+                                } finally {
+                                    setAddingRef(false);
+                                }
+                            }}
+                        >
                             {t("imageWorkbench.addReference")}
                         </Button>
                     </Tooltip>
