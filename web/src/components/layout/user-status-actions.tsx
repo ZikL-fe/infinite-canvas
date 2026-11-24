@@ -9,6 +9,7 @@ import { AnimatedThemeToggler } from "@/components/ui/animated-theme-toggler";
 import { NotificationBellModal } from "@/components/layout/notification-bell-modal";
 import { VersionReleaseModal } from "@/components/layout/version-release-modal";
 import { changeAppLocale, type AppLocale } from "@/i18n";
+import { formatCompactCredits, formatExactCredits } from "@/lib/format-number";
 import { formatStoragePair } from "@/lib/image-utils";
 import { canvasThemes } from "@/lib/canvas-theme";
 import { MyWalletPanel } from "@/pages/admin/user-panels";
@@ -54,7 +55,7 @@ export function UserStatusActions({ showConfig = true, variant = "default", onOp
               {
                   key: "credits",
                   icon: <Coins className="size-4" />,
-                  label: `积分钱包（余额：${user.creditBalance ?? 0}）`,
+                  label: `积分钱包（余额：${formatCompactCredits(user.creditBalance ?? 0)}）`,
                   onClick: () => setWalletOpen(true),
               },
               {
@@ -111,7 +112,7 @@ export function UserStatusActions({ showConfig = true, variant = "default", onOp
                 ) : null}
                 {user ? (
                     <Dropdown menu={{ items: accountMenuItems }} trigger={["click"]} placement="bottomRight">
-                        <button type="button" className={naturalIconClass} style={iconStyle} aria-label={user.displayName || user.username} title={`${user.displayName || user.username} · 积分 ${user.creditBalance ?? 0}`}>
+                        <button type="button" className={naturalIconClass} style={iconStyle} aria-label={user.displayName || user.username} title={`${user.displayName || user.username} · 积分 ${formatExactCredits(user.creditBalance ?? 0)}`}>
                             <User className="size-4" />
                         </button>
                     </Dropdown>

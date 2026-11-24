@@ -1,14 +1,15 @@
 /** 管理员后台接口：系统概览、公告发布、用户管控、兑换码、渠道模型、对象存储、WebDAV 与全站使用日志。 */
 import { randomBytes } from "node:crypto";
 import { zValidator } from "@hono/zod-validator";
-import { and, count, desc, eq, ilike, inArray, isNull, ne, or, sql, type SQL } from "drizzle-orm";
+import { and, asc, count, desc, eq, ilike, inArray, isNull, ne, or, sql, type SQL } from "drizzle-orm";
 import { Hono } from "hono";
 import { nanoid } from "nanoid";
 import { z } from "zod";
 
 import { announcements, canvasProjects, creditLedger, creditWallets, db, mediaObjects, redeemCodes, redeemRecords, userAssets, userSessions, userStorageGrants, users, workbenchLogs } from "../db/index.ts";
+import { cleanupExpiredUsageLogs, invalidateAnalyticsCache, normalizeDashboardRange, queryAnalyticsDashboard } from "../lib/analytics.ts";
 import { adjustWalletCredits, clearWalletCredits, getWalletBalance, queryConsumptionMetrics, queryCreditLedger, roundCredits } from "../lib/billing.ts";
-import { maskSecret } from "../lib/crypto.ts";
+import { hashPassword, maskSecret } from "../lib/crypto.ts";
 import {
   cleanupOrphanedUserMedia,
   collectUserMediaReferences,
@@ -21,6 +22,7 @@ import { createMediaReadUrl, deleteS3Object, testS3Connection } from "../lib/s3.
 import { isMailConfigReady, sendTestMail } from "../lib/mail.ts";
 import {
   getAuthPolicy,
+  getPlatformAnalyticsPolicy,
   getPlatformChannels,
   getPlatformGlobalNotice,
   getPlatformMailConfig,
@@ -28,6 +30,7 @@ import {
   getPlatformWebdavConfig,
   getS3StorageConfig,
   saveAuthPolicy,
+  savePlatformAnalyticsPolicy,
   savePlatformChannels,
   savePlatformGlobalNotice,
   savePlatformMailConfig,
@@ -239,6 +242,15 @@ const announcementSchema = z.object({
   createdAt: z.string().optional(),
 });
 
+/** 查询系统初始化时注册的首位用户（即初始管理员）ID。 */
+async function getInitialAdminUserId(): Promise<string | null> {
+  const firstUser = await db.query.users.findFirst({
+    orderBy: [asc(users.createdAt), asc(users.id)],
+    columns: { id: true },
+  });
+  return firstUser?.id ?? null;
+}
+
 export const adminRoutes = new Hono<AppEnv>();
 
 adminRoutes.use("*", requireAuth, requireAdmin);
@@ -415,7 +427,7 @@ adminRoutes.get("/users", async (c) => {
   if (status === "active" || status === "disabled") filters.push(eq(users.status, status));
   const condition = filters.length ? and(...filters) : undefined;
 
-  const [rows, [{ total }]] = await Promise.all([
+  const [rows, [{ total }], initialAdminId] = await Promise.all([
     db.query.users.findMany({
       where: condition,
       orderBy: sort === "storage_desc" ? [desc(users.storageUsedBytes), desc(users.createdAt)] : [desc(users.createdAt)],
@@ -438,6 +450,7 @@ adminRoutes.get("/users", async (c) => {
       },
     }),
     db.select({ total: count() }).from(users).where(condition),
+    getInitialAdminUserId(),
   ]);
 
   const userIds = rows.map((row) => row.id);
@@ -470,6 +483,7 @@ adminRoutes.get("/users", async (c) => {
       const quota = quotaMap.get(row.id);
       return {
         ...row,
+        isInitialAdmin: row.id === initialAdminId,
         storageQuotaBytes: quota?.storageQuotaBytes ?? row.storageQuotaBytes,
         storageQuotaExpiresAt: quota?.storageQuotaExpiresAt
           ? quota.storageQuotaExpiresAt.toISOString()
@@ -535,6 +549,7 @@ adminRoutes.get("/users/:id/detail", async (c) => {
   }
 
   const [
+    initialAdminId,
     creditBalance,
     consumption,
     quotaSummary,
@@ -548,6 +563,7 @@ adminRoutes.get("/users/:id/detail", async (c) => {
     recentLedger,
     sessionRows,
   ] = await Promise.all([
+    getInitialAdminUserId(),
     getWalletBalance(targetId),
     queryConsumptionMetrics(days, targetId),
     getUserStorageQuotaSummary(target),
@@ -581,7 +597,7 @@ adminRoutes.get("/users/:id/detail", async (c) => {
       })
       .from(creditLedger)
       .where(and(eq(creditLedger.userId, targetId), inArray(creditLedger.reason, ["redeem_code", "admin_adjust", "plan_grant"]))),
-    queryCreditLedger({ userId: targetId, page: 1, pageSize: 10 }),
+    queryCreditLedger({ userId: targetId, category: "recharge", page: 1, pageSize: 100 }),
     db.query.userSessions.findMany({
       where: eq(userSessions.userId, targetId),
       orderBy: [desc(userSessions.createdAt)],
@@ -601,6 +617,7 @@ adminRoutes.get("/users/:id/detail", async (c) => {
   return c.json({
     user: {
       ...target,
+      isInitialAdmin: target.id === initialAdminId,
       creditBalance,
       storageQuotaBytes: quotaSummary.storageQuotaBytes,
       storageQuotaExpiresAt: quotaSummary.storageQuotaExpiresAt ? quotaSummary.storageQuotaExpiresAt.toISOString() : null,
@@ -663,6 +680,32 @@ adminRoutes.post("/users/:id/credits", zValidator("json", adjustCreditsSchema), 
     meta: { adminId: c.get("user").id, note: body.note || "" },
   });
   return c.json({ ok: true, balance: result.balance });
+});
+
+const resetUserPasswordSchema = z.object({
+  newPassword: z.string().min(6, "新密码至少 6 位").max(128, "密码过长"),
+  revokeSessions: z.boolean().optional().default(true),
+});
+
+adminRoutes.post("/users/:id/password", zValidator("json", resetUserPasswordSchema), async (c) => {
+  const targetId = c.req.param("id");
+  const body = c.req.valid("json");
+  const target = await db.query.users.findFirst({ where: eq(users.id, targetId), columns: { id: true } });
+  if (!target) {
+    return c.json({ error: "用户不存在" }, 404);
+  }
+  const nextHash = await hashPassword(body.newPassword);
+  const now = new Date();
+  await db.transaction(async (tx) => {
+    await tx.update(users).set({ passwordHash: nextHash, updatedAt: now }).where(eq(users.id, targetId));
+    if (body.revokeSessions) {
+      await tx
+        .update(userSessions)
+        .set({ revokedAt: now })
+        .where(and(eq(userSessions.userId, targetId), isNull(userSessions.revokedAt)));
+    }
+  });
+  return c.json({ ok: true });
 });
 
 adminRoutes.put("/users/:id/storage-quota", zValidator("json", userStorageQuotaSchema), async (c) => {
@@ -998,6 +1041,16 @@ adminRoutes.patch("/users/:id", zValidator("json", updateUserSchema), async (c) 
   const nextRole = body.role ?? target.role;
   const nextStatus = body.status ?? target.status;
 
+  const initialAdminId = await getInitialAdminUserId();
+  if (targetId === initialAdminId) {
+    if (nextRole !== "admin") {
+      return c.json({ error: "系统初始管理员不可降级" }, 400);
+    }
+    if (nextStatus === "disabled") {
+      return c.json({ error: "系统初始管理员不可禁用" }, 400);
+    }
+  }
+
   if (target.role === "admin" && target.status === "active" && (nextRole !== "admin" || nextStatus !== "active")) {
     const [{ otherAdmins }] = await db
       .select({ otherAdmins: count() })
@@ -1246,6 +1299,40 @@ adminRoutes.post("/settings/storage-expiry/run", zValidator("json", runStorageEx
   const body = c.req.valid("json");
   const result = await runStorageExpirySweep({ dryRun: Boolean(body.dryRun) });
   return c.json(result);
+});
+
+const saveAnalyticsPolicySchema = z.object({
+  sampleIntervalMinutes: z.number().int().min(1).max(1440),
+  logRetentionDays: z.number().int().min(0).max(3650),
+});
+
+const cleanupLogsSchema = z.object({
+  retentionDays: z.number().int().min(1).max(3650).optional(),
+});
+
+adminRoutes.get("/dashboard", async (c) => {
+  const range = normalizeDashboardRange(c.req.query("range"));
+  const force = c.req.query("force") === "1" || c.req.query("force") === "true";
+  const dashboard = await queryAnalyticsDashboard({ range, force });
+  return c.json(dashboard);
+});
+
+adminRoutes.get("/settings/analytics", async (c) => {
+  const policy = await getPlatformAnalyticsPolicy();
+  return c.json(policy);
+});
+
+adminRoutes.put("/settings/analytics", zValidator("json", saveAnalyticsPolicySchema), async (c) => {
+  const body = c.req.valid("json");
+  const saved = await savePlatformAnalyticsPolicy(body, c.get("user").id);
+  invalidateAnalyticsCache();
+  return c.json({ ok: true, ...saved });
+});
+
+adminRoutes.post("/settings/analytics/cleanup-logs", zValidator("json", cleanupLogsSchema), async (c) => {
+  const body = c.req.valid("json");
+  const result = await cleanupExpiredUsageLogs(body.retentionDays);
+  return c.json({ ok: true, ...result });
 });
 
 adminRoutes.get("/settings/channels", async (c) => {

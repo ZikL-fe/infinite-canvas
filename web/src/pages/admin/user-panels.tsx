@@ -8,6 +8,7 @@ import { useNavigate } from "react-router-dom";
 
 import { useBatchZipDownload } from "@/hooks/use-batch-zip-download";
 import { useEmailCodeSender } from "@/hooks/use-email-code-sender";
+import { formatCompactCredits, formatExactCredits } from "@/lib/format-number";
 import { createImageThumbnail, createVideoThumbnail } from "@/lib/image-thumbnail";
 import { previewUrlFor } from "@/services/image-storage";
 import { ADMIN_TABLE_CLASS, ADMIN_TABLE_SCROLL, TableRowActions } from "@/pages/admin/components/table-row-actions";
@@ -424,27 +425,39 @@ export function UserOverviewPanel({ onOpenWallet }: { onOpenWallet?: () => void 
             <Row gutter={[16, 16]}>
                 <Col xs={24} sm={12} md={6}>
                     <Card loading={loading}>
-                        <Statistic
-                            title="当前可用积分"
-                            value={data?.creditBalance ?? 0}
-                            suffix={
-                                onOpenWallet ? (
-                                    <Button type="link" size="small" onClick={onOpenWallet}>
-                                        去兑换
-                                    </Button>
-                                ) : null
-                            }
-                        />
+                        <Tooltip title={`精确余额：${formatExactCredits(data?.creditBalance ?? 0)} 积分`}>
+                            <div>
+                                <Statistic
+                                    title="当前可用积分"
+                                    value={formatCompactCredits(data?.creditBalance ?? 0)}
+                                    suffix={
+                                        onOpenWallet ? (
+                                            <Button type="link" size="small" onClick={onOpenWallet}>
+                                                去兑换
+                                            </Button>
+                                        ) : null
+                                    }
+                                />
+                            </div>
+                        </Tooltip>
                     </Card>
                 </Col>
                 <Col xs={24} sm={12} md={6}>
                     <Card loading={loading}>
-                        <Statistic title="今日消耗积分" value={data?.todayConsumedCredits ?? 0} />
+                        <Tooltip title={`精确值：${formatExactCredits(data?.todayConsumedCredits ?? 0)} 积分`}>
+                            <div>
+                                <Statistic title="今日消耗积分" value={formatCompactCredits(data?.todayConsumedCredits ?? 0)} />
+                            </div>
+                        </Tooltip>
                     </Card>
                 </Col>
                 <Col xs={24} sm={12} md={6}>
                     <Card loading={loading}>
-                        <Statistic title="累计消耗积分" value={data?.totalConsumedCredits ?? 0} />
+                        <Tooltip title={`精确值：${formatExactCredits(data?.totalConsumedCredits ?? 0)} 积分`}>
+                            <div>
+                                <Statistic title="累计消耗积分" value={formatCompactCredits(data?.totalConsumedCredits ?? 0)} />
+                            </div>
+                        </Tooltip>
                     </Card>
                 </Col>
                 <Col xs={24} sm={12} md={6}>
@@ -671,7 +684,11 @@ export function ProfileSecurityPanel() {
             <Row gutter={[16, 16]}>
                 <Col xs={24} sm={12} md={6}>
                     <Card loading={loading}>
-                        <Statistic title="当前积分余额" value={detail?.creditBalance ?? 0} />
+                        <Tooltip title={`精确余额：${formatExactCredits(detail?.creditBalance ?? 0)} 积分`}>
+                            <div>
+                                <Statistic title="当前积分余额" value={formatCompactCredits(detail?.creditBalance ?? 0)} />
+                            </div>
+                        </Tooltip>
                     </Card>
                 </Col>
                 <Col xs={24} sm={12} md={6}>
@@ -1643,8 +1660,16 @@ export function MyWalletPanel({ compact = false, onOpenLogs }: { compact?: boole
             <Card size={compact ? "small" : "default"}>
                 <div className="flex flex-wrap items-center justify-between gap-4">
                     <div className="flex flex-wrap items-center gap-6">
-                        <Statistic title="当前可用积分" value={balance} />
-                        <Statistic title="筛选内入账总额" value={summary.totalRecharged} />
+                        <Tooltip title={`精确余额：${formatExactCredits(balance)} 积分`}>
+                            <div>
+                                <Statistic title="当前可用积分" value={formatCompactCredits(balance)} />
+                            </div>
+                        </Tooltip>
+                        <Tooltip title={`精确入账：${formatExactCredits(summary.totalRecharged)} 积分`}>
+                            <div>
+                                <Statistic title="筛选内入账总额" value={formatCompactCredits(summary.totalRecharged)} />
+                            </div>
+                        </Tooltip>
                         {onOpenLogs ? (
                             <Button type="link" size="small" onClick={onOpenLogs}>
                                 前往查看使用日志

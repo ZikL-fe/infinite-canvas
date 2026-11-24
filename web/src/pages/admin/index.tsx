@@ -3,10 +3,12 @@ import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { Alert, App, Button, Card, Col, DatePicker, Descriptions, Drawer, Form, Image, Input, InputNumber, Menu, Modal, Popconfirm, Progress, Radio, Result, Row, Select, Space, Statistic, Switch, Table, Tabs, Tag, Tooltip, Typography, Upload, theme as antdTheme } from "antd";
 import type { MenuProps, UploadProps } from "antd";
 import dayjs, { type Dayjs } from "dayjs";
-import { AudioLines, Copy, Coins, Cpu, Database, Download, FileIcon, FolderKanban, Gift, HardDrive, ImageIcon, LayoutDashboard, Mail, Megaphone, Menu as MenuIcon, Plus, RefreshCw, ScrollText, Send, Shield, Sliders, Trash2, UploadCloud, UserCheck, Users, Video, Wifi } from "lucide-react";
+import { AudioLines, BarChart3, Copy, Coins, Cpu, Database, Download, FileIcon, FolderKanban, Gift, HardDrive, ImageIcon, LayoutDashboard, Mail, Megaphone, Menu as MenuIcon, Plus, RefreshCw, ScrollText, Send, Shield, Sliders, Trash2, UploadCloud, UserCheck, Users, Video, Wifi } from "lucide-react";
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 
 import { ChannelEditorDrawer } from "@/components/layout/channel-editor-drawer";
+import { formatCompactCredits, formatExactCredits } from "@/lib/format-number";
+import { AnalyticsDashboardPanel } from "@/pages/admin/components/analytics-dashboard-panel";
 import { ADMIN_TABLE_CLASS, ADMIN_TABLE_SCROLL, TableRowActions } from "@/pages/admin/components/table-row-actions";
 import { UserDetailDrawer } from "@/pages/admin/components/user-detail-drawer";
 import { AnnouncementsCard, ConsumptionTrendCard, MEDIA_MODULE_OPTIONS, MediaModuleTags, MyMediaPanel, MyWalletPanel, ProfileSecurityPanel, UsageLogsPanel, UserOverviewPanel, WorkspaceSizeCell } from "@/pages/admin/user-panels";
@@ -22,6 +24,7 @@ import {
     type AnnouncementItem,
     type AnnouncementLevel,
     type MediaItem,
+    type PlatformAnalyticsPolicy,
     type RedeemCodeItem,
     type RedeemCodeKind,
     type S3Provider,
@@ -231,6 +234,9 @@ export default function AdminPage() {
     const [storageExpiryPreviewing, setStorageExpiryPreviewing] = useState(false);
     const [storageExpiryRunning, setStorageExpiryRunning] = useState(false);
     const [storageExpiryResult, setStorageExpiryResult] = useState<StorageExpirySweepResult | null>(null);
+    const [analyticsForm] = Form.useForm<PlatformAnalyticsPolicy>();
+    const [analyticsSaving, setAnalyticsSaving] = useState(false);
+    const [cleaningLogs, setCleaningLogs] = useState(false);
 
     const [mediaSubTab, setMediaSubTab] = useState<"media" | "canvas" | "image_workbench" | "video_workbench">("media");
     const [mediaItems, setMediaItems] = useState<MediaItem[]>([]);
@@ -258,7 +264,7 @@ export default function AdminPage() {
     const [authPolicySaving, setAuthPolicySaving] = useState(false);
 
     useEffect(() => {
-        const personalKeys = new Set(["user-overview", "usage-logs", "profile", "wallet", "my-media"]);
+        const personalKeys = new Set(["user-overview", "user-dashboard", "usage-logs", "profile", "wallet", "my-media"]);
         if (!isAdmin && !personalKeys.has(activeTab)) {
             switchTab("user-overview");
         }
@@ -391,11 +397,12 @@ export default function AdminPage() {
 
     const loadAuthAndWebdavSettings = useCallback(async () => {
         try {
-            const [authRes, webdavRes, mailRes, expiryRes] = await Promise.all([
+            const [authRes, webdavRes, mailRes, expiryRes, analyticsRes] = await Promise.all([
                 adminApi.getAuthSettings(),
                 adminApi.getWebdavSettings(),
                 adminApi.getMailSettings(),
                 adminApi.getStorageExpirySettings(),
+                adminApi.getAnalyticsSettings(),
             ]);
             setAllowRegister(authRes.allowRegister);
             setRequireEmailOnRegister(authRes.requireEmailOnRegister);
@@ -431,10 +438,14 @@ export default function AdminPage() {
                 cleanupWorkspaceData: expiryRes.cleanupWorkspaceData,
                 exemptAdmins: expiryRes.exemptAdmins,
             });
+            analyticsForm.setFieldsValue({
+                sampleIntervalMinutes: analyticsRes.sampleIntervalMinutes,
+                logRetentionDays: analyticsRes.logRetentionDays,
+            });
         } catch (error) {
             message.error(error instanceof Error ? error.message : "读取系统设置失败");
         }
-    }, [mailForm, message, webdavForm]);
+    }, [analyticsForm, mailForm, message, storageExpiryForm, webdavForm]);
 
     const loadRedeemCodes = useCallback(
         async (page = redeemPage, q = redeemQuery, status = redeemStatusFilter, kind = redeemActiveKind, pageSize = redeemPageSize) => {
@@ -1068,6 +1079,42 @@ export default function AdminPage() {
         }
     };
 
+    const handleSaveAnalyticsSettings = async (values: PlatformAnalyticsPolicy) => {
+        setAnalyticsSaving(true);
+        try {
+            const res = await adminApi.saveAnalyticsSettings({
+                sampleIntervalMinutes: Number(values.sampleIntervalMinutes || 5),
+                logRetentionDays: Number(values.logRetentionDays || 0),
+            });
+            analyticsForm.setFieldsValue({
+                sampleIntervalMinutes: res.sampleIntervalMinutes,
+                logRetentionDays: res.logRetentionDays,
+            });
+            message.success("数据采样与日志保留配置已保存");
+        } catch (error) {
+            message.error(error instanceof Error ? error.message : "保存配置失败");
+        } finally {
+            setAnalyticsSaving(false);
+        }
+    };
+
+    const handleCleanupExpiredLogs = async () => {
+        const rawDays = Number(analyticsForm.getFieldValue("logRetentionDays") || 0);
+        if (!Number.isFinite(rawDays) || rawDays <= 0) {
+            message.warning("请先设置大于 0 的日志保留天数（0 表示永久保留）");
+            return;
+        }
+        setCleaningLogs(true);
+        try {
+            const res = await adminApi.cleanupUsageLogs(rawDays);
+            message.success(`清理完成：保留最近 ${res.retentionDays} 天，共删除 ${res.deletedCount} 条过期调用日志`);
+        } catch (error) {
+            message.error(error instanceof Error ? error.message : "清理过期日志失败");
+        } finally {
+            setCleaningLogs(false);
+        }
+    };
+
     const announcementLevelMeta: Record<AnnouncementLevel, { label: string; color: string; dotColor: string }> = {
         default: { label: "默认", color: "default", dotColor: "#6b7280" },
         ongoing: { label: "进行中", color: "blue", dotColor: "#2563eb" },
@@ -1207,6 +1254,16 @@ export default function AdminPage() {
             ),
             children: <UserOverviewPanel onOpenWallet={() => switchTab("wallet")} />,
         },
+        {
+            key: "user-dashboard",
+            label: (
+                <span className="inline-flex items-center gap-1.5">
+                    <BarChart3 className="size-4" />
+                    数据看板
+                </span>
+            ),
+            children: <AnalyticsDashboardPanel scope="self" />,
+        },
         ...(!isAdmin
             ? [
                   {
@@ -1280,12 +1337,20 @@ export default function AdminPage() {
                                         </Col>
                                         <Col xs={24} sm={12} md={6}>
                                             <Card loading={overviewLoading}>
-                                                <Statistic title="累计消耗积分" value={overview?.totalConsumedCredits ?? 0} precision={4} />
+                                                <Tooltip title={`精确值：${formatExactCredits(overview?.totalConsumedCredits ?? 0)} 积分`}>
+                                                    <div>
+                                                        <Statistic title="累计消耗积分" value={formatCompactCredits(overview?.totalConsumedCredits ?? 0)} />
+                                                    </div>
+                                                </Tooltip>
                                             </Card>
                                         </Col>
                                         <Col xs={24} sm={12} md={6}>
                                             <Card loading={overviewLoading}>
-                                                <Statistic title="今日消耗积分" value={overview?.todayConsumedCredits ?? 0} precision={4} />
+                                                <Tooltip title={`精确值：${formatExactCredits(overview?.todayConsumedCredits ?? 0)} 积分`}>
+                                                    <div>
+                                                        <Statistic title="今日消耗积分" value={formatCompactCredits(overview?.todayConsumedCredits ?? 0)} />
+                                                    </div>
+                                                </Tooltip>
                                             </Card>
                                         </Col>
                                         <Col xs={24} sm={12} md={6}>
@@ -1410,6 +1475,16 @@ export default function AdminPage() {
                                     </Card>
                                 </div>
                             ),
+                        },
+                        {
+                            key: "dashboard",
+                            label: (
+                                <span className="inline-flex items-center gap-1.5">
+                                    <BarChart3 className="size-4" />
+                                    数据看板
+                                </span>
+                            ),
+                            children: <AnalyticsDashboardPanel scope="all" />,
                         },
                         {
                             key: "usage-logs",
@@ -1646,8 +1721,12 @@ export default function AdminPage() {
                                             {
                                                 title: "积分余额",
                                                 dataIndex: "creditBalance",
-                                                width: 95,
-                                                render: (balance?: number) => <Tag color="gold">{balance ?? 0}</Tag>,
+                                                width: 105,
+                                                render: (balance?: number) => (
+                                                    <Tooltip title={`精确余额：${formatExactCredits(balance ?? 0)} 积分`}>
+                                                        <Tag color="gold">{formatCompactCredits(balance ?? 0)}</Tag>
+                                                    </Tooltip>
+                                                ),
                                             },
                                             {
                                                 title: "画布 / 媒体",
@@ -1722,6 +1801,7 @@ export default function AdminPage() {
                                                             {
                                                                 key: "role",
                                                                 label: record.role === "admin" ? "降级" : "提权",
+                                                                disabled: Boolean(record.isInitialAdmin && record.role === "admin"),
                                                                 confirm: record.role === "admin" ? "确定将其降为普通用户吗？" : "确定将其设为系统管理员吗？",
                                                                 onClick: () => void handleUpdateUser(record.id, { role: record.role === "admin" ? "user" : "admin" }),
                                                             },
@@ -1729,7 +1809,7 @@ export default function AdminPage() {
                                                                 key: "status",
                                                                 label: record.status === "active" ? "禁用" : "启用",
                                                                 danger: record.status === "active",
-                                                                disabled: record.id === user.id,
+                                                                disabled: record.id === user.id || Boolean(record.isInitialAdmin),
                                                                 confirm: record.status === "active" ? "确定禁用该账号吗？其登录会话将立即失效。" : "确定重新启用该账号吗？",
                                                                 onClick: () => void handleUpdateUser(record.id, { status: record.status === "active" ? "disabled" : "active" }),
                                                             },
@@ -3027,6 +3107,97 @@ export default function AdminPage() {
                                                 />
                                             </Card>
                                         </div>
+                                    ),
+                                },
+                                {
+                                    key: "settings-analytics",
+                                    label: (
+                                        <span className="inline-flex items-center gap-1.5">
+                                            <BarChart3 className="size-3.5" />
+                                            数据与日志
+                                        </span>
+                                    ),
+                                    pageTitle: "系统设置 · 数据采样与日志保留",
+                                    children: (
+                                        <Card title="数据看板采样周期与使用日志保留策略">
+                                            <Alert
+                                                type="info"
+                                                showIcon
+                                                className="mb-4"
+                                                message="采样缓存与日志保留说明"
+                                                description="适当增大采样周期可避免高频访问看板反复聚合数据库；设置使用日志保留天数后，后台每 6 小时自动清理超出天数的 AI 调用日志（严格永久保留充值与管理员调账流水，不影响用户积分余额）。"
+                                            />
+                                            <Form
+                                                form={analyticsForm}
+                                                layout="vertical"
+                                                initialValues={{ sampleIntervalMinutes: 5, logRetentionDays: 0 }}
+                                                onFinish={handleSaveAnalyticsSettings}
+                                            >
+                                                <Row gutter={16}>
+                                                    <Col xs={24} md={12}>
+                                                        <Form.Item
+                                                            name="sampleIntervalMinutes"
+                                                            label="数据看板采样间隔（分钟，1 ~ 1440）"
+                                                            rules={[{ required: true, message: "请输入采样间隔" }]}
+                                                        >
+                                                            <InputNumber min={1} max={1440} precision={0} className="w-full" />
+                                                        </Form.Item>
+                                                        <div className="mb-4 flex flex-wrap gap-1.5">
+                                                            {[1, 5, 10, 15, 30, 60].map((mins) => (
+                                                                <Button
+                                                                    key={mins}
+                                                                    size="small"
+                                                                    onClick={() => analyticsForm.setFieldValue("sampleIntervalMinutes", mins)}
+                                                                >
+                                                                    {mins} 分钟
+                                                                </Button>
+                                                            ))}
+                                                        </div>
+                                                    </Col>
+                                                    <Col xs={24} md={12}>
+                                                        <Form.Item
+                                                            name="logRetentionDays"
+                                                            label="AI 使用日志保留天数（0 表示永久保留，最大 3650 天）"
+                                                            rules={[{ required: true, message: "请输入保留天数" }]}
+                                                        >
+                                                            <InputNumber min={0} max={3650} precision={0} className="w-full" />
+                                                        </Form.Item>
+                                                        <div className="mb-4 flex flex-wrap gap-1.5">
+                                                            {[
+                                                                { label: "永久保留", days: 0 },
+                                                                { label: "7 天", days: 7 },
+                                                                { label: "30 天", days: 30 },
+                                                                { label: "90 天", days: 90 },
+                                                                { label: "180 天", days: 180 },
+                                                                { label: "365 天", days: 365 },
+                                                            ].map((item) => (
+                                                                <Button
+                                                                    key={item.days}
+                                                                    size="small"
+                                                                    onClick={() => analyticsForm.setFieldValue("logRetentionDays", item.days)}
+                                                                >
+                                                                    {item.label}
+                                                                </Button>
+                                                            ))}
+                                                        </div>
+                                                    </Col>
+                                                </Row>
+                                                <Space wrap>
+                                                    <Button type="primary" htmlType="submit" loading={analyticsSaving}>
+                                                        保存配置
+                                                    </Button>
+                                                    <Popconfirm
+                                                        title="确定立即清理过期 AI 调用日志吗？"
+                                                        description="仅删除超出保留天数的调用记录，充值与管理员调账流水将永久保留。"
+                                                        onConfirm={() => void handleCleanupExpiredLogs()}
+                                                    >
+                                                        <Button danger loading={cleaningLogs}>
+                                                            立即清理过期日志
+                                                        </Button>
+                                                    </Popconfirm>
+                                                </Space>
+                                            </Form>
+                                        </Card>
                                     ),
                                 },
                             ],

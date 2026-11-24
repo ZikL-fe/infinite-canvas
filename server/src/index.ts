@@ -65,6 +65,10 @@ void import("./lib/storage-expiry.ts")
   .then((mod) => mod.startStorageExpiryScheduler())
   .catch((error) => console.error("[storage-expiry] scheduler init failed:", error));
 
+void import("./lib/analytics.ts")
+  .then((mod) => mod.startLogRetentionScheduler())
+  .catch((error) => console.error("[analytics] log retention scheduler init failed:", error));
+
 app.onError((error, c) => {
   console.error("[server] unhandled error:", error);
   return c.json({ error: error.message || "服务器内部错误" }, 500);

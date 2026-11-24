@@ -12,6 +12,7 @@ export const WEBDAV_CONFIG_KEY = "sync.webdav";
 export const MAIL_CONFIG_KEY = "mail.smtp";
 export const STORAGE_EXPIRY_POLICY_KEY = "storage.expiry";
 export const PLATFORM_NOTICE_KEY = "announcement.notice";
+export const ANALYTICS_POLICY_KEY = "analytics.policy";
 
 const settingsCache = new Map<string, { value: unknown; expiresAt: number }>();
 const settingsInFlight = new Map<string, Promise<unknown>>();
@@ -140,6 +141,11 @@ export type PlatformGlobalNotice = {
   title: string;
   content: string;
   updatedAt: string | null;
+};
+
+export type PlatformAnalyticsPolicy = {
+  sampleIntervalMinutes: number;
+  logRetentionDays: number;
 };
 
 export type S3Provider = "s3" | "r2" | "oss" | "cos";
@@ -472,6 +478,35 @@ export async function savePlatformGlobalNotice(
       set: { value: normalized, updatedBy, updatedAt: new Date() },
     });
   invalidateSettingCache(PLATFORM_NOTICE_KEY);
+  return normalized;
+}
+
+export async function getPlatformAnalyticsPolicy(): Promise<PlatformAnalyticsPolicy> {
+  return getCachedSetting(ANALYTICS_POLICY_KEY, async () => {
+    const row = await db.query.systemSettings.findFirst({ where: eq(systemSettings.key, ANALYTICS_POLICY_KEY) });
+    const raw = (row?.value || {}) as Partial<PlatformAnalyticsPolicy>;
+    const sample = Number(raw.sampleIntervalMinutes);
+    const retention = Number(raw.logRetentionDays);
+    return {
+      sampleIntervalMinutes: Number.isFinite(sample) && sample >= 1 ? Math.min(1440, Math.floor(sample)) : 5,
+      logRetentionDays: Number.isFinite(retention) && retention >= 0 ? Math.min(3650, Math.floor(retention)) : 0,
+    };
+  });
+}
+
+export async function savePlatformAnalyticsPolicy(policy: PlatformAnalyticsPolicy, updatedBy: string): Promise<PlatformAnalyticsPolicy> {
+  const normalized: PlatformAnalyticsPolicy = {
+    sampleIntervalMinutes: Math.max(1, Math.min(1440, Math.floor(Number(policy.sampleIntervalMinutes) || 5))),
+    logRetentionDays: Math.max(0, Math.min(3650, Math.floor(Number(policy.logRetentionDays) || 0))),
+  };
+  await db
+    .insert(systemSettings)
+    .values({ key: ANALYTICS_POLICY_KEY, value: normalized, updatedBy, updatedAt: new Date() })
+    .onConflictDoUpdate({
+      target: systemSettings.key,
+      set: { value: normalized, updatedBy, updatedAt: new Date() },
+    });
+  invalidateSettingCache(ANALYTICS_POLICY_KEY);
   return normalized;
 }
 

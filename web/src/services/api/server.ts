@@ -189,6 +189,7 @@ export type StorageQuotaDetail = {
 };
 
 export type AdminUserItem = LocalUser & {
+    isInitialAdmin?: boolean;
     baseStorageQuotaBytes?: number;
     baseStorageQuotaExpiresAt?: string | null;
     storageGrantsQuotaBytes?: number;
@@ -539,8 +540,60 @@ export type AccountSessionItem = {
     isCurrent: boolean;
 };
 
+export type DashboardRange = "today" | "24h" | "7d" | "30d";
+
+export type PlatformAnalyticsPolicy = {
+    sampleIntervalMinutes: number;
+    logRetentionDays: number;
+};
+
+export type AnalyticsDashboardResponse = {
+    range: DashboardRange;
+    sampledAt: string;
+    sampleIntervalMinutes: number;
+    bucketUnit: "hour" | "day";
+    summary: {
+        totalCalls: number;
+        totalConsumedCredits: number;
+        totalTokens: number;
+        inputTokens: number;
+        outputTokens: number;
+        cachedInputTokens: number;
+        avgRpm: number;
+        avgTpm: number;
+        successRate: number;
+        avgLatencyMs: number;
+        avgTokensPerSecond: number;
+    };
+    modelHealth: Array<{
+        model: string;
+        calls: number;
+        successRate: number;
+    }>;
+    buckets: string[];
+    models: string[];
+    modelCreditSeries: Array<{ model: string; data: number[] }>;
+    modelCallSeries: Array<{ model: string; data: number[] }>;
+    modelRanking: Array<{ model: string; calls: number; credits: number; successRate: number }>;
+    userRanking?: Array<{
+        userId: string;
+        username: string;
+        displayName: string;
+        email: string | null;
+        credits: number;
+        calls: number;
+    }>;
+    userTrendSeries?: Array<{
+        userId: string;
+        label: string;
+        data: number[];
+    }>;
+};
+
 export const accountApi = {
     getOverview: (days = 7) => requestServer<AccountOverviewResponse>(`/account/overview?days=${days}`),
+    getDashboard: (range: DashboardRange = "24h", force = false) =>
+        requestServer<AnalyticsDashboardResponse>(`/account/dashboard?range=${range}&force=${force ? 1 : 0}`),
     getProfile: () => requestServer<AccountProfileResponse>("/account/profile"),
     sendEmailBindCode: (email: string) =>
         requestServer<{ ok: boolean; cooldownSeconds: number; expiresInMinutes: number }>("/account/email/send-code", {
@@ -866,6 +919,8 @@ export function scheduleRefreshUserBalance() {
 
 export const adminApi = {
     getOverview: (days = 7) => requestServer<AdminOverview>(`/admin/overview?days=${days}`),
+    getDashboard: (range: DashboardRange = "24h", force = false) =>
+        requestServer<AnalyticsDashboardResponse>(`/admin/dashboard?range=${range}&force=${force ? 1 : 0}`),
     listAnnouncements: () => requestServer<{ items: AnnouncementItem[]; notice: PlatformGlobalNotice }>("/admin/announcements"),
     saveGlobalNotice: (payload: { enabled: boolean; title?: string; content?: string }) =>
         requestServer<{ notice: PlatformGlobalNotice }>("/admin/announcements/notice", { method: "PUT", body: JSON.stringify(payload) }),
@@ -889,6 +944,8 @@ export const adminApi = {
         requestServer<AdminUserDetailResponse>(`/admin/users/${encodeURIComponent(id)}/detail?days=${days}`),
     updateUser: (id: string, payload: { role?: UserRole; status?: UserStatus }) =>
         requestServer<{ user: AdminUserItem }>(`/admin/users/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(payload) }),
+    resetUserPassword: (id: string, payload: { newPassword: string; revokeSessions?: boolean }) =>
+        requestServer<{ ok: boolean }>(`/admin/users/${encodeURIComponent(id)}/password`, { method: "POST", body: JSON.stringify(payload) }),
     adjustUserCredits: (id: string, payload: { delta?: number; clear?: boolean; note?: string }) =>
         requestServer<{ ok: boolean; balance: number }>(`/admin/users/${encodeURIComponent(id)}/credits`, { method: "POST", body: JSON.stringify(payload) }),
     updateUserStorageQuota: (id: string, payload: { storageQuotaBytes: number; storageQuotaExpiresAt?: string | null; recalculateUsedBytes?: boolean }) =>
@@ -936,6 +993,17 @@ export const adminApi = {
         requestServer<StorageExpirySweepResult>("/admin/settings/storage-expiry/run", {
             method: "POST",
             body: JSON.stringify({ dryRun: Boolean(payload?.dryRun) }),
+        }),
+    getAnalyticsSettings: () => requestServer<PlatformAnalyticsPolicy>("/admin/settings/analytics"),
+    saveAnalyticsSettings: (payload: PlatformAnalyticsPolicy) =>
+        requestServer<{ ok: boolean } & PlatformAnalyticsPolicy>("/admin/settings/analytics", {
+            method: "PUT",
+            body: JSON.stringify(payload),
+        }),
+    cleanupUsageLogs: (retentionDays?: number) =>
+        requestServer<{ ok: boolean; retentionDays: number; deletedCount: number }>("/admin/settings/analytics/cleanup-logs", {
+            method: "POST",
+            body: JSON.stringify(retentionDays ? { retentionDays } : {}),
         }),
     getChannelSettings: () => requestServer<{ channels: AdminChannelItem[] }>("/admin/settings/channels"),
     saveChannelSettings: (channels: AdminChannelItem[]) =>

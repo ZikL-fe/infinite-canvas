@@ -5,6 +5,7 @@ import { Hono } from "hono";
 import { z } from "zod";
 
 import { announcements, canvasProjects, db, mediaObjects, userAssets, userSessions, users } from "../db/index.ts";
+import { normalizeDashboardRange, queryAnalyticsDashboard } from "../lib/analytics.ts";
 import { getWalletBalance, queryConsumptionMetrics } from "../lib/billing.ts";
 import { hashPassword, sha256Hex, verifyPassword } from "../lib/crypto.ts";
 import { issueEmailVerificationCode, verifyAndConsumeEmailCode } from "../lib/email-verification.ts";
@@ -84,6 +85,14 @@ accountRoutes.get("/overview", async (c) => {
     ...consumption,
     announcements: announcementList,
   });
+});
+
+accountRoutes.get("/dashboard", async (c) => {
+  const authUser = c.get("user");
+  const range = normalizeDashboardRange(c.req.query("range"));
+  const force = c.req.query("force") === "1" || c.req.query("force") === "true";
+  const dashboard = await queryAnalyticsDashboard({ range, userId: authUser.id, force });
+  return c.json(dashboard);
 });
 
 accountRoutes.get("/profile", async (c) => {
