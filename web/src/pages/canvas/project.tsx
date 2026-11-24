@@ -1308,7 +1308,7 @@ function InfiniteCanvasPage() {
             await deleteCanvasProjectsWithCloud([projectId]);
             navigate("/canvas");
         } catch (error) {
-            message.error(error instanceof Error ? error.message : "删除画布失败，请重试");
+            message.error(error instanceof Error ? error.message : t("canvas.projectPage.deleteFailed"));
         }
     }, [message, navigate, projectId]);
 

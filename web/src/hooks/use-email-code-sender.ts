@@ -1,9 +1,11 @@
 /** 邮箱验证码发送与倒计时 Hook：统一处理防重复点击、60 秒冷却倒计时与结果提示。 */
 import { useCallback, useEffect, useState } from "react";
 import { App } from "antd";
+import { useTranslation } from "react-i18next";
 
 export function useEmailCodeSender() {
     const { message } = App.useApp();
+    const { t } = useTranslation();
     const [sending, setSending] = useState(false);
     const [cooldown, setCooldown] = useState(0);
 
@@ -16,22 +18,22 @@ export function useEmailCodeSender() {
     }, [cooldown]);
 
     const sendCode = useCallback(
-        async (action: () => Promise<{ cooldownSeconds?: number }>, successMsg = "验证码已发送，请查收邮箱") => {
+        async (action: () => Promise<{ cooldownSeconds?: number }>, successMsg?: string) => {
             if (sending || cooldown > 0) return false;
             setSending(true);
             try {
                 const res = await action();
                 setCooldown(res.cooldownSeconds || 60);
-                message.success(successMsg);
+                message.success(successMsg || t("emailCode.sent"));
                 return true;
             } catch (error) {
-                message.error(error instanceof Error ? error.message : "发送验证码失败");
+                message.error(error instanceof Error ? error.message : t("emailCode.sendFailed"));
                 return false;
             } finally {
                 setSending(false);
             }
         },
-        [cooldown, message, sending],
+        [cooldown, message, sending, t],
     );
 
     const resetCooldown = useCallback(() => setCooldown(0), []);

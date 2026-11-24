@@ -55,18 +55,18 @@ export function UserStatusActions({ showConfig = true, variant = "default", onOp
               {
                   key: "profile",
                   disabled: true,
-                  label: `${user.displayName || user.username}（${user.role === "admin" ? t("topNav.roleAdmin") : t("topNav.roleUser")}）`,
+                  label: `${user.displayName || user.username} (${user.role === "admin" ? t("topNav.roleAdmin") : t("topNav.roleUser")})`,
               },
               {
                   key: "credits",
                   icon: <Coins className="size-4" />,
-                  label: `积分钱包（余额：${formatCompactCredits(user.creditBalance ?? 0)}）`,
+                  label: t("topNav.walletItem", { balance: formatCompactCredits(user.creditBalance ?? 0) }),
                   onClick: () => setWalletOpen(true),
               },
               {
                   key: "storage-quota",
                   icon: <HardDrive className="size-4" />,
-                  label: `云端存储（${formatStoragePair(user.storageUsedBytes, user.storageQuotaBytes)}）`,
+                  label: t("topNav.storageItem", { pair: formatStoragePair(user.storageUsedBytes, user.storageQuotaBytes) }),
                   onClick: () => navigate(user.role === "admin" ? "/admin?tab=my-media" : "/console?tab=my-media"),
               },
               {
@@ -120,7 +120,7 @@ export function UserStatusActions({ showConfig = true, variant = "default", onOp
                                     <div className="flex items-center justify-between text-xs" style={{ color: token.colorTextSecondary }}>
                                         <span className="inline-flex items-center gap-1.5">
                                             <Coins className="size-3.5" />
-                                            积分余额
+                                            {t("topNav.creditBalance")}
                                         </span>
                                         <button
                                             type="button"
@@ -128,7 +128,7 @@ export function UserStatusActions({ showConfig = true, variant = "default", onOp
                                             style={{ color: token.colorPrimary }}
                                             onClick={() => setWalletOpen(true)}
                                         >
-                                            钱包
+                                            {t("topNav.wallet")}
                                         </button>
                                     </div>
                                     <div className="mt-1 text-base font-semibold tabular-nums" style={{ color: token.colorText }}>
@@ -139,7 +139,7 @@ export function UserStatusActions({ showConfig = true, variant = "default", onOp
                                     <div className="flex items-center justify-between text-xs" style={{ color: token.colorTextSecondary }}>
                                         <span className="inline-flex items-center gap-1.5">
                                             <HardDrive className="size-3.5" />
-                                            云端存储
+                                            {t("topNav.cloudStorage")}
                                         </span>
                                         <button
                                             type="button"
@@ -147,7 +147,7 @@ export function UserStatusActions({ showConfig = true, variant = "default", onOp
                                             style={{ color: token.colorPrimary }}
                                             onClick={() => navigate(user.role === "admin" ? "/admin?tab=my-media" : "/console?tab=my-media")}
                                         >
-                                            管理
+                                            {t("topNav.manage")}
                                         </button>
                                     </div>
                                     <div className="mt-1 text-xs font-medium tabular-nums" style={{ color: token.colorText }}>
@@ -156,10 +156,10 @@ export function UserStatusActions({ showConfig = true, variant = "default", onOp
                                     <Progress percent={storagePercent} size="small" showInfo={false} status={storageOverLimit ? "exception" : "normal"} className="!my-1" />
                                     <div className="text-[11px]" style={{ color: storageExpired ? token.colorError : token.colorTextTertiary }}>
                                         {storageExpired
-                                            ? `已过期（${new Date(user.storageQuotaExpiresAt!).toLocaleDateString("zh-CN")}）`
+                                            ? t("topNav.storageExpiredAt", { date: new Date(user.storageQuotaExpiresAt!).toLocaleDateString(locale) })
                                             : user.storageQuotaExpiresAt
-                                              ? `有效期至 ${new Date(user.storageQuotaExpiresAt).toLocaleDateString("zh-CN")}`
-                                              : "永久有效"}
+                                              ? t("topNav.storageExpiresAt", { date: new Date(user.storageQuotaExpiresAt).toLocaleDateString(locale) })
+                                              : t("topNav.storagePermanent")}
                                     </div>
                                 </div>
                             </div>
@@ -171,7 +171,7 @@ export function UserStatusActions({ showConfig = true, variant = "default", onOp
                             onClick={() => setWalletOpen(true)}
                         >
                             <Coins className="size-3.5 shrink-0" />
-                            <span>积分 {formatCompactCredits(user.creditBalance ?? 0)}</span>
+                            <span>{t("topNav.creditsBadge", { balance: formatCompactCredits(user.creditBalance ?? 0) })}</span>
                         </button>
                     </Popover>
                 ) : null}
@@ -182,7 +182,7 @@ export function UserStatusActions({ showConfig = true, variant = "default", onOp
                 ) : null}
                 {user ? (
                     <Dropdown menu={{ items: accountMenuItems }} trigger={["click"]} placement="bottomRight">
-                        <button type="button" className={naturalIconClass} style={iconStyle} aria-label={user.displayName || user.username} title={`${user.displayName || user.username} · 积分 ${formatExactCredits(user.creditBalance ?? 0)}`}>
+                        <button type="button" className={naturalIconClass} style={iconStyle} aria-label={user.displayName || user.username} title={t("topNav.creditsTooltip", { name: user.displayName || user.username, balance: formatExactCredits(user.creditBalance ?? 0) })}>
                             <User className="size-4" />
                         </button>
                     </Dropdown>
@@ -195,7 +195,7 @@ export function UserStatusActions({ showConfig = true, variant = "default", onOp
                 )}
             </div>
 
-            <Modal open={walletOpen} title="我的积分钱包" onCancel={() => setWalletOpen(false)} footer={null} width={920} destroyOnHidden>
+            <Modal open={walletOpen} title={t("topNav.myWalletTitle")} onCancel={() => setWalletOpen(false)} footer={null} width={920} destroyOnHidden>
                 <MyWalletPanel
                     compact
                     onOpenLogs={() => {

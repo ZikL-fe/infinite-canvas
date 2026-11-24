@@ -2,6 +2,7 @@ import type { CSSProperties } from "react";
 import { useEffect } from "react";
 import { Badge, Button, Empty, Modal, Tag, Timeline, Typography, theme as antdTheme } from "antd";
 import { Bell, Megaphone } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { Streamdown } from "streamdown";
 
 import {
@@ -9,14 +10,14 @@ import {
     timelineNotificationKey,
     useNotificationStore,
 } from "@/stores/use-notification-store";
-import type { AnnouncementItem, AnnouncementLevel } from "@/services/api/server";
+import type { AnnouncementLevel } from "@/services/api/server";
 
-const levelMeta: Record<AnnouncementLevel, { label: string; color: string; dotColor: string; timelineColor: string }> = {
-    default: { label: "默认", color: "default", dotColor: "#6b7280", timelineColor: "gray" },
-    ongoing: { label: "进行中", color: "blue", dotColor: "#2563eb", timelineColor: "blue" },
-    success: { label: "成功", color: "green", dotColor: "#16a34a", timelineColor: "green" },
-    warning: { label: "警告", color: "orange", dotColor: "#f97316", timelineColor: "orange" },
-    error: { label: "错误", color: "red", dotColor: "#ef4444", timelineColor: "red" },
+const levelMeta: Record<AnnouncementLevel, { color: string; dotColor: string; timelineColor: string }> = {
+    default: { color: "default", dotColor: "#6b7280", timelineColor: "gray" },
+    ongoing: { color: "blue", dotColor: "#2563eb", timelineColor: "blue" },
+    success: { color: "green", dotColor: "#16a34a", timelineColor: "green" },
+    warning: { color: "orange", dotColor: "#f97316", timelineColor: "orange" },
+    error: { color: "red", dotColor: "#ef4444", timelineColor: "red" },
 };
 
 type NotificationBellModalProps = {
@@ -25,6 +26,7 @@ type NotificationBellModalProps = {
 };
 
 export function NotificationBellModal({ className, style }: NotificationBellModalProps) {
+    const { i18n, t } = useTranslation();
     const { token } = antdTheme.useToken();
     const notice = useNotificationStore((state) => state.notice);
     const timeline = useNotificationStore((state) => state.timeline);
@@ -66,8 +68,8 @@ export function NotificationBellModal({ className, style }: NotificationBellModa
                     }
                     style={style}
                     onClick={() => openModal()}
-                    aria-label={totalUnread > 0 ? `系统公告（${totalUnread} 条未读）` : "系统公告"}
-                    title={totalUnread > 0 ? `系统公告（${totalUnread} 条未读）` : "系统公告"}
+                    aria-label={totalUnread > 0 ? t("notifications.titleUnread", { count: totalUnread }) : t("notifications.title")}
+                    title={totalUnread > 0 ? t("notifications.titleUnread", { count: totalUnread }) : t("notifications.title")}
                 >
                     <Bell className="size-4" />
                 </button>
@@ -82,17 +84,17 @@ export function NotificationBellModal({ className, style }: NotificationBellModa
                 title={
                     <div className="pr-6">
                         <div className="text-lg font-semibold leading-tight" style={{ color: token.colorTextHeading }}>
-                            系统公告
+                            {t("notifications.title")}
                         </div>
                         <div className="mt-0.5 text-xs font-normal" style={{ color: token.colorTextSecondary }}>
-                            最新平台更新和通知
+                            {t("notifications.subtitle")}
                         </div>
                     </div>
                 }
                 footer={
                     <div className="flex items-center justify-end gap-2">
                         <Button type="primary" onClick={closeModalAndMarkRead}>
-                            我知道了
+                            {t("notifications.acknowledge")}
                         </Button>
                     </div>
                 }
@@ -124,7 +126,7 @@ export function NotificationBellModal({ className, style }: NotificationBellModa
                         }
                     >
                         <Bell className="size-3.5" />
-                        <span>通知</span>
+                        <span>{t("notifications.tabNotice")}</span>
                         {hasUnreadNotice ? (
                             <span
                                 className="inline-block size-2 rounded-full"
@@ -153,7 +155,7 @@ export function NotificationBellModal({ className, style }: NotificationBellModa
                         }
                     >
                         <Megaphone className="size-3.5" />
-                        <span>时间线</span>
+                        <span>{t("notifications.tabTimeline")}</span>
                         {unreadTimelineCount > 0 ? (
                             <Tag color="red" style={{ marginInlineEnd: 0, lineHeight: "16px", paddingInline: 6 }}>
                                 {unreadTimelineCount}
@@ -179,7 +181,7 @@ export function NotificationBellModal({ className, style }: NotificationBellModa
                                         </Typography.Title>
                                         {notice.updatedAt ? (
                                             <Typography.Text type="secondary" className="shrink-0 text-xs">
-                                                {new Date(notice.updatedAt).toLocaleString("zh-CN")}
+                                                {new Date(notice.updatedAt).toLocaleString(i18n.resolvedLanguage)}
                                             </Typography.Text>
                                         ) : null}
                                     </div>
@@ -194,20 +196,21 @@ export function NotificationBellModal({ className, style }: NotificationBellModa
                                 </div>
                                 {!notice.title && notice.updatedAt ? (
                                     <div className="mt-3 border-t pt-2 text-right text-xs" style={{ borderColor: token.colorBorderSecondary, color: token.colorTextSecondary }}>
-                                        更新于 {new Date(notice.updatedAt).toLocaleString("zh-CN")}
+                                        {t("notifications.updatedAt", { time: new Date(notice.updatedAt).toLocaleString(i18n.resolvedLanguage) })}
                                     </div>
                                 ) : null}
                             </div>
                         ) : (
                             <div className="py-10">
-                                <Empty description="暂无全局公告" image={Empty.PRESENTED_IMAGE_SIMPLE} />
+                                <Empty description={t("notifications.emptyNotice")} image={Empty.PRESENTED_IMAGE_SIMPLE} />
                             </div>
                         )
                     ) : timeline.length ? (
                         <div className="pt-2">
                             <Timeline
                                 items={timeline.map((item) => {
-                                    const lv = levelMeta[item.level] || levelMeta.default;
+                                    const lvKey = item.level in levelMeta ? item.level : "default";
+                                    const lv = levelMeta[lvKey];
                                     const isUnread = !readTimelineSet.has(timelineNotificationKey(item));
                                     return {
                                         color: lv.timelineColor,
@@ -224,17 +227,17 @@ export function NotificationBellModal({ className, style }: NotificationBellModa
                                                         <Tag color={lv.color} style={{ marginInlineEnd: 0 }}>
                                                             <span className="inline-flex items-center gap-1.5">
                                                                 <span className="inline-block size-2 rounded-full" style={{ backgroundColor: lv.dotColor }} />
-                                                                <span>{lv.label}</span>
+                                                                <span>{t(`notifications.levels.${lvKey}`)}</span>
                                                             </span>
                                                         </Tag>
                                                         {item.isPinned ? (
                                                             <Tag color="gold" style={{ marginInlineEnd: 0 }}>
-                                                                置顶
+                                                                {t("notifications.pinned")}
                                                             </Tag>
                                                         ) : null}
                                                         {isUnread ? (
                                                             <Tag color="red" style={{ marginInlineEnd: 0 }}>
-                                                                未读
+                                                                {t("notifications.unread")}
                                                             </Tag>
                                                         ) : null}
                                                         <Typography.Text strong className="text-sm">
@@ -242,7 +245,7 @@ export function NotificationBellModal({ className, style }: NotificationBellModa
                                                         </Typography.Text>
                                                     </div>
                                                     <Typography.Text type="secondary" className="text-xs">
-                                                        {new Date(item.createdAt).toLocaleString("zh-CN")}
+                                                        {new Date(item.createdAt).toLocaleString(i18n.resolvedLanguage)}
                                                     </Typography.Text>
                                                 </div>
                                                 <Typography.Paragraph
@@ -260,7 +263,7 @@ export function NotificationBellModal({ className, style }: NotificationBellModa
                         </div>
                     ) : (
                         <div className="py-10">
-                            <Empty description="暂无时间线通知" image={Empty.PRESENTED_IMAGE_SIMPLE} />
+                            <Empty description={t("notifications.emptyTimeline")} image={Empty.PRESENTED_IMAGE_SIMPLE} />
                         </div>
                     )}
                 </div>

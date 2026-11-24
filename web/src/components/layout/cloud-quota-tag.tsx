@@ -1,5 +1,6 @@
 import { Tag } from "antd";
 import { HardDrive } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
 
 import { formatStoragePair } from "@/lib/image-utils";
@@ -7,6 +8,7 @@ import { useUserStore } from "@/stores/use-user-store";
 
 /** 工作台标题下方的云端存储配额标签，点击跳转到云端媒体管理。 */
 export function CloudQuotaTag() {
+    const { t } = useTranslation();
     const navigate = useNavigate();
     const user = useUserStore((state) => state.user);
     if (!user) return null;
@@ -23,8 +25,8 @@ export function CloudQuotaTag() {
             >
                 <span className="inline-flex items-center gap-1">
                     <HardDrive className="size-3" />
-                    云端配额：{formatStoragePair(user.storageUsedBytes, user.storageQuotaBytes)}
-                    {expired ? "（已过期）" : exceeded ? "（需扩容）" : ""}
+                    {t("cloud.quotaTag", { pair: formatStoragePair(user.storageUsedBytes, user.storageQuotaBytes) })}
+                    {expired ? t("cloud.quotaExpiredSuffix") : exceeded ? t("cloud.quotaExpandSuffix") : ""}
                 </span>
             </Tag>
         </div>

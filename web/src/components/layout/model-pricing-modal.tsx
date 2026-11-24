@@ -1,7 +1,9 @@
 /** 模型积分计费设置弹窗与摘要格式化：支持对话按 M、生图按张/分辨率、视频按秒/次与参考视频加价、语音按秒。 */
 import { Alert, Form, InputNumber, Modal, Radio, Switch } from "antd";
 import { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 
+import i18n from "@/i18n";
 import type {
     AudioModelPricing,
     ImageModelPricing,
@@ -12,14 +14,18 @@ import type {
 } from "@/stores/use-config-store";
 
 export function formatModelPricingSummary(capability: ModelCapability, pricing?: ModelPricing): string {
-    if (!pricing) return "免费";
+    if (!pricing) return i18n.t("pricing.free");
     if (capability === "text" && pricing.mode === "token") {
-        if (!pricing.inputPerMillion && !pricing.cachedInputPerMillion && !pricing.outputPerMillion) return "免费";
-        return `入${pricing.inputPerMillion} / 缓${pricing.cachedInputPerMillion} / 出${pricing.outputPerMillion} 积分/M`;
+        if (!pricing.inputPerMillion && !pricing.cachedInputPerMillion && !pricing.outputPerMillion) return i18n.t("pricing.free");
+        return i18n.t("pricing.tokenSummary", {
+            input: pricing.inputPerMillion,
+            cached: pricing.cachedInputPerMillion,
+            output: pricing.outputPerMillion,
+        });
     }
     if (capability === "image") {
         if (pricing.mode === "per_image") {
-            return pricing.perImage ? `${pricing.perImage} 积分/张` : "免费";
+            return pricing.perImage ? i18n.t("pricing.perImage", { price: pricing.perImage }) : i18n.t("pricing.free");
         }
         if (pricing.mode === "per_resolution" && pricing.resolutionPrices) {
             const p = pricing.resolutionPrices;
@@ -27,9 +33,9 @@ export function formatModelPricingSummary(capability: ModelCapability, pricing?:
                 p["1k"] !== undefined ? `1K:${p["1k"]}` : "",
                 p["2k"] !== undefined ? `2K:${p["2k"]}` : "",
                 p["4k"] !== undefined ? `4K:${p["4k"]}` : "",
-                `默认:${p.default ?? 0}`,
+                i18n.t("pricing.defaultLabel", { price: p.default ?? 0 }),
             ].filter(Boolean);
-            return parts.join(" · ") + " 积分/张";
+            return parts.join(" · ") + i18n.t("pricing.perImageUnit");
         }
     }
     if (capability === "video") {
@@ -37,21 +43,23 @@ export function formatModelPricingSummary(capability: ModelCapability, pricing?:
         const base =
             vp.mode === "per_second"
                 ? vp.perSecond
-                    ? `${vp.perSecond} 积分/秒`
-                    : "免费"
+                    ? i18n.t("pricing.perSecond", { price: vp.perSecond })
+                    : i18n.t("pricing.free")
                 : vp.perRequest
-                  ? `${vp.perRequest} 积分/次`
-                  : "免费";
+                  ? i18n.t("pricing.perRequest", { price: vp.perRequest })
+                  : i18n.t("pricing.free");
         if (vp.chargeReferenceVideo && vp.referenceVideoPrice) {
-            const extra = vp.referenceVideoMode === "per_second" ? `参考+${vp.referenceVideoPrice}/秒` : `参考+${vp.referenceVideoPrice}/次`;
-            return `${base}（${extra}）`;
+            const extra = vp.referenceVideoMode === "per_second"
+                ? i18n.t("pricing.refPerSecond", { price: vp.referenceVideoPrice })
+                : i18n.t("pricing.refPerRequest", { price: vp.referenceVideoPrice });
+            return i18n.t("pricing.withRef", { base, extra });
         }
         return base;
     }
     if (capability === "audio" && pricing.mode === "per_second") {
-        return pricing.perSecond ? `${pricing.perSecond} 积分/秒` : "免费";
+        return pricing.perSecond ? i18n.t("pricing.perSecond", { price: pricing.perSecond }) : i18n.t("pricing.free");
     }
-    return "免费";
+    return i18n.t("pricing.free");
 }
 
 function defaultPricingFor(capability: ModelCapability): ModelPricing {
@@ -76,6 +84,7 @@ export function ModelPricingModal({
     onSave: (pricing?: ModelPricing) => void;
     onClose: () => void;
 }) {
+    const { t } = useTranslation();
     const [textPricing, setTextPricing] = useState<TextModelPricing>({ mode: "token", inputPerMillion: 0, cachedInputPerMillion: 0, outputPerMillion: 0 });
     const [imageMode, setImageMode] = useState<"per_image" | "per_resolution">("per_image");
     const [perImage, setPerImage] = useState(0);
@@ -158,18 +167,18 @@ export function ModelPricingModal({
     };
 
     return (
-        <Modal open={open} title={`积分计费设置 · ${modelName}`} onOk={handleOk} onCancel={onClose} okText="保存计费" cancelText="取消" destroyOnHidden>
-            <Alert type="info" showIcon className="mb-4" message="设为 0 表示免费调用；支持小数（最高 4 位小数精度）" />
+        <Modal open={open} title={t("pricing.modalTitle", { model: modelName })} onOk={handleOk} onCancel={onClose} okText={t("pricing.savePricing")} cancelText={t("common.cancel")} destroyOnHidden>
+            <Alert type="info" showIcon className="mb-4" message={t("pricing.freeHint")} />
             <Form layout="vertical">
                 {capability === "text" ? (
                     <>
-                        <Form.Item label="输入积分 / 1M Tokens">
+                        <Form.Item label={t("pricing.inputPerMillion")}>
                             <InputNumber className="w-full" min={0} step={0.1} value={textPricing.inputPerMillion} onChange={(v) => setTextPricing((p) => ({ ...p, inputPerMillion: Number(v || 0) }))} />
                         </Form.Item>
-                        <Form.Item label="缓存命中输入积分 / 1M Tokens">
+                        <Form.Item label={t("pricing.cachedInputPerMillion")}>
                             <InputNumber className="w-full" min={0} step={0.1} value={textPricing.cachedInputPerMillion} onChange={(v) => setTextPricing((p) => ({ ...p, cachedInputPerMillion: Number(v || 0) }))} />
                         </Form.Item>
-                        <Form.Item label="输出积分 / 1M Tokens">
+                        <Form.Item label={t("pricing.outputPerMillion")}>
                             <InputNumber className="w-full" min={0} step={0.1} value={textPricing.outputPerMillion} onChange={(v) => setTextPricing((p) => ({ ...p, outputPerMillion: Number(v || 0) }))} />
                         </Form.Item>
                     </>
@@ -177,28 +186,28 @@ export function ModelPricingModal({
 
                 {capability === "image" ? (
                     <>
-                        <Form.Item label="图片计费方式">
+                        <Form.Item label={t("pricing.imageMode")}>
                             <Radio.Group value={imageMode} onChange={(e) => setImageMode(e.target.value)}>
-                                <Radio.Button value="per_image">按张数计费</Radio.Button>
-                                <Radio.Button value="per_resolution">按分辨率计费</Radio.Button>
+                                <Radio.Button value="per_image">{t("pricing.perImageMode")}</Radio.Button>
+                                <Radio.Button value="per_resolution">{t("pricing.perResolutionMode")}</Radio.Button>
                             </Radio.Group>
                         </Form.Item>
                         {imageMode === "per_image" ? (
-                            <Form.Item label="每张图片消耗积分">
+                            <Form.Item label={t("pricing.creditsPerImage")}>
                                 <InputNumber className="w-full" min={0} step={0.5} value={perImage} onChange={(v) => setPerImage(Number(v || 0))} />
                             </Form.Item>
                         ) : (
                             <div className="grid grid-cols-2 gap-3">
-                                <Form.Item label="1K 每张积分（留空走默认）">
+                                <Form.Item label={t("pricing.credits1k")}>
                                     <InputNumber className="w-full" min={0} step={0.5} value={res1k} onChange={(v) => setRes1k(v === null ? undefined : Number(v))} />
                                 </Form.Item>
-                                <Form.Item label="2K 每张积分（留空走默认）">
+                                <Form.Item label={t("pricing.credits2k")}>
                                     <InputNumber className="w-full" min={0} step={0.5} value={res2k} onChange={(v) => setRes2k(v === null ? undefined : Number(v))} />
                                 </Form.Item>
-                                <Form.Item label="4K 每张积分（留空走默认）">
+                                <Form.Item label={t("pricing.credits4k")}>
                                     <InputNumber className="w-full" min={0} step={0.5} value={res4k} onChange={(v) => setRes4k(v === null ? undefined : Number(v))} />
                                 </Form.Item>
-                                <Form.Item label="默认 / 自动 每张积分">
+                                <Form.Item label={t("pricing.creditsDefault")}>
                                     <InputNumber className="w-full" min={0} step={0.5} value={resDefault} onChange={(v) => setResDefault(Number(v || 0))} />
                                 </Form.Item>
                             </div>
@@ -208,33 +217,33 @@ export function ModelPricingModal({
 
                 {capability === "video" ? (
                     <>
-                        <Form.Item label="视频计费方式">
+                        <Form.Item label={t("pricing.videoMode")}>
                             <Radio.Group value={videoMode} onChange={(e) => setVideoMode(e.target.value)}>
-                                <Radio.Button value="per_second">按秒计费</Radio.Button>
-                                <Radio.Button value="per_request">按请求次数计费</Radio.Button>
+                                <Radio.Button value="per_second">{t("pricing.perSecondMode")}</Radio.Button>
+                                <Radio.Button value="per_request">{t("pricing.perRequestMode")}</Radio.Button>
                             </Radio.Group>
                         </Form.Item>
                         {videoMode === "per_second" ? (
-                            <Form.Item label="每秒消耗积分">
+                            <Form.Item label={t("pricing.creditsPerSecond")}>
                                 <InputNumber className="w-full" min={0} step={0.5} value={videoPerSecond} onChange={(v) => setVideoPerSecond(Number(v || 0))} />
                             </Form.Item>
                         ) : (
-                            <Form.Item label="每次请求消耗积分">
+                            <Form.Item label={t("pricing.creditsPerRequest")}>
                                 <InputNumber className="w-full" min={0} step={1} value={videoPerRequest} onChange={(v) => setVideoPerRequest(Number(v || 0))} />
                             </Form.Item>
                         )}
-                        <Form.Item label="上传参考视频时是否额外计费">
+                        <Form.Item label={t("pricing.chargeRefVideo")}>
                             <Switch checked={chargeRefVideo} onChange={setChargeRefVideo} />
                         </Form.Item>
                         {chargeRefVideo ? (
                             <>
-                                <Form.Item label="参考视频计费方式">
+                                <Form.Item label={t("pricing.refVideoMode")}>
                                     <Radio.Group value={refVideoMode} onChange={(e) => setRefVideoMode(e.target.value)}>
-                                        <Radio.Button value="per_request">每次额外加收</Radio.Button>
-                                        <Radio.Button value="per_second">按参考视频秒数加收</Radio.Button>
+                                        <Radio.Button value="per_request">{t("pricing.refPerRequestMode")}</Radio.Button>
+                                        <Radio.Button value="per_second">{t("pricing.refPerSecondMode")}</Radio.Button>
                                     </Radio.Group>
                                 </Form.Item>
-                                <Form.Item label={refVideoMode === "per_second" ? "参考视频每秒加收积分" : "每次包含参考视频加收积分"}>
+                                <Form.Item label={t(refVideoMode === "per_second" ? "pricing.refPerSecondLabel" : "pricing.refPerRequestLabel")}>
                                     <InputNumber className="w-full" min={0} step={0.5} value={refVideoPrice} onChange={(v) => setRefVideoPrice(Number(v || 0))} />
                                 </Form.Item>
                             </>
@@ -243,7 +252,7 @@ export function ModelPricingModal({
                 ) : null}
 
                 {capability === "audio" ? (
-                    <Form.Item label="每秒音频消耗积分">
+                    <Form.Item label={t("pricing.audioCreditsPerSecond")}>
                         <InputNumber className="w-full" min={0} step={0.1} value={audioPerSecond} onChange={(v) => setAudioPerSecond(Number(v || 0))} />
                     </Form.Item>
                 ) : null}

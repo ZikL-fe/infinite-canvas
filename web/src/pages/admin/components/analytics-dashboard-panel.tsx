@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { App, Button, Empty, Segmented, Spin, Tabs, Tag, Tooltip, Typography, theme as antdTheme } from "antd";
 import * as echarts from "echarts";
 import { RefreshCw } from "lucide-react";
+import { useTranslation } from "react-i18next";
 
 import { formatCompactCount, formatCompactCredits, formatExactCredits } from "@/lib/format-number";
 import { accountApi, adminApi, type AnalyticsDashboardResponse, type DashboardRange } from "@/services/api/server";
@@ -56,14 +57,9 @@ function EChartBox({
     return <div ref={containerRef} style={{ width: "100%", height }} />;
 }
 
-const rangeOptions: Array<{ label: string; value: DashboardRange }> = [
-    { label: "今天", value: "today" },
-    { label: "过去 24 小时", value: "24h" },
-    { label: "过去 7 天", value: "7d" },
-    { label: "过去 30 天", value: "30d" },
-];
-
 export function AnalyticsDashboardPanel({ scope }: { scope: "all" | "self" }) {
+    const { t, i18n } = useTranslation();
+    const locale = i18n.resolvedLanguage || undefined;
     const { message } = App.useApp();
     const { token } = antdTheme.useToken();
     const [range, setRange] = useState<DashboardRange>("24h");
@@ -71,6 +67,13 @@ export function AnalyticsDashboardPanel({ scope }: { scope: "all" | "self" }) {
     const [loading, setLoading] = useState(false);
     const [creditChartType, setCreditChartType] = useState<"bar" | "area">("bar");
     const [callChartMode, setCallChartMode] = useState<"trend" | "ranking">("trend");
+
+    const rangeOptions: Array<{ label: string; value: DashboardRange }> = [
+        { label: t("dashboard.ranges.today"), value: "today" },
+        { label: t("dashboard.ranges.h24"), value: "24h" },
+        { label: t("dashboard.ranges.d7"), value: "7d" },
+        { label: t("dashboard.ranges.d30"), value: "30d" },
+    ];
 
     const loadDashboard = useCallback(
         async (targetRange = range, force = false) => {
@@ -82,12 +85,12 @@ export function AnalyticsDashboardPanel({ scope }: { scope: "all" | "self" }) {
                         : await accountApi.getDashboard(targetRange, force);
                 setData(res);
             } catch (error) {
-                message.error(error instanceof Error ? error.message : "加载数据看板失败");
+                message.error(error instanceof Error ? error.message : t("dashboard.loadFailed"));
             } finally {
                 setLoading(false);
             }
         },
-        [message, range, scope],
+        [message, range, scope, t],
     );
 
     useEffect(() => {
@@ -226,7 +229,7 @@ export function AnalyticsDashboardPanel({ scope }: { scope: "all" | "self" }) {
                   },
                   series: [
                       {
-                          name: "调用次数",
+                          name: t("dashboard.callsSeries"),
                           type: "bar",
                           barMaxWidth: 20,
                           data: data.modelRanking.slice(0, 10).map((m, idx) => ({
@@ -238,7 +241,7 @@ export function AnalyticsDashboardPanel({ scope }: { scope: "all" | "self" }) {
                               position: "right",
                               color: secondaryColor,
                               fontSize: 11,
-                              formatter: (p) => `${formatCompactCount(Number(p.value))} 次`,
+                              formatter: (p) => t("dashboard.barCallLabel", { count: formatCompactCount(Number(p.value)) }),
                           },
                       },
                   ],
@@ -258,7 +261,11 @@ export function AnalyticsDashboardPanel({ scope }: { scope: "all" | "self" }) {
                       const item = rankedUsers[first?.dataIndex ?? 0];
                       if (!item) return "";
                       const name = item.displayName && item.displayName !== item.username ? `${item.displayName} (@${item.username})` : item.username;
-                      return `${name}<br/>消耗积分：${formatExactCredits(item.credits)}<br/>调用次数：${item.calls} 次`;
+                      return t("dashboard.userTooltip", {
+                          name,
+                          credits: formatExactCredits(item.credits),
+                          calls: item.calls,
+                      });
                   },
               },
               grid: { left: 150, right: 64, top: 10, bottom: 20 },
@@ -280,7 +287,7 @@ export function AnalyticsDashboardPanel({ scope }: { scope: "all" | "self" }) {
               },
               series: [
                   {
-                      name: "消耗积分",
+                      name: t("dashboard.consumedCredits"),
                       type: "bar",
                       barMaxWidth: 20,
                       data: rankedUsers.map((u, idx) => ({
@@ -343,40 +350,43 @@ export function AnalyticsDashboardPanel({ scope }: { scope: "all" | "self" }) {
 
     const kpis = [
         {
-            label: "总请求数",
+            label: t("dashboard.kpis.totalCalls"),
             display: formatCompactCount(summary?.totalCalls ?? 0),
-            exact: `${(summary?.totalCalls ?? 0).toLocaleString("en-US")} 次`,
-            sub: "统计请求数",
+            exact: t("dashboard.kpis.totalCallsExact", { count: (summary?.totalCalls ?? 0).toLocaleString(locale) }),
+            sub: t("dashboard.kpis.totalCallsSub"),
         },
         {
-            label: "消耗积分",
+            label: t("dashboard.kpis.consumedCredits"),
             display: formatCompactCredits(summary?.totalConsumedCredits ?? 0),
-            exact: `${formatExactCredits(summary?.totalConsumedCredits ?? 0)} 积分`,
-            sub: "周期净消耗",
+            exact: t("dashboard.kpis.consumedCreditsExact", { value: formatExactCredits(summary?.totalConsumedCredits ?? 0) }),
+            sub: t("dashboard.kpis.consumedCreditsSub"),
         },
         {
-            label: "总 Token 数",
+            label: t("dashboard.kpis.totalTokens"),
             display: formatCompactCount(summary?.totalTokens ?? 0),
-            exact: `输入 ${formatExactCredits(summary?.inputTokens ?? 0, 0)} / 输出 ${formatExactCredits(summary?.outputTokens ?? 0, 0)}`,
-            sub: "累计 Token 数",
+            exact: t("dashboard.kpis.totalTokensExact", {
+                input: formatExactCredits(summary?.inputTokens ?? 0, 0),
+                output: formatExactCredits(summary?.outputTokens ?? 0, 0),
+            }),
+            sub: t("dashboard.kpis.totalTokensSub"),
         },
         {
-            label: "缓存命中 Token",
+            label: t("dashboard.kpis.cachedTokens"),
             display: formatCompactCount(summary?.cachedInputTokens ?? 0),
-            exact: `${(summary?.cachedInputTokens ?? 0).toLocaleString("en-US")} Tokens`,
-            sub: "缓存输入命中",
+            exact: t("dashboard.kpis.cachedTokensExact", { count: (summary?.cachedInputTokens ?? 0).toLocaleString(locale) }),
+            sub: t("dashboard.kpis.cachedTokensSub"),
         },
         {
-            label: "平均 RPM",
+            label: t("dashboard.kpis.avgRpm"),
             display: String(summary?.avgRpm ?? 0),
-            exact: `${summary?.avgRpm ?? 0} 次/分钟`,
-            sub: "每分钟请求数",
+            exact: t("dashboard.kpis.avgRpmExact", { value: summary?.avgRpm ?? 0 }),
+            sub: t("dashboard.kpis.avgRpmSub"),
         },
         {
-            label: "平均 TPM",
+            label: t("dashboard.kpis.avgTpm"),
             display: formatCompactCount(summary?.avgTpm ?? 0),
-            exact: `${(summary?.avgTpm ?? 0).toLocaleString("en-US")} Tokens/分钟`,
-            sub: "每分钟 Token 数",
+            exact: t("dashboard.kpis.avgTpmExact", { value: (summary?.avgTpm ?? 0).toLocaleString(locale) }),
+            sub: t("dashboard.kpis.avgTpmSub"),
         },
     ];
 
@@ -416,16 +426,16 @@ export function AnalyticsDashboardPanel({ scope }: { scope: "all" | "self" }) {
                 }}
             >
                 <span className="font-medium" style={{ color: token.colorText }}>
-                    性能摘要
+                    {t("dashboard.perfSummary")}
                 </span>
                 <span style={{ color: token.colorTextSecondary }}>
-                    成功率 <strong style={{ color: token.colorSuccess }}>{summary?.successRate ?? 100}%</strong>
+                    {t("dashboard.successRate")} <strong style={{ color: token.colorSuccess }}>{summary?.successRate ?? 100}%</strong>
                 </span>
                 <span style={{ color: token.colorTextSecondary }}>
-                    平均延迟 <strong style={{ color: token.colorText }}>{((summary?.avgLatencyMs ?? 0) / 1000).toFixed(2)}s</strong>
+                    {t("dashboard.avgLatency")} <strong style={{ color: token.colorText }}>{((summary?.avgLatencyMs ?? 0) / 1000).toFixed(2)}s</strong>
                 </span>
                 <span style={{ color: token.colorTextSecondary }}>
-                    平均吞吐 <strong style={{ color: token.colorText }}>{summary?.avgTokensPerSecond ?? 0} t/s</strong>
+                    {t("dashboard.avgThroughput")} <strong style={{ color: token.colorText }}>{summary?.avgTokensPerSecond ?? 0} t/s</strong>
                 </span>
                 {(data?.modelHealth ?? []).map((m) => (
                     <Tag
@@ -449,11 +459,11 @@ export function AnalyticsDashboardPanel({ scope }: { scope: "all" | "self" }) {
                 <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
                     <div className="flex items-center gap-2">
                         <span className="text-sm font-semibold" style={{ color: token.colorText }}>
-                            消耗分布
+                            {t("dashboard.consumptionDist")}
                         </span>
-                        <Tooltip title={`精确净消耗：${formatExactCredits(summary?.totalConsumedCredits ?? 0)} 积分`}>
+                        <Tooltip title={t("dashboard.exactNetCredits", { value: formatExactCredits(summary?.totalConsumedCredits ?? 0) })}>
                             <Typography.Text type="secondary" className="text-xs">
-                                总计：{formatCompactCredits(summary?.totalConsumedCredits ?? 0)} 积分
+                                {t("dashboard.totalCredits", { value: formatCompactCredits(summary?.totalConsumedCredits ?? 0) })}
                             </Typography.Text>
                         </Tooltip>
                     </div>
@@ -462,8 +472,8 @@ export function AnalyticsDashboardPanel({ scope }: { scope: "all" | "self" }) {
                         value={creditChartType}
                         onChange={(val) => setCreditChartType(val as "bar" | "area")}
                         options={[
-                            { label: "柱状图", value: "bar" },
-                            { label: "面积图", value: "area" },
+                            { label: t("dashboard.chartBar"), value: "bar" },
+                            { label: t("dashboard.chartArea"), value: "area" },
                         ]}
                     />
                 </div>
@@ -471,7 +481,7 @@ export function AnalyticsDashboardPanel({ scope }: { scope: "all" | "self" }) {
                     <EChartBox option={creditChartOption} height={300} />
                 ) : (
                     <div className="py-12">
-                        <Empty description="当前时间范围内暂无消耗数据" image={Empty.PRESENTED_IMAGE_SIMPLE} />
+                        <Empty description={t("dashboard.noConsumptionData")} image={Empty.PRESENTED_IMAGE_SIMPLE} />
                     </div>
                 )}
             </div>
@@ -487,10 +497,10 @@ export function AnalyticsDashboardPanel({ scope }: { scope: "all" | "self" }) {
                 <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
                     <div className="flex items-center gap-2">
                         <span className="text-sm font-semibold" style={{ color: token.colorText }}>
-                            模型调用分析
+                            {t("dashboard.modelCallAnalysis")}
                         </span>
                         <Typography.Text type="secondary" className="text-xs">
-                            总计：{formatCompactCount(summary?.totalCalls ?? 0)} 次
+                            {t("dashboard.totalCallsCount", { count: formatCompactCount(summary?.totalCalls ?? 0) })}
                         </Typography.Text>
                     </div>
                     <Segmented
@@ -498,8 +508,8 @@ export function AnalyticsDashboardPanel({ scope }: { scope: "all" | "self" }) {
                         value={callChartMode}
                         onChange={(val) => setCallChartMode(val as "trend" | "ranking")}
                         options={[
-                            { label: "调用趋势", value: "trend" },
-                            { label: "调用次数排行", value: "ranking" },
+                            { label: t("dashboard.callTrend"), value: "trend" },
+                            { label: t("dashboard.callRanking"), value: "ranking" },
                         ]}
                     />
                 </div>
@@ -507,7 +517,7 @@ export function AnalyticsDashboardPanel({ scope }: { scope: "all" | "self" }) {
                     <EChartBox option={modelCallOption} height={callChartMode === "ranking" ? Math.max(240, data.modelRanking.slice(0, 10).length * 34) : 280} />
                 ) : (
                     <div className="py-12">
-                        <Empty description="当前时间范围内暂无调用记录" image={Empty.PRESENTED_IMAGE_SIMPLE} />
+                        <Empty description={t("dashboard.noCallRecords")} image={Empty.PRESENTED_IMAGE_SIMPLE} />
                     </div>
                 )}
             </div>
@@ -525,17 +535,17 @@ export function AnalyticsDashboardPanel({ scope }: { scope: "all" | "self" }) {
             >
                 <div className="mb-3 flex items-center justify-between gap-2">
                     <span className="text-sm font-semibold" style={{ color: token.colorText }}>
-                        用户消耗排行（Top 10）
+                        {t("dashboard.userRankingTitle")}
                     </span>
                     <Typography.Text type="secondary" className="text-xs">
-                        排行合计：{formatCompactCredits(rankedUsers.reduce((acc, u) => acc + u.credits, 0))} 积分
+                        {t("dashboard.rankingTotal", { value: formatCompactCredits(rankedUsers.reduce((acc, u) => acc + u.credits, 0)) })}
                     </Typography.Text>
                 </div>
                 {rankedUsers.length ? (
                     <EChartBox option={userRankingOption} height={Math.max(220, rankedUsers.length * 34)} />
                 ) : (
                     <div className="py-10">
-                        <Empty description="暂无用户消耗排行数据" image={Empty.PRESENTED_IMAGE_SIMPLE} />
+                        <Empty description={t("dashboard.noUserRanking")} image={Empty.PRESENTED_IMAGE_SIMPLE} />
                     </div>
                 )}
             </div>
@@ -549,17 +559,17 @@ export function AnalyticsDashboardPanel({ scope }: { scope: "all" | "self" }) {
             >
                 <div className="mb-3 flex items-center justify-between gap-2">
                     <span className="text-sm font-semibold" style={{ color: token.colorText }}>
-                        用户消耗趋势（Top 10）
+                        {t("dashboard.userTrendTitle")}
                     </span>
                     <Typography.Text type="secondary" className="text-xs">
-                        总计：{formatCompactCredits(rankedUsers.reduce((acc, u) => acc + u.credits, 0))} 积分
+                        {t("dashboard.totalCredits", { value: formatCompactCredits(rankedUsers.reduce((acc, u) => acc + u.credits, 0)) })}
                     </Typography.Text>
                 </div>
                 {userTrends.length ? (
                     <EChartBox option={userTrendOption} height={280} />
                 ) : (
                     <div className="py-10">
-                        <Empty description="暂无用户消耗趋势数据" image={Empty.PRESENTED_IMAGE_SIMPLE} />
+                        <Empty description={t("dashboard.noUserTrend")} image={Empty.PRESENTED_IMAGE_SIMPLE} />
                     </div>
                 )}
             </div>
@@ -579,7 +589,10 @@ export function AnalyticsDashboardPanel({ scope }: { scope: "all" | "self" }) {
                     <div className="flex flex-wrap items-center gap-2.5">
                         {data ? (
                             <Typography.Text type="secondary" className="text-xs">
-                                采样周期 {data.sampleIntervalMinutes} 分钟 · 上次采样 {new Date(data.sampledAt).toLocaleTimeString("zh-CN")}
+                                {t("dashboard.sampleStatus", {
+                                    minutes: data.sampleIntervalMinutes,
+                                    time: new Date(data.sampledAt).toLocaleTimeString(locale),
+                                })}
                             </Typography.Text>
                         ) : null}
                         <Button
@@ -588,7 +601,7 @@ export function AnalyticsDashboardPanel({ scope }: { scope: "all" | "self" }) {
                             loading={loading}
                             onClick={() => void loadDashboard(range, true)}
                         >
-                            立即采样刷新
+                            {t("dashboard.refreshSample")}
                         </Button>
                     </div>
                 </div>
@@ -599,12 +612,12 @@ export function AnalyticsDashboardPanel({ scope }: { scope: "all" | "self" }) {
                         items={[
                             {
                                 key: "overview",
-                                label: "消耗与模型分析",
+                                label: t("dashboard.tabs.overview"),
                                 children: overviewContent,
                             },
                             {
                                 key: "users",
-                                label: "用户消耗统计",
+                                label: t("dashboard.tabs.users"),
                                 children: userAnalyticsContent,
                             },
                         ]}

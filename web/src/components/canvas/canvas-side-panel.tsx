@@ -453,7 +453,7 @@ const CanvasAssetsTab = memo(function CanvasAssetsTab({ onInsert, theme }: { onI
                     style={{ color: theme.node.text }}
                 >
                     {uploading ? <LoaderCircle className="size-3.5 animate-spin" /> : <Plus className="size-3.5" />}
-                    {uploading ? "上传中" : t("canvas.sidePanel.add")}
+                    {uploading ? t("common.uploading") : t("canvas.sidePanel.add")}
                 </button>
                 <input ref={fileInputRef} type="file" accept="image/*,video/*" multiple className="hidden" onChange={(e) => void handleFiles(e.target.files)} />
             </div>
@@ -499,7 +499,7 @@ const CanvasAssetsTab = memo(function CanvasAssetsTab({ onInsert, theme }: { onI
                                                             await deleteAssetWithCloud(asset.id);
                                                             message.success(t("canvas.sidePanel.assetRemoved"));
                                                         } catch (error) {
-                                                            message.error(error instanceof Error ? error.message : "移除资产失败，请重试");
+                                                            message.error(error instanceof Error ? error.message : t("canvas.sidePanel.removeAssetFailed"));
                                                         }
                                                     }}
                                                 />

@@ -365,7 +365,7 @@ export default function VideoPage() {
             setSelectedLogIds([]);
             setDeleteConfirmOpen(false);
         } catch (error) {
-            message.error(error instanceof Error ? error.message : "删除失败，请重试");
+            message.error(error instanceof Error ? error.message : t("common.deleteFailed"));
         } finally {
             setDeletingLogs(false);
         }
@@ -510,7 +510,7 @@ export default function VideoPage() {
                                             {t("workbench.clipboard")}
                                         </Button>
                                         <Button size="small" icon={<Upload className="size-3.5" />} loading={uploadingRefs} onClick={() => fileInputRef.current?.click()}>
-                                            {uploadingRefs ? "上传中..." : t("workbench.upload")}
+                                            {uploadingRefs ? t("common.uploadingEllipsis") : t("workbench.upload")}
                                         </Button>
                                     </div>
                                 </div>

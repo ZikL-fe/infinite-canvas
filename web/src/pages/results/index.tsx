@@ -2,6 +2,7 @@
 import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
 import { App, Button, Card, Checkbox, Descriptions, Drawer, Empty, Image, Input, Pagination, Popconfirm, Progress, Result, Space, Spin, Tag, Typography } from "antd";
 import { AudioLines, CheckSquare, Copy, Download, Eye, FolderPlus, HardDrive, ImageIcon, Play, RefreshCw, Search, Trash2, Video } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
 
 import { useBatchZipDownload } from "@/hooks/use-batch-zip-download";
@@ -15,29 +16,11 @@ import { getImagePreviewRevision, previewUrlFor, subscribeImagePreviews, uploadI
 import { useAssetStore } from "@/stores/use-asset-store";
 import { useUserStore } from "@/stores/use-user-store";
 
-const kindOptions = [
-    { value: "", label: "全部" },
-    { value: "image", label: "图片" },
-    { value: "video", label: "视频" },
-    { value: "audio", label: "音频" },
-] as const;
-
-const kindLabels: Record<string, string> = {
-    image: "图片",
-    video: "视频",
-    audio: "音频",
-    file: "文件",
-};
-
-const moduleLabels: Record<string, string> = {
-    canvas: "无限画布",
-    image_workbench: "生图工作台",
-    video_workbench: "视频工作台",
-    assets: "我的资产",
-};
+const kindFilterValues = ["", "image", "video", "audio"] as const;
 
 export default function ResultsPage() {
     const { message } = App.useApp();
+    const { i18n, t } = useTranslation();
     const copyText = useCopyText();
     const navigate = useNavigate();
     useSyncExternalStore(subscribeImagePreviews, getImagePreviewRevision);
@@ -76,11 +59,11 @@ export default function ResultsPage() {
             const loadedIds = new Set(res.items.map((entry) => entry.id));
             setSelectedIds((prev) => prev.filter((id) => loadedIds.has(id)));
         } catch (error) {
-            message.error(error instanceof Error ? error.message : "加载云端成果失败");
+            message.error(error instanceof Error ? error.message : t("results.loadFailed"));
         } finally {
             setLoading(false);
         }
-    }, [accessToken, keyword, kind, message, page, pageSize]);
+    }, [accessToken, keyword, kind, message, page, pageSize, t]);
 
     useEffect(() => {
         void loadResults();
@@ -131,7 +114,7 @@ export default function ResultsPage() {
         try {
             const url = await resolveOriginalUrl(item);
             if (!url) {
-                message.error("文件链接暂不可用");
+                message.error(t("results.linkUnavailable"));
                 return;
             }
             setPreviewOriginalUrl(url);
@@ -140,7 +123,7 @@ export default function ResultsPage() {
                 void backfillCloudThumbnail(item, url);
             }
         } catch (error) {
-            message.error(error instanceof Error ? error.message : "获取原文件失败");
+            message.error(error instanceof Error ? error.message : t("results.fetchFailed"));
         } finally {
             setLoadingOriginalId(null);
         }
@@ -152,7 +135,7 @@ export default function ResultsPage() {
             const ext = item.mimeType?.split("/")[1]?.split("+")[0] || (item.kind === "video" ? "mp4" : item.kind === "audio" ? "mp3" : "png");
             await storageApi.downloadFile(item, `result-${item.id.replace(/:/g, "_")}.${ext}`);
         } catch (error) {
-            message.error(error instanceof Error ? error.message : "下载失败，请稍后重试");
+            message.error(error instanceof Error ? error.message : t("assets.downloadFailed"));
         } finally {
             setLoadingOriginalId(null);
         }
@@ -181,7 +164,8 @@ export default function ResultsPage() {
             if (!url) return;
             const promptText = typeof item.meta?.prompt === "string" ? item.meta.prompt : "";
             const modelText = typeof item.meta?.model === "string" ? item.meta.model : "";
-            const title = promptText ? promptText.slice(0, 32) : `${kindLabels[item.kind] || "生成"}成果`;
+            const kindLabel = t(`results.kinds.${item.kind}`, { defaultValue: t("results.defaultKind") });
+            const title = promptText ? promptText.slice(0, 32) : t("results.defaultResultName", { kind: kindLabel });
             if (item.kind === "image") {
                 const stored = await uploadImage(url, { existingStorageKey: item.id, sourceType: "ai_generated" });
                 addAsset({
@@ -189,7 +173,7 @@ export default function ResultsPage() {
                     title,
                     coverUrl: stored.url,
                     tags: modelText ? [modelText] : [],
-                    source: "云端成果",
+                    source: t("results.sourceName"),
                     data: {
                         dataUrl: stored.url,
                         storageKey: item.id,
@@ -207,7 +191,7 @@ export default function ResultsPage() {
                     title,
                     coverUrl: "",
                     tags: modelText ? [modelText] : [],
-                    source: "云端成果",
+                    source: t("results.sourceName"),
                     data: {
                         url: stored.url,
                         storageKey: stored.storageKey,
@@ -219,12 +203,12 @@ export default function ResultsPage() {
                     metadata: { source: "results", prompt: promptText, model: modelText },
                 });
             } else {
-                message.warning("音频成果暂不支持加入资产库，可直接播放或下载");
+                message.warning(t("results.audioAssetUnsupported"));
                 return;
             }
-            message.success("已加入我的资产");
+            message.success(t("common.addedToAssets"));
         } catch (error) {
-            message.error(error instanceof Error ? error.message : "加入资产失败");
+            message.error(error instanceof Error ? error.message : t("results.addAssetFailed"));
         } finally {
             setSavingId(null);
         }
@@ -239,10 +223,10 @@ export default function ResultsPage() {
                 .then((res) => useUserStore.getState().setUser(res.user))
                 .catch(() => undefined);
             notifyCloudWorkspaceChanged("media", { sync: false });
-            message.success("已从云端删除并释放配额空间");
+            message.success(t("results.deletedFreed"));
             void loadResults();
         } catch (error) {
-            message.error(error instanceof Error ? error.message : "删除失败");
+            message.error(error instanceof Error ? error.message : t("results.deleteFailed"));
         } finally {
             setDeletingId(null);
         }
@@ -253,11 +237,11 @@ export default function ResultsPage() {
             <div className="flex h-full items-center justify-center p-6">
                 <Result
                     status="info"
-                    title="登录后查看云端生成成果"
-                    subTitle="画布与工作台生成的图片、视频与音频会自动保存至云端，即使网络卡顿或刷新页面也不会丢失。"
+                    title={t("results.loginTitle")}
+                    subTitle={t("results.loginSubtitle")}
                     extra={
                         <Button type="primary" onClick={() => navigate("/auth?redirect=/results")}>
-                            前往登录
+                            {t("results.goToLogin")}
                         </Button>
                     }
                 />
@@ -273,14 +257,14 @@ export default function ResultsPage() {
             <main className="min-h-0 flex-1 overflow-y-auto bg-[radial-gradient(#e5e7eb_1px,transparent_1px)] px-6 py-8 [background-size:16px_16px] dark:bg-[radial-gradient(rgba(245,245,244,.14)_1px,transparent_1px)]">
                 <div className="pb-8">
                     <div className="mx-auto max-w-5xl text-center">
-                        <h1 className="text-4xl font-semibold tracking-tight text-stone-950 dark:text-stone-100">云端生成成果</h1>
+                        <h1 className="text-4xl font-semibold tracking-tight text-stone-950 dark:text-stone-100">{t("results.title")}</h1>
                         <p className="mt-3 text-sm text-stone-500 dark:text-stone-400">
-                            列表默认仅加载轻量化缩略图，点击查看或下载时再按需加载原图与原视频。
+                            {t("results.description")}
                         </p>
                         <div className="mx-auto mt-4 inline-flex flex-wrap items-center justify-center gap-3 rounded-full border border-stone-200 bg-background/90 px-4 py-1.5 text-xs shadow-sm dark:border-stone-800">
                             <span className="inline-flex items-center gap-1.5 font-medium text-stone-700 dark:text-stone-200">
                                 <HardDrive className="size-3.5" />
-                                云端存储配额：{formatStoragePair(user.storageUsedBytes, user.storageQuotaBytes)}
+                                {t("assets.cloudQuotaLabel", { pair: formatStoragePair(user.storageUsedBytes, user.storageQuotaBytes) })}
                             </span>
                             <div className="w-24">
                                 <Progress
@@ -300,7 +284,7 @@ export default function ResultsPage() {
                                     className="m-0 cursor-pointer"
                                     onClick={() => navigate(user.role === "admin" ? "/admin?tab=my-media" : "/console?tab=my-media")}
                                 >
-                                    配额已过期，去兑换扩容
+                                    {t("assets.quotaExpiredAction")}
                                 </Tag>
                             ) : exceeded ? (
                                 <Tag
@@ -308,7 +292,7 @@ export default function ResultsPage() {
                                     className="m-0 cursor-pointer"
                                     onClick={() => navigate(user.role === "admin" ? "/admin?tab=my-media" : "/console?tab=my-media")}
                                 >
-                                    配额不足，去兑换扩容
+                                    {t("assets.quotaExceededAction")}
                                 </Tag>
                             ) : null}
                             <Button
@@ -317,7 +301,7 @@ export default function ResultsPage() {
                                 className="!h-auto !p-0 text-xs"
                                 onClick={() => navigate(user.role === "admin" ? "/admin?tab=my-media" : "/console?tab=my-media")}
                             >
-                                管理云端媒体
+                                {t("assets.manageCloudMedia")}
                             </Button>
                         </div>
                     </div>
@@ -328,7 +312,7 @@ export default function ResultsPage() {
                             size="large"
                             allowClear
                             prefix={<Search className="size-4 text-stone-400" />}
-                            placeholder="搜索提示词、模型名称或文件路径"
+                            placeholder={t("results.searchPlaceholder")}
                             onSearch={(val) => {
                                 setPage(1);
                                 setKeyword(val);
@@ -338,23 +322,23 @@ export default function ResultsPage() {
 
                     <div className="mx-auto mt-6 flex max-w-7xl flex-wrap items-center justify-between gap-3">
                         <div className="flex flex-wrap items-center gap-2">
-                            <span className="text-xs font-medium text-stone-500 dark:text-stone-400">类型</span>
-                            {kindOptions.map((option) => (
+                            <span className="text-xs font-medium text-stone-500 dark:text-stone-400">{t("results.typeLabel")}</span>
+                            {kindFilterValues.map((value) => (
                                 <Tag.CheckableTag
-                                    key={option.value || "all"}
-                                    checked={kind === option.value}
+                                    key={value || "all"}
+                                    checked={kind === value}
                                     onChange={() => {
                                         setPage(1);
-                                        setKind(option.value);
+                                        setKind(value);
                                     }}
                                 >
-                                    {option.label}
+                                    {t(`results.kinds.${value || "all"}`)}
                                 </Tag.CheckableTag>
                             ))}
                         </div>
                         <Space wrap>
                             <Button size="small" icon={<CheckSquare className="size-3.5" />} disabled={!items.length} onClick={toggleSelectAllPage}>
-                                {allPageSelected ? "取消全选" : "全选本页"}
+                                {allPageSelected ? t("common.deselectAll") : t("common.selectAllPage")}
                             </Button>
                             {selectedIds.length > 0 ? (
                                 <Button
@@ -364,11 +348,11 @@ export default function ResultsPage() {
                                     loading={batchDownloading}
                                     onClick={() => void handleBatchDownload()}
                                 >
-                                    打包下载 ({selectedIds.length})
+                                    {t("common.batchDownloadCount", { count: selectedIds.length })}
                                 </Button>
                             ) : null}
                             <Button size="small" icon={<RefreshCw className="size-3.5" />} loading={loading} onClick={() => void loadResults()}>
-                                刷新
+                                {t("common.refresh")}
                             </Button>
                         </Space>
                     </div>
@@ -422,7 +406,7 @@ export default function ResultsPage() {
                                                                 onClick={() => void handleOpenPreview(item)}
                                                             >
                                                                 <ImageIcon className="size-7" />
-                                                                <span className="text-xs">点击查看原图</span>
+                                                                <span className="text-xs">{t("results.clickViewImage")}</span>
                                                             </button>
                                                         )
                                                     ) : item.kind === "video" ? (
@@ -447,7 +431,7 @@ export default function ResultsPage() {
                                                             onClick={() => void handleOpenPreview(item)}
                                                         >
                                                             <AudioLines className="size-8" />
-                                                            <span className="text-xs">点击试听音频</span>
+                                                            <span className="text-xs">{t("results.clickPlayAudio")}</span>
                                                         </button>
                                                     )}
                                                 </div>
@@ -455,7 +439,7 @@ export default function ResultsPage() {
                                         >
                                             <div className="flex flex-1 flex-col gap-2">
                                                 <div className="flex min-h-6 items-center gap-1.5 overflow-hidden">
-                                                    <Tag className="m-0 shrink-0 text-[11px]">{kindLabels[item.kind] || item.kind}</Tag>
+                                                    <Tag className="m-0 shrink-0 text-[11px]">{t(`results.kinds.${item.kind}`, { defaultValue: item.kind })}</Tag>
                                                     {model ? (
                                                         <Tag color="blue" className="m-0 min-w-0 truncate text-[11px]">
                                                             {model}
@@ -476,11 +460,11 @@ export default function ResultsPage() {
                                                 <div className="mt-auto space-y-2">
                                                     <Typography.Text
                                                         type="secondary"
-                                                        ellipsis={{ tooltip: `${item.width && item.height ? `${item.width}x${item.height} · ` : ""}${formatBytes(item.bytes)} · ${new Date(item.createdAt).toLocaleString("zh-CN")}` }}
+                                                        ellipsis={{ tooltip: `${item.width && item.height ? `${item.width}x${item.height} · ` : ""}${formatBytes(item.bytes)} · ${new Date(item.createdAt).toLocaleString(i18n.resolvedLanguage)}` }}
                                                         className="block text-[11px]"
                                                     >
                                                         {item.width && item.height ? `${item.width}x${item.height} · ` : ""}
-                                                        {formatBytes(item.bytes)} · {new Date(item.createdAt).toLocaleString("zh-CN")}
+                                                        {formatBytes(item.bytes)} · {new Date(item.createdAt).toLocaleString(i18n.resolvedLanguage)}
                                                     </Typography.Text>
                                                     <div className="flex items-center justify-between gap-1.5 border-t border-black/5 pt-2 dark:border-white/5">
                                                         <div className="flex min-w-0 items-center gap-1.5">
@@ -490,7 +474,7 @@ export default function ResultsPage() {
                                                                 loading={loadingOriginalId === item.id}
                                                                 onClick={() => void handleOpenPreview(item)}
                                                             >
-                                                                查看
+                                                                {t("common.view")}
                                                             </Button>
                                                             {item.kind === "image" || item.kind === "video" ? (
                                                                 <Button
@@ -499,7 +483,7 @@ export default function ResultsPage() {
                                                                     loading={savingId === item.id}
                                                                     onClick={() => void handleSaveToAssets(item)}
                                                                 >
-                                                                    存资产
+                                                                    {t("results.saveAsset")}
                                                                 </Button>
                                                             ) : null}
                                                             <Button
@@ -508,10 +492,10 @@ export default function ResultsPage() {
                                                                 loading={loadingOriginalId === item.id}
                                                                 onClick={() => void handleDownload(item)}
                                                             >
-                                                                下载
+                                                                {t("common.download")}
                                                             </Button>
                                                         </div>
-                                                        <Popconfirm title="确定从云端删除该成果并释放空间吗？" onConfirm={() => void handleDelete(item.id)}>
+                                                        <Popconfirm title={t("results.deleteConfirm")} onConfirm={() => void handleDelete(item.id)}>
                                                             <Button size="small" danger loading={deletingId === item.id} icon={<Trash2 className="size-3.5" />} />
                                                         </Popconfirm>
                                                     </div>
@@ -522,7 +506,7 @@ export default function ResultsPage() {
                                 })}
                             </div>
                         ) : (
-                            <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无云端生成成果" className="py-20" />
+                            <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={t("results.empty")} className="py-20" />
                         )}
                     </Spin>
 
@@ -532,7 +516,7 @@ export default function ResultsPage() {
                                 current={page}
                                 pageSize={pageSize}
                                 total={total}
-                                showTotal={(count) => `共 ${count} 条`}
+                                showTotal={(count) => t("common.totalItems", { count })}
                                 showSizeChanger
                                 pageSizeOptions={[10, 20, 30, 50, 100]}
                                 onChange={(nextPage, nextPageSize) => {
@@ -546,7 +530,7 @@ export default function ResultsPage() {
             </main>
 
             <Drawer
-                title="成果详情"
+                title={t("results.drawerTitle")}
                 open={Boolean(previewItem)}
                 size="large"
                 onClose={() => {
@@ -576,7 +560,7 @@ export default function ResultsPage() {
                                   ) : null}
 
                                   <div className="flex flex-wrap items-center gap-1.5">
-                                      <Tag className="m-0">{kindLabels[previewItem.kind] || previewItem.kind}</Tag>
+                                      <Tag className="m-0">{t(`results.kinds.${previewItem.kind}`, { defaultValue: previewItem.kind })}</Tag>
                                       {drawerModel ? (
                                           <Tag color="blue" className="m-0">
                                               {drawerModel}
@@ -584,7 +568,7 @@ export default function ResultsPage() {
                                       ) : null}
                                       {drawerModules.map((mod) => (
                                           <Tag key={mod} color="cyan" className="m-0">
-                                              {moduleLabels[mod] || mod}
+                                              {t(`results.modules.${mod}`, { defaultValue: mod })}
                                           </Tag>
                                       ))}
                                   </div>
@@ -593,10 +577,10 @@ export default function ResultsPage() {
                                       <div className="rounded-lg border border-stone-200 p-4 dark:border-stone-800">
                                           <div className="mb-2 flex items-center justify-between gap-2">
                                               <Typography.Text type="secondary" className="text-xs">
-                                                  生成提示词
+                                                  {t("results.promptLabel")}
                                               </Typography.Text>
-                                              <Button size="small" type="text" icon={<Copy className="size-3.5" />} onClick={() => copyText(drawerPrompt, "提示词已复制")}>
-                                                  复制
+                                              <Button size="small" type="text" icon={<Copy className="size-3.5" />} onClick={() => copyText(drawerPrompt, t("common.promptCopied"))}>
+                                                  {t("common.copy")}
                                               </Button>
                                           </div>
                                           <div className="thin-scrollbar max-h-44 overflow-y-auto pr-1">
@@ -608,13 +592,13 @@ export default function ResultsPage() {
                                   ) : null}
 
                                   <Descriptions column={1} bordered size="small" styles={{ label: { whiteSpace: "nowrap", width: 120 } }}>
-                                      <Descriptions.Item label="分辨率 / 时长">
+                                      <Descriptions.Item label={t("results.resolutionDuration")}>
                                           {previewItem.width && previewItem.height ? `${previewItem.width} × ${previewItem.height}` : "—"}
                                           {previewItem.durationMs ? ` · ${(previewItem.durationMs / 1000).toFixed(1)}s` : ""}
                                       </Descriptions.Item>
-                                      <Descriptions.Item label="文件大小">{formatBytes(previewItem.bytes)}</Descriptions.Item>
-                                      <Descriptions.Item label="文件类型">{previewItem.mimeType}</Descriptions.Item>
-                                      <Descriptions.Item label="创建时间">{new Date(previewItem.createdAt).toLocaleString("zh-CN")}</Descriptions.Item>
+                                      <Descriptions.Item label={t("results.fileSize")}>{formatBytes(previewItem.bytes)}</Descriptions.Item>
+                                      <Descriptions.Item label={t("results.fileType")}>{previewItem.mimeType}</Descriptions.Item>
+                                      <Descriptions.Item label={t("results.createdAt")}>{new Date(previewItem.createdAt).toLocaleString(i18n.resolvedLanguage)}</Descriptions.Item>
                                   </Descriptions>
 
                                   <div className="pt-3">
@@ -625,7 +609,7 @@ export default function ResultsPage() {
                                               loading={loadingOriginalId === previewItem.id}
                                               onClick={() => void handleDownload(previewItem)}
                                           >
-                                              下载原文件
+                                              {t("results.downloadOriginal")}
                                           </Button>
                                           {previewItem.kind === "image" || previewItem.kind === "video" ? (
                                               <Button
@@ -633,11 +617,11 @@ export default function ResultsPage() {
                                                   loading={savingId === previewItem.id}
                                                   onClick={() => void handleSaveToAssets(previewItem)}
                                               >
-                                                  存资产
+                                                  {t("results.saveAsset")}
                                               </Button>
                                           ) : null}
                                           <Popconfirm
-                                              title="确定从云端删除该成果并释放空间吗？"
+                                              title={t("results.deleteConfirm")}
                                               onConfirm={async () => {
                                                   await handleDelete(previewItem.id);
                                                   setPreviewItem(null);
@@ -645,7 +629,7 @@ export default function ResultsPage() {
                                               }}
                                           >
                                               <Button danger icon={<Trash2 className="size-4" />} loading={deletingId === previewItem.id}>
-                                                  删除
+                                                  {t("common.delete")}
                                               </Button>
                                           </Popconfirm>
                                       </Space>

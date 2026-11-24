@@ -95,12 +95,12 @@ export function ChannelEditorDrawer({
                 </label>
                 <label className="block md:col-span-2">
                     <span className="mb-1 block text-sm font-medium">
-                        API Key{draft.hasApiKey && draft.apiKeyPreview ? `（已保存：${draft.apiKeyPreview}，留空则保持不变）` : ""}
+                        API Key{draft.hasApiKey && draft.apiKeyPreview ? t("config.channelEditor.apiKeySavedHint", { preview: draft.apiKeyPreview }) : ""}
                     </span>
                     <Input.Password
                         value={draft.apiKey}
                         onChange={(event) => patch({ apiKey: event.target.value })}
-                        placeholder={draft.hasApiKey ? "留空表示沿用已保存密钥" : "sk-..."}
+                        placeholder={draft.hasApiKey ? t("config.channelEditor.apiKeyKeepPlaceholder") : "sk-..."}
                     />
                 </label>
             </div>
@@ -126,7 +126,7 @@ export function ChannelEditorDrawer({
                                 <Tag>{formatModelPricingSummary(model.capability, model.pricing)}</Tag>
                                 <Segmented size="small" value={model.capability} options={capabilityOptions} onChange={(value) => setCapability(model.name, value as ModelCapability)} />
                                 <Button size="small" icon={<Coins className="size-3.5" />} onClick={() => setPricingTarget({ name: model.name, capability: model.capability, value: model.pricing })}>
-                                    计费
+                                    {t("config.channelEditor.pricing")}
                                 </Button>
                                 <Button size="small" type={model.script ? "primary" : "default"} ghost={Boolean(model.script)} onClick={() => setScriptTarget({ name: model.name, capability: model.capability, value: model.script || "" })}>
                                     {t(model.script ? "config.channelEditor.scriptReady" : "config.channelEditor.script")}

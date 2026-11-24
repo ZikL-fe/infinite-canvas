@@ -2,6 +2,7 @@
 import { App } from "antd";
 import { saveAs } from "file-saver";
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 
 import { createZip } from "@/lib/zip";
 
@@ -35,6 +36,7 @@ function dedupeZipName(rawName: string, usedNames: Set<string>) {
 
 export function useBatchZipDownload() {
     const { message } = App.useApp();
+    const { t } = useTranslation();
     const [downloading, setDownloading] = useState(false);
 
     const downloadZip = async (params: {
@@ -45,11 +47,11 @@ export function useBatchZipDownload() {
     }) => {
         if (downloading) return false;
         if (!params.entries.length) {
-            message.warning(params.emptyWarning || "请先选择要下载的项目");
+            message.warning(params.emptyWarning || t("zip.selectItems"));
             return false;
         }
         setDownloading(true);
-        const hide = message.loading(params.loadingText || `正在获取并打包 ${params.entries.length} 个文件…`, 0);
+        const hide = message.loading(params.loadingText || t("zip.packaging", { count: params.entries.length }), 0);
         try {
             const usedNames = new Set<string>();
             const settled = await Promise.all(
@@ -65,20 +67,20 @@ export function useBatchZipDownload() {
             );
             const files = settled.filter((item): item is { name: string; data: Blob } => Boolean(item));
             if (!files.length) {
-                message.error("打包下载失败，未能获取有效文件");
+                message.error(t("zip.failedNoFiles"));
                 return false;
             }
             const zipBlob = await createZip(files);
             saveAs(zipBlob, params.zipFilename);
             const failedCount = params.entries.length - files.length;
             if (failedCount > 0) {
-                message.warning(`已打包下载 ${files.length} 个文件（${failedCount} 个获取失败已跳过）`);
+                message.warning(t("zip.downloadedPartial", { count: files.length, failed: failedCount }));
             } else {
-                message.success(`已打包下载 ${files.length} 个文件`);
+                message.success(t("zip.downloaded", { count: files.length }));
             }
             return true;
         } catch (error) {
-            message.error(error instanceof Error ? error.message : "打包下载失败");
+            message.error(error instanceof Error ? error.message : t("zip.failed"));
             return false;
         } finally {
             hide();

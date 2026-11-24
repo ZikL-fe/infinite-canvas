@@ -89,7 +89,7 @@ export function ModelPicker({ config, value, onChange, capability, className, fu
 function emptyModelLabel(config: AiConfig, capability?: ModelCapability) {
     const label = capability ? i18n.t(`settingsPanels.model.capabilities.${capability}`) : "";
     if (capability && config.models.length) return i18n.t("settingsPanels.model.assign", { capability: label });
-    return config.models.length ? i18n.t("settingsPanels.model.noMatch", { capability: label }) : "请联系管理员配置可用模型";
+    return config.models.length ? i18n.t("settingsPanels.model.noMatch", { capability: label }) : i18n.t("settingsPanels.model.contactAdmin");
 }
 
 function ModelLabel({ config, model }: { config: AiConfig; model: string }) {
@@ -103,7 +103,7 @@ function ModelLabel({ config, model }: { config: AiConfig; model: string }) {
                 <ModelIcon model={model} />
                 <span className="truncate">{modelOptionLabel(config, model)}</span>
             </span>
-            {priceText && priceText !== "免费" ? <span className="shrink-0 text-[11px] opacity-60">{priceText}</span> : null}
+            {priceText && priceText !== i18n.t("pricing.free") ? <span className="shrink-0 text-[11px] opacity-60">{priceText}</span> : null}
         </span>
     );
 }

@@ -1,7 +1,9 @@
 /** 管理员后台用户详情抽屉：展示资料、云端业务数据表格、存储资源包、充值/调账记录与管理员改密。 */
 import { useCallback, useEffect, useState } from "react";
 import { App, Avatar, Button, Descriptions, Drawer, Form, Input, Popconfirm, Progress, Space, Spin, Switch, Table, Tabs, Tag, Tooltip, Typography, theme as antdTheme } from "antd";
+import type { TFunction } from "i18next";
 import { Coins, HardDrive, KeyRound, RefreshCw, Shield, User } from "lucide-react";
+import { useTranslation } from "react-i18next";
 
 import { formatCompactCredits, formatExactCredits } from "@/lib/format-number";
 import { ADMIN_TABLE_CLASS, ADMIN_TABLE_SCROLL } from "@/pages/admin/components/table-row-actions";
@@ -34,12 +36,14 @@ type ResetPasswordForm = {
     revokeSessions: boolean;
 };
 
-function getRechargeRecordMeta(row: CreditLedgerItem): { label: string; color: string } {
-    if (row.reason === "redeem_code") return { label: "兑换码充值", color: "green" };
-    if (row.reason === "plan_grant") return { label: "套餐赠送", color: "purple" };
+function getRechargeRecordMeta(row: CreditLedgerItem, t: TFunction): { label: string; color: string } {
+    if (row.reason === "redeem_code") return { label: t("userDetail.rechargeTypes.redeemCode"), color: "green" };
+    if (row.reason === "plan_grant") return { label: t("userDetail.rechargeTypes.planGrant"), color: "purple" };
     if (row.reason === "admin_adjust") {
-        if (row.meta?.action === "clear") return { label: "管理员清零", color: "red" };
-        return row.delta >= 0 ? { label: "管理员充值", color: "blue" } : { label: "管理员扣减", color: "orange" };
+        if (row.meta?.action === "clear") return { label: t("userDetail.rechargeTypes.adminClear"), color: "red" };
+        return row.delta >= 0
+            ? { label: t("userDetail.rechargeTypes.adminAdd"), color: "blue" }
+            : { label: t("userDetail.rechargeTypes.adminDeduct"), color: "orange" };
     }
     return { label: row.reason, color: "default" };
 }
@@ -61,6 +65,8 @@ export function UserDetailDrawer({
     onOpenQuota: (user: AdminUserItem) => void;
     onUpdateUser: (userId: string, payload: { role?: "admin" | "user"; status?: "active" | "disabled" }) => Promise<void>;
 }) {
+    const { t, i18n } = useTranslation();
+    const locale = i18n.resolvedLanguage || undefined;
     const { message } = App.useApp();
     const { token } = antdTheme.useToken();
     const [loading, setLoading] = useState(false);
@@ -77,12 +83,12 @@ export function UserDetailDrawer({
                 const res = await adminApi.getUserDetail(targetId, 7);
                 setDetail(res);
             } catch (error) {
-                message.error(error instanceof Error ? error.message : "加载用户详情失败");
+                message.error(error instanceof Error ? error.message : t("userDetail.loadFailed"));
             } finally {
                 setLoading(false);
             }
         },
-        [message, userId],
+        [message, t, userId],
     );
 
     useEffect(() => {
@@ -113,11 +119,11 @@ export function UserDetailDrawer({
                 newPassword: values.newPassword,
                 revokeSessions: values.revokeSessions,
             });
-            message.success("用户密码已修改");
+            message.success(t("userDetail.passwordUpdated"));
             passwordForm.resetFields();
             passwordForm.setFieldsValue({ revokeSessions: true });
         } catch (error) {
-            message.error(error instanceof Error ? error.message : "修改密码失败");
+            message.error(error instanceof Error ? error.message : t("userDetail.passwordUpdateFailed"));
         } finally {
             setSavingPassword(false);
         }
@@ -131,9 +137,9 @@ export function UserDetailDrawer({
     const quotaPercent = quotaBytes > 0 ? Math.min(100, Math.round((usedBytes / quotaBytes) * 100)) : 100;
 
     const grantSourceMeta: Record<string, { label: string; color: string }> = {
-        redeem_code: { label: "存储兑换码", color: "cyan" },
-        admin_grant: { label: "管理员发放", color: "blue" },
-        plan_grant: { label: "套餐赠送", color: "purple" },
+        redeem_code: { label: t("userDetail.grantSources.redeemCode"), color: "cyan" },
+        admin_grant: { label: t("userDetail.grantSources.adminGrant"), color: "blue" },
+        plan_grant: { label: t("userDetail.grantSources.planGrant"), color: "purple" },
     };
 
     const storageRows: UnifiedStorageRow[] = [];
@@ -142,13 +148,13 @@ export function UserDetailDrawer({
         storageRows.push({
             key: "base-quota",
             source: "admin_base",
-            sourceLabel: "管理员基础配额",
+            sourceLabel: t("userDetail.grantSources.adminBase"),
             sourceColor: "geekblue",
             quotaBytes: u.baseStorageQuotaBytes ?? 0,
             status: baseExpired ? "expired" : "active",
             expiresAt: u.baseStorageQuotaExpiresAt ?? null,
             createdAt: u.createdAt,
-            noteText: "管理员在「配置配额」中分配的基础存储空间",
+            noteText: t("userDetail.baseQuotaNote"),
         });
     }
     if (detail?.grants.length) {
@@ -170,11 +176,11 @@ export function UserDetailDrawer({
 
     const workspaceRows: WorkspaceCountRow[] = detail
         ? [
-              { key: "canvas", label: "无限画布", value: detail.stats.canvasProjectCount, unit: "个", description: "用户同步至云端的画布项目数" },
-              { key: "assets", label: "我的资产", value: detail.stats.assetCount, unit: "项", description: "收藏保存到云端的素材与提示词资产" },
-              { key: "media", label: "云端媒体", value: detail.stats.activeMediaCount, unit: "个", description: "当前占用对象存储的有效图片/视频/音频文件" },
-              { key: "imageLogs", label: "生图记录", value: detail.stats.imageLogCount, unit: "条", description: "生图工作台云端同步历史任务数" },
-              { key: "videoLogs", label: "视频记录", value: detail.stats.videoLogCount, unit: "条", description: "视频创作台云端同步历史任务数" },
+              { key: "canvas", label: t("userDetail.workspaceRows.canvas"), value: detail.stats.canvasProjectCount, unit: t("userDetail.workspaceRows.canvasUnit"), description: t("userDetail.workspaceRows.canvasDesc") },
+              { key: "assets", label: t("userDetail.workspaceRows.assets"), value: detail.stats.assetCount, unit: t("userDetail.workspaceRows.assetsUnit"), description: t("userDetail.workspaceRows.assetsDesc") },
+              { key: "media", label: t("userDetail.workspaceRows.media"), value: detail.stats.activeMediaCount, unit: t("userDetail.workspaceRows.mediaUnit"), description: t("userDetail.workspaceRows.mediaDesc") },
+              { key: "imageLogs", label: t("userDetail.workspaceRows.imageLogs"), value: detail.stats.imageLogCount, unit: t("userDetail.workspaceRows.imageLogsUnit"), description: t("userDetail.workspaceRows.imageLogsDesc") },
+              { key: "videoLogs", label: t("userDetail.workspaceRows.videoLogs"), value: detail.stats.videoLogCount, unit: t("userDetail.workspaceRows.videoLogsUnit"), description: t("userDetail.workspaceRows.videoLogsDesc") },
           ]
         : [];
 
@@ -182,14 +188,14 @@ export function UserDetailDrawer({
 
     return (
         <Drawer
-            title="用户详情"
+            title={t("userDetail.title")}
             open={Boolean(userId)}
             size={840}
             onClose={onClose}
             destroyOnHidden
             extra={
                 <Button size="small" icon={<RefreshCw className="size-3.5" />} loading={loading} onClick={() => void loadDetail()}>
-                    刷新
+                    {t("common.refresh")}
                 </Button>
             }
         >
@@ -217,49 +223,49 @@ export function UserDetailDrawer({
                                             {u.displayName || u.username}
                                         </span>
                                         <Tag color={u.role === "admin" ? "blue" : "default"} style={{ marginInlineEnd: 0 }}>
-                                            {u.role === "admin" ? "管理员" : "普通用户"}
+                                            {u.role === "admin" ? t("userDetail.roleAdmin") : t("userDetail.roleUser")}
                                         </Tag>
                                         <Tag color={u.status === "active" ? "green" : "red"} style={{ marginInlineEnd: 0 }}>
-                                            {u.status === "active" ? "正常" : "已禁用"}
+                                            {u.status === "active" ? t("userDetail.statusActive") : t("userDetail.statusDisabled")}
                                         </Tag>
-                                        {u.id === currentUserId ? <Tag style={{ marginInlineEnd: 0 }}>当前登录</Tag> : null}
+                                        {u.id === currentUserId ? <Tag style={{ marginInlineEnd: 0 }}>{t("userDetail.currentLogin")}</Tag> : null}
                                     </div>
                                     <Typography.Text type="secondary" className="mt-1 block text-xs">
                                         @{u.username}
-                                        {u.email ? ` · ${u.email}` : " · 未绑定邮箱"}
+                                        {u.email ? ` · ${u.email}` : ` · ${t("userDetail.noEmail")}`}
                                     </Typography.Text>
                                 </div>
                             </div>
                             <Space wrap size={8}>
                                 <Button size="small" icon={<Coins className="size-3.5" />} onClick={() => onOpenCredits(u)}>
-                                    调整积分
+                                    {t("userDetail.adjustCredits")}
                                 </Button>
                                 <Button size="small" icon={<HardDrive className="size-3.5" />} onClick={() => onOpenQuota(u)}>
-                                    配置配额
+                                    {t("userDetail.configQuota")}
                                 </Button>
                                 {u.isInitialAdmin && u.role === "admin" ? (
-                                    <Tooltip title="系统初始管理员不可降级">
+                                    <Tooltip title={t("userDetail.initialAdminProtected")}>
                                         <Button size="small" icon={<Shield className="size-3.5" />} disabled>
-                                            降级
+                                            {t("userDetail.demote")}
                                         </Button>
                                     </Tooltip>
                                 ) : (
                                     <Popconfirm
-                                        title={u.role === "admin" ? "确定将其降为普通用户吗？" : "确定将其设为系统管理员吗？"}
+                                        title={u.role === "admin" ? t("userDetail.confirmDemote") : t("userDetail.confirmPromote")}
                                         onConfirm={() => void handleQuickUpdate({ role: u.role === "admin" ? "user" : "admin" })}
                                     >
                                         <Button size="small" icon={<Shield className="size-3.5" />} loading={updating}>
-                                            {u.role === "admin" ? "降级" : "提权"}
+                                            {u.role === "admin" ? t("userDetail.demote") : t("userDetail.promote")}
                                         </Button>
                                     </Popconfirm>
                                 )}
                                 {u.id !== currentUserId && !u.isInitialAdmin ? (
                                     <Popconfirm
-                                        title={u.status === "active" ? "确定禁用该账号吗？其登录会话将立即失效。" : "确定重新启用该账号吗？"}
+                                        title={u.status === "active" ? t("userDetail.confirmDisable") : t("userDetail.confirmEnable")}
                                         onConfirm={() => void handleQuickUpdate({ status: u.status === "active" ? "disabled" : "active" })}
                                     >
                                         <Button size="small" danger={u.status === "active"} loading={updating}>
-                                            {u.status === "active" ? "禁用" : "启用"}
+                                            {u.status === "active" ? t("userDetail.disable") : t("userDetail.enable")}
                                         </Button>
                                     </Popconfirm>
                                 ) : null}
@@ -268,53 +274,58 @@ export function UserDetailDrawer({
 
                         {/* 等高 KPI 指标卡片 */}
                         <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-                            <Tooltip title={`精确余额：${formatExactCredits(u.creditBalance ?? 0)} 积分`}>
+                            <Tooltip title={t("userDetail.kpi.exactBalance", { value: formatExactCredits(u.creditBalance ?? 0) })}>
                                 <div
                                     className="flex flex-col justify-between rounded-xl border p-3.5"
                                     style={{ borderColor: token.colorBorderSecondary, backgroundColor: token.colorBgContainer }}
                                 >
                                     <div className="text-xs" style={{ color: token.colorTextSecondary }}>
-                                        当前积分余额
+                                        {t("userDetail.kpi.currentCredits")}
                                     </div>
                                     <div className="mt-1.5 text-xl font-semibold tabular-nums" style={{ color: token.colorText }}>
                                         {formatCompactCredits(u.creditBalance ?? 0)}
                                     </div>
                                     <div className="mt-2 text-[11px]" style={{ color: token.colorTextTertiary }}>
-                                        可用消费余额
+                                        {t("userDetail.kpi.availableCredits")}
                                     </div>
                                 </div>
                             </Tooltip>
 
-                            <Tooltip title={`累计精确消耗：${formatExactCredits(detail.consumption.totalConsumedCredits)} · 今日：${formatExactCredits(detail.consumption.todayConsumedCredits)}`}>
+                            <Tooltip
+                                title={t("userDetail.kpi.exactConsumed", {
+                                    total: formatExactCredits(detail.consumption.totalConsumedCredits),
+                                    today: formatExactCredits(detail.consumption.todayConsumedCredits),
+                                })}
+                            >
                                 <div
                                     className="flex flex-col justify-between rounded-xl border p-3.5"
                                     style={{ borderColor: token.colorBorderSecondary, backgroundColor: token.colorBgContainer }}
                                 >
                                     <div className="text-xs" style={{ color: token.colorTextSecondary }}>
-                                        累计消耗积分
+                                        {t("userDetail.kpi.totalConsumed")}
                                     </div>
                                     <div className="mt-1.5 text-xl font-semibold tabular-nums" style={{ color: token.colorText }}>
                                         {formatCompactCredits(detail.consumption.totalConsumedCredits)}
                                     </div>
                                     <div className="mt-2 text-[11px]" style={{ color: token.colorTextTertiary }}>
-                                        今日净消耗 {formatCompactCredits(detail.consumption.todayConsumedCredits)}
+                                        {t("userDetail.kpi.todayNet", { value: formatCompactCredits(detail.consumption.todayConsumedCredits) })}
                                     </div>
                                 </div>
                             </Tooltip>
 
-                            <Tooltip title={`累计精确充值：${formatExactCredits(detail.stats.totalRechargedCredits)} 积分`}>
+                            <Tooltip title={t("userDetail.kpi.exactRecharged", { value: formatExactCredits(detail.stats.totalRechargedCredits) })}>
                                 <div
                                     className="flex flex-col justify-between rounded-xl border p-3.5"
                                     style={{ borderColor: token.colorBorderSecondary, backgroundColor: token.colorBgContainer }}
                                 >
                                     <div className="text-xs" style={{ color: token.colorTextSecondary }}>
-                                        累计充值积分
+                                        {t("userDetail.kpi.totalRecharged")}
                                     </div>
                                     <div className="mt-1.5 text-xl font-semibold tabular-nums" style={{ color: token.colorText }}>
                                         {formatCompactCredits(detail.stats.totalRechargedCredits)}
                                     </div>
                                     <div className="mt-2 text-[11px]" style={{ color: token.colorTextTertiary }}>
-                                        有效充值与调账 {rechargeLogs.length} 笔
+                                        {t("userDetail.kpi.rechargeCount", { count: rechargeLogs.length })}
                                     </div>
                                 </div>
                             </Tooltip>
@@ -324,7 +335,7 @@ export function UserDetailDrawer({
                                 style={{ borderColor: token.colorBorderSecondary, backgroundColor: token.colorBgContainer }}
                             >
                                 <div className="text-xs" style={{ color: token.colorTextSecondary }}>
-                                    云端存储占用
+                                    {t("userDetail.kpi.cloudStorage")}
                                 </div>
                                 <div className="mt-1.5 truncate text-sm font-semibold tabular-nums" style={{ color: token.colorText }}>
                                     {formatBytes(usedBytes)} / {formatBytes(quotaBytes)}
@@ -332,7 +343,11 @@ export function UserDetailDrawer({
                                 <div className="mt-2 flex flex-col gap-1">
                                     <Progress percent={quotaPercent} size="small" showInfo={false} status={quotaExceeded ? "exception" : "normal"} />
                                     <div className="text-[11px]" style={{ color: quotaExpired ? token.colorError : token.colorTextTertiary }}>
-                                        {quotaExpired ? "配额已过期" : u.storageQuotaExpiresAt ? `至 ${new Date(u.storageQuotaExpiresAt).toLocaleDateString("zh-CN")}` : "永久有效"}
+                                        {quotaExpired
+                                            ? t("userDetail.kpi.quotaExpired")
+                                            : u.storageQuotaExpiresAt
+                                              ? t("userDetail.kpi.untilDate", { date: new Date(u.storageQuotaExpiresAt).toLocaleDateString(locale) })
+                                              : t("userDetail.kpi.permanent")}
                                     </div>
                                 </div>
                             </div>
@@ -342,7 +357,7 @@ export function UserDetailDrawer({
                             items={[
                                 {
                                     key: "overview",
-                                    label: "概览",
+                                    label: t("userDetail.tabs.overview"),
                                     children: (
                                         <div className="flex flex-col gap-4 pt-1">
                                             <Descriptions
@@ -351,44 +366,44 @@ export function UserDetailDrawer({
                                                 column={2}
                                                 styles={{ label: { whiteSpace: "nowrap", width: 112 } }}
                                             >
-                                                <Descriptions.Item label="用户名">
+                                                <Descriptions.Item label={t("userDetail.fields.username")}>
                                                     <Typography.Text strong>@{u.username}</Typography.Text>
                                                 </Descriptions.Item>
-                                                <Descriptions.Item label="用户 ID">
+                                                <Descriptions.Item label={t("userDetail.fields.userId")}>
                                                     <Typography.Text copyable className="font-mono text-xs">
                                                         {u.id}
                                                     </Typography.Text>
                                                 </Descriptions.Item>
-                                                <Descriptions.Item label="绑定邮箱">
+                                                <Descriptions.Item label={t("userDetail.fields.email")}>
                                                     {u.email ? (
                                                         <Space size={6}>
                                                             <span>{u.email}</span>
                                                             <Tag color={u.emailVerifiedAt ? "green" : "orange"} style={{ marginInlineEnd: 0 }}>
-                                                                {u.emailVerifiedAt ? "已验证" : "未验证"}
+                                                                {u.emailVerifiedAt ? t("userDetail.fields.verified") : t("userDetail.fields.unverified")}
                                                             </Tag>
                                                         </Space>
                                                     ) : (
-                                                        <Typography.Text type="secondary">未绑定</Typography.Text>
+                                                        <Typography.Text type="secondary">{t("userDetail.fields.unbound")}</Typography.Text>
                                                     )}
                                                 </Descriptions.Item>
-                                                <Descriptions.Item label="余额不足提醒">
+                                                <Descriptions.Item label={t("userDetail.fields.lowBalanceAlert")}>
                                                     {u.lowBalanceAlertEnabled === false
-                                                        ? "已关闭"
+                                                        ? t("userDetail.fields.alertOff")
                                                         : u.lowBalanceAlertEnabled === true
-                                                          ? `自定义阈值 ${u.lowBalanceThreshold ?? 10}`
-                                                          : "跟随平台默认"}
+                                                          ? t("userDetail.fields.alertCustom", { value: u.lowBalanceThreshold ?? 10 })
+                                                          : t("userDetail.fields.alertDefault")}
                                                 </Descriptions.Item>
-                                                <Descriptions.Item label="注册时间">
-                                                    {new Date(u.createdAt).toLocaleString("zh-CN")}
+                                                <Descriptions.Item label={t("userDetail.fields.createdAt")}>
+                                                    {new Date(u.createdAt).toLocaleString(locale)}
                                                 </Descriptions.Item>
-                                                <Descriptions.Item label="最近登录">
-                                                    {u.lastLoginAt ? new Date(u.lastLoginAt).toLocaleString("zh-CN") : "暂无记录"}
+                                                <Descriptions.Item label={t("userDetail.fields.lastLoginAt")}>
+                                                    {u.lastLoginAt ? new Date(u.lastLoginAt).toLocaleString(locale) : t("userDetail.fields.noRecord")}
                                                 </Descriptions.Item>
                                             </Descriptions>
 
                                             <div>
                                                 <div className="mb-2 text-xs font-medium" style={{ color: token.colorTextSecondary }}>
-                                                    云端业务数据
+                                                    {t("userDetail.cloudDataTitle")}
                                                 </div>
                                                 <Table<WorkspaceCountRow>
                                                     rowKey="key"
@@ -398,9 +413,9 @@ export function UserDetailDrawer({
                                                     dataSource={workspaceRows}
                                                     pagination={false}
                                                     columns={[
-                                                        { title: "数据类型", dataIndex: "label", width: 140 },
+                                                        { title: t("userDetail.workspaceCols.type"), dataIndex: "label", width: 140 },
                                                         {
-                                                            title: "数量",
+                                                            title: t("userDetail.workspaceCols.count"),
                                                             key: "value",
                                                             width: 110,
                                                             render: (_, row) => (
@@ -410,7 +425,7 @@ export function UserDetailDrawer({
                                                             ),
                                                         },
                                                         {
-                                                            title: "说明",
+                                                            title: t("userDetail.workspaceCols.desc"),
                                                             dataIndex: "description",
                                                             render: (text: string) => (
                                                                 <Typography.Text type="secondary" className="text-xs">
@@ -426,13 +441,20 @@ export function UserDetailDrawer({
                                 },
                                 {
                                     key: "grants",
-                                    label: `存储资源包 (${storageRows.length})`,
+                                    label: t("userDetail.tabs.grants", { count: storageRows.length }),
                                     children: (
                                         <div className="flex flex-col gap-3 pt-1">
                                             <div className="text-xs" style={{ color: token.colorTextSecondary }}>
-                                                当前总有效配额：{formatBytes(quotaBytes)}（管理员基础配额：{formatBytes(u.baseStorageQuotaBytes ?? 0)}
-                                                {u.baseStorageQuotaExpiresAt ? ` · 至 ${new Date(u.baseStorageQuotaExpiresAt).toLocaleDateString("zh-CN")}` : " · 永久"}
-                                                ，有效资源包：{formatBytes(u.storageGrantsQuotaBytes ?? 0)}）
+                                                {t("userDetail.grantsSummary", {
+                                                    total: formatBytes(quotaBytes),
+                                                    base: formatBytes(u.baseStorageQuotaBytes ?? 0),
+                                                    baseExpiry: u.baseStorageQuotaExpiresAt
+                                                        ? t("userDetail.baseExpiryDate", {
+                                                              date: new Date(u.baseStorageQuotaExpiresAt).toLocaleDateString(locale),
+                                                          })
+                                                        : t("userDetail.baseExpiryPermanent"),
+                                                    grants: formatBytes(u.storageGrantsQuotaBytes ?? 0),
+                                                })}
                                             </div>
                                             <Table<UnifiedStorageRow>
                                                 rowKey="key"
@@ -444,11 +466,11 @@ export function UserDetailDrawer({
                                                     defaultPageSize: 10,
                                                     showSizeChanger: true,
                                                     pageSizeOptions: [10, 20, 30, 50, 100],
-                                                    showTotal: (c) => `共 ${c} 条`,
+                                                    showTotal: (c) => t("common.totalItems", { count: c }),
                                                 }}
                                                 columns={[
                                                     {
-                                                        title: "来源",
+                                                        title: t("userDetail.grantCols.source"),
                                                         key: "source",
                                                         width: 130,
                                                         render: (_, row) => (
@@ -458,42 +480,42 @@ export function UserDetailDrawer({
                                                         ),
                                                     },
                                                     {
-                                                        title: "容量",
+                                                        title: t("userDetail.grantCols.capacity"),
                                                         dataIndex: "quotaBytes",
                                                         width: 100,
                                                         render: (v: number) => <span className="font-medium tabular-nums">{formatBytes(v)}</span>,
                                                     },
                                                     {
-                                                        title: "状态",
+                                                        title: t("userDetail.grantCols.status"),
                                                         key: "status",
                                                         width: 90,
                                                         render: (_, row) =>
                                                             row.status === "revoked" ? (
-                                                                <Tag style={{ marginInlineEnd: 0 }}>已停用</Tag>
+                                                                <Tag style={{ marginInlineEnd: 0 }}>{t("userDetail.grantStatus.revoked")}</Tag>
                                                             ) : row.status === "expired" ? (
                                                                 <Tag color="red" style={{ marginInlineEnd: 0 }}>
-                                                                    已过期
+                                                                    {t("userDetail.grantStatus.expired")}
                                                                 </Tag>
                                                             ) : (
                                                                 <Tag color="green" style={{ marginInlineEnd: 0 }}>
-                                                                    生效中
+                                                                    {t("userDetail.grantStatus.active")}
                                                                 </Tag>
                                                             ),
                                                     },
                                                     {
-                                                        title: "到期时间",
+                                                        title: t("userDetail.grantCols.expiresAt"),
                                                         dataIndex: "expiresAt",
                                                         width: 170,
-                                                        render: (v?: string | null) => (v ? new Date(v).toLocaleString("zh-CN") : "永久有效"),
+                                                        render: (v?: string | null) => (v ? new Date(v).toLocaleString(locale) : t("userDetail.kpi.permanent")),
                                                     },
                                                     {
-                                                        title: "分配 / 兑换时间",
+                                                        title: t("userDetail.grantCols.assignedAt"),
                                                         dataIndex: "createdAt",
                                                         width: 170,
-                                                        render: (v?: string | null) => (v ? new Date(v).toLocaleString("zh-CN") : "—"),
+                                                        render: (v?: string | null) => (v ? new Date(v).toLocaleString(locale) : "—"),
                                                     },
                                                     {
-                                                        title: "备注 / 兑换码",
+                                                        title: t("userDetail.grantCols.note"),
                                                         dataIndex: "noteText",
                                                         width: 200,
                                                         ellipsis: true,
@@ -505,7 +527,7 @@ export function UserDetailDrawer({
                                 },
                                 {
                                     key: "recharges",
-                                    label: `充值记录 (${rechargeLogs.length})`,
+                                    label: t("userDetail.tabs.recharges", { count: rechargeLogs.length }),
                                     children: (
                                         <div className="pt-1">
                                             <Table<CreditLedgerItem>
@@ -518,21 +540,21 @@ export function UserDetailDrawer({
                                                     defaultPageSize: 10,
                                                     showSizeChanger: true,
                                                     pageSizeOptions: [10, 20, 30, 50, 100],
-                                                    showTotal: (c) => `共 ${c} 条`,
+                                                    showTotal: (c) => t("common.totalItems", { count: c }),
                                                 }}
                                                 columns={[
                                                     {
-                                                        title: "时间",
+                                                        title: t("userDetail.rechargeCols.time"),
                                                         dataIndex: "createdAt",
                                                         width: 170,
-                                                        render: (v: string) => new Date(v).toLocaleString("zh-CN"),
+                                                        render: (v: string) => new Date(v).toLocaleString(locale),
                                                     },
                                                     {
-                                                        title: "类型",
+                                                        title: t("userDetail.rechargeCols.type"),
                                                         key: "reason",
                                                         width: 110,
                                                         render: (_, row) => {
-                                                            const info = getRechargeRecordMeta(row);
+                                                            const info = getRechargeRecordMeta(row, t);
                                                             return (
                                                                 <Tag color={info.color} style={{ marginInlineEnd: 0 }}>
                                                                     {info.label}
@@ -541,7 +563,7 @@ export function UserDetailDrawer({
                                                         },
                                                     },
                                                     {
-                                                        title: "积分变动",
+                                                        title: t("userDetail.rechargeCols.delta"),
                                                         dataIndex: "delta",
                                                         width: 110,
                                                         render: (delta: number) => (
@@ -553,7 +575,7 @@ export function UserDetailDrawer({
                                                         ),
                                                     },
                                                     {
-                                                        title: "变动后余额",
+                                                        title: t("userDetail.rechargeCols.balanceAfter"),
                                                         dataIndex: "balanceAfter",
                                                         width: 110,
                                                         render: (v: number) => (
@@ -563,7 +585,7 @@ export function UserDetailDrawer({
                                                         ),
                                                     },
                                                     {
-                                                        title: "备注 / 兑换码",
+                                                        title: t("userDetail.rechargeCols.note"),
                                                         key: "note",
                                                         width: 220,
                                                         ellipsis: true,
@@ -580,7 +602,7 @@ export function UserDetailDrawer({
                                 },
                                 {
                                     key: "password",
-                                    label: "修改密码",
+                                    label: t("userDetail.tabs.password"),
                                     children: (
                                         <div className="max-w-md pt-2">
                                             <Form
@@ -591,38 +613,38 @@ export function UserDetailDrawer({
                                             >
                                                 <Form.Item
                                                     name="newPassword"
-                                                    label="新密码"
+                                                    label={t("userDetail.passwordForm.newPassword")}
                                                     rules={[
-                                                        { required: true, message: "请输入新密码" },
-                                                        { min: 6, message: "新密码至少 6 位" },
-                                                        { max: 128, message: "密码不能超过 128 个字符" },
+                                                        { required: true, message: t("userDetail.passwordForm.newPasswordReq") },
+                                                        { min: 6, message: t("userDetail.passwordForm.newPasswordMin") },
+                                                        { max: 128, message: t("userDetail.passwordForm.newPasswordMax") },
                                                     ]}
                                                 >
-                                                    <Input.Password placeholder="输入新密码（至少 6 位）" autoComplete="new-password" />
+                                                    <Input.Password placeholder={t("userDetail.passwordForm.newPasswordPlaceholder")} autoComplete="new-password" />
                                                 </Form.Item>
                                                 <Form.Item
                                                     name="confirmPassword"
-                                                    label="确认新密码"
+                                                    label={t("userDetail.passwordForm.confirmPassword")}
                                                     dependencies={["newPassword"]}
                                                     rules={[
-                                                        { required: true, message: "请再次输入新密码" },
+                                                        { required: true, message: t("userDetail.passwordForm.confirmPasswordReq") },
                                                         ({ getFieldValue }) => ({
                                                             validator(_, value) {
                                                                 if (!value || getFieldValue("newPassword") === value) {
                                                                     return Promise.resolve();
                                                                 }
-                                                                return Promise.reject(new Error("两次输入的新密码不一致"));
+                                                                return Promise.reject(new Error(t("userDetail.passwordForm.confirmMismatch")));
                                                             },
                                                         }),
                                                     ]}
                                                 >
-                                                    <Input.Password placeholder="再次输入新密码确认" autoComplete="new-password" />
+                                                    <Input.Password placeholder={t("userDetail.passwordForm.confirmPlaceholder")} autoComplete="new-password" />
                                                 </Form.Item>
-                                                <Form.Item name="revokeSessions" label="修改后强制该用户重新登录" valuePropName="checked">
+                                                <Form.Item name="revokeSessions" label={t("userDetail.passwordForm.revokeSessions")} valuePropName="checked">
                                                     <Switch />
                                                 </Form.Item>
                                                 <Button type="primary" htmlType="submit" icon={<KeyRound className="size-4" />} loading={savingPassword}>
-                                                    确认修改密码
+                                                    {t("userDetail.passwordForm.submit")}
                                                 </Button>
                                             </Form>
                                         </div>

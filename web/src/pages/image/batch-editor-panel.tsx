@@ -3,6 +3,7 @@ import { useRef, useState } from "react";
 import { Alert, App, Button, Input, InputNumber, Segmented, Tag, Tooltip } from "antd";
 import { ArrowLeft, ArrowRight, BookOpen, ClipboardPaste, Copy, FolderPlus, Plus, SlidersHorizontal, Trash2, Upload } from "lucide-react";
 import { nanoid } from "nanoid";
+import { Trans, useTranslation } from "react-i18next";
 
 import { imageReferenceLabel } from "@/lib/image-reference-prompt";
 import { previewUrlFor, uploadImage } from "@/services/image-storage";
@@ -45,12 +46,6 @@ type BatchEditorPanelProps = {
     onOpenAssetPicker: (target: { mode: "same-prompt-text" } | { mode: "same-slot"; slotIndex: number } | { mode: "multi-ref" } | { mode: "custom-item"; itemId: string }) => void;
 };
 
-const SCENARIO_DESCRIPTIONS: Record<BatchScenario, string> = {
-    "same-prompt": "适合多张图片（或图1/图2/图3组合）共用同一句提示词，传 1 张图则自动固定搭配所有任务。",
-    "multi-prompt": "适合用同一张参考图（或不放图纯文字）配合多条不同提示词批量出图。",
-    custom: "每条任务可独立设置自己的提示词和参考图，也支持从前两种模式一键转入微调。",
-};
-
 function moveItem<T>(items: T[], index: number, offset: number) {
     const target = index + offset;
     if (target < 0 || target >= items.length) return items;
@@ -90,6 +85,7 @@ function ImageDropBox({
     onClearImages?: () => void;
     showOrdinal?: boolean;
 }) {
+    const { t } = useTranslation();
     const fileInputRef = useRef<HTMLInputElement>(null);
     const dragDepthRef = useRef(0);
     const [dragActive, setDragActive] = useState(false);
@@ -122,17 +118,17 @@ function ImageDropBox({
                 <div className="flex min-w-0 items-center gap-1.5">{title}</div>
                 <div className="flex flex-wrap items-center gap-1">
                     <Button size="small" icon={<Upload className="size-3.5" />} loading={uploading} disabled={disabled} onClick={() => fileInputRef.current?.click()}>
-                        上传
+                        {t("common.upload")}
                     </Button>
                     <Button size="small" icon={<ClipboardPaste className="size-3.5" />} loading={pasting} disabled={disabled} onClick={() => void handlePasteClick()}>
-                        粘贴
+                        {t("common.paste")}
                     </Button>
                     <Button size="small" icon={<FolderPlus className="size-3.5" />} disabled={disabled} onClick={onPickAsset}>
-                        资产
+                        {t("imageBatch.assetsBtn")}
                     </Button>
                     {images.length && onClearImages ? (
                         <Button size="small" type="text" danger disabled={disabled} onClick={onClearImages}>
-                            清空
+                            {t("common.clear")}
                         </Button>
                     ) : null}
                     {canRemoveBox && onRemoveBox ? (
@@ -195,7 +191,7 @@ function ImageDropBox({
                                 type="button"
                                 className="absolute right-0.5 top-0.5 hidden size-5 items-center justify-center rounded bg-black/65 text-white group-hover:flex"
                                 onClick={() => onRemoveImage(item.id)}
-                                aria-label="移除参考图"
+                                aria-label={t("imageWorkbench.removeReference")}
                             >
                                 <Trash2 className="size-3" />
                             </button>
@@ -204,7 +200,7 @@ function ImageDropBox({
                 ))}
                 {!images.length ? (
                     <div className="flex min-w-full items-center justify-center text-center text-xs text-stone-500">
-                        {dragActive ? "松开即可批量添加" : emptyText}
+                        {dragActive ? t("imageBatch.dropToBatchAdd") : emptyText}
                     </div>
                 ) : null}
             </div>
@@ -249,6 +245,7 @@ export function BatchEditorPanel({
     onOpenAssetPicker,
 }: BatchEditorPanelProps) {
     const { message } = App.useApp();
+    const { t } = useTranslation();
     const itemFileInputRef = useRef<HTMLInputElement>(null);
     const uploadTargetItemIdRef = useRef<string | null>(null);
     const [uploadingItemId, setUploadingItemId] = useState<string | null>(null);
@@ -264,7 +261,7 @@ export function BatchEditorPanel({
                 }),
             );
         } catch (error) {
-            message.error(error instanceof Error ? error.message : "读取图片失败");
+            message.error(error instanceof Error ? error.message : t("common.imageReadFailed"));
             return [];
         }
     };
@@ -276,7 +273,7 @@ export function BatchEditorPanel({
                 clipItems.flatMap((item) => item.types.filter((type) => type.startsWith("image/")).map((type) => item.getType(type))),
             );
             if (!blobs.length) {
-                message.error("剪贴板中没有可用图片");
+                message.error(t("imageBatch.clipboardEmpty"));
                 return [];
             }
             const uploaded = await Promise.all(
@@ -285,10 +282,10 @@ export function BatchEditorPanel({
                     return { id: nanoid(), name: `clipboard-${index + 1}.png`, type: image.mimeType, dataUrl: image.url, storageKey: image.storageKey };
                 }),
             );
-            message.success(`已从剪贴板添加 ${uploaded.length} 张图片`);
+            message.success(t("imageBatch.clipboardAdded", { count: uploaded.length }));
             return uploaded;
         } catch {
-            message.error("剪贴板中没有可用图片或无读取权限");
+            message.error(t("imageBatch.clipboardUnavailable"));
             return [];
         }
     };
@@ -310,9 +307,9 @@ export function BatchEditorPanel({
         <div className="space-y-4">
             <div className="space-y-2 rounded-lg border border-stone-200 bg-stone-50/80 p-3 dark:border-stone-800 dark:bg-stone-900/60">
                 <div className="flex flex-wrap items-center justify-between gap-2">
-                    <span className="text-xs font-semibold text-stone-700 dark:text-stone-300">选择批量方式</span>
+                    <span className="text-xs font-semibold text-stone-700 dark:text-stone-300">{t("imageBatch.chooseMode")}</span>
                     <div className="flex items-center gap-2 text-xs text-stone-500 dark:text-stone-400">
-                        <span>并发</span>
+                        <span>{t("imageBatch.concurrency")}</span>
                         <InputNumber
                             size="small"
                             min={1}
@@ -322,7 +319,7 @@ export function BatchEditorPanel({
                             onChange={(val) => onConcurrencyChange(Math.max(1, Math.min(MAX_BATCH_CONCURRENCY, Number(val) || 3)))}
                             style={{ width: 58 }}
                         />
-                        <span>上限 {MAX_BATCH_IMAGES} 张</span>
+                        <span>{t("imageBatch.maxImagesLimit", { max: MAX_BATCH_IMAGES })}</span>
                     </div>
                 </div>
                 <Segmented
@@ -331,25 +328,25 @@ export function BatchEditorPanel({
                     value={scenario}
                     onChange={(val) => onScenarioChange(val as BatchScenario)}
                     options={[
-                        { label: "多图同词", value: "same-prompt" },
-                        { label: "一图多词", value: "multi-prompt" },
-                        { label: "自由队列", value: "custom" },
+                        { label: t("imageBatch.scenarios.samePrompt"), value: "same-prompt" },
+                        { label: t("imageBatch.scenarios.multiPrompt"), value: "multi-prompt" },
+                        { label: t("imageBatch.scenarios.custom"), value: "custom" },
                     ]}
                 />
-                <div className="text-xs leading-5 text-stone-500 dark:text-stone-400">{SCENARIO_DESCRIPTIONS[scenario]}</div>
+                <div className="text-xs leading-5 text-stone-500 dark:text-stone-400">{t(`imageBatch.scenarioDescriptions.${scenario}`)}</div>
             </div>
 
             {scenario === "same-prompt" ? (
                 <div className="space-y-4">
                     <div>
                         <div className="mb-1.5 flex items-center justify-between gap-2">
-                            <span className="text-sm font-semibold">第 1 步 · 填写共用提示词</span>
+                            <span className="text-sm font-semibold">{t("imageBatch.step1SharedPrompt")}</span>
                             <div className="flex gap-1.5">
                                 <Button size="small" icon={<BookOpen className="size-3.5" />} disabled={running} onClick={() => onOpenPromptDialog("same-prompt")}>
-                                    提示词库
+                                    {t("imageBatch.promptLibrary")}
                                 </Button>
                                 <Button size="small" icon={<FolderPlus className="size-3.5" />} disabled={running} onClick={() => onOpenAssetPicker({ mode: "same-prompt-text" })}>
-                                    资产
+                                    {t("imageBatch.assetsBtn")}
                                 </Button>
                             </div>
                         </div>
@@ -358,13 +355,13 @@ export function BatchEditorPanel({
                             onChange={(e) => onSharedPromptChange(e.target.value)}
                             rows={4}
                             disabled={running}
-                            placeholder="例如：让图1的人物穿上这件图2的服装，保持面部特征和光影自然；输入后自动应用到所有任务"
+                            placeholder={t("imageBatch.sharedPromptPlaceholder")}
                         />
                     </div>
 
                     <div className="space-y-2.5">
                         <div className="flex items-center justify-between gap-2">
-                            <span className="text-sm font-semibold">第 2 步 · 批量放入参考图（按图1/图2/图3顺序）</span>
+                            <span className="text-sm font-semibold">{t("imageBatch.step2BatchRefs")}</span>
                             <Button
                                 size="small"
                                 type="dashed"
@@ -372,7 +369,7 @@ export function BatchEditorPanel({
                                 disabled={running || samePromptSlots.length >= 12}
                                 onClick={() => onSamePromptSlotsChange((prev) => [...prev, []])}
                             >
-                                添加图{samePromptSlots.length + 1}
+                                {t("imageBatch.addImageSlot", { index: samePromptSlots.length + 1 })}
                             </Button>
                         </div>
 
@@ -384,20 +381,20 @@ export function BatchEditorPanel({
                                         <Tag color="blue" className="m-0">
                                             {imageReferenceLabel(slotIndex)}
                                         </Tag>
-                                        <span className="text-xs font-semibold">第 {slotIndex + 1} 张参考图</span>
+                                        <span className="text-xs font-semibold">{t("imageBatch.refSlotTitle", { index: slotIndex + 1 })}</span>
                                         <Tag className="m-0">
-                                            {slotImages.length === 1 && previewTaskCount > 1 ? `1 张（固定共用）` : `${slotImages.length} 张`}
+                                            {slotImages.length === 1 && previewTaskCount > 1 ? t("imageBatch.slotCountFixed") : t("imageBatch.slotCount", { count: slotImages.length })}
                                         </Tag>
                                     </>
                                 }
                                 hint={
                                     slotIndex === 0
-                                        ? "上传多张图会自动生成对应组数的任务，并与下方图2、图3按序号一一配对"
-                                        : "仅放 1 张时自动固定搭配全部任务；放多张时请与图1数量一致"
+                                        ? t("imageBatch.slot1Hint")
+                                        : t("imageBatch.slotOtherHint")
                                 }
                                 images={slotImages}
                                 showOrdinal
-                                emptyText={`拖拽或点击上传多张「${imageReferenceLabel(slotIndex)}」`}
+                                emptyText={t("imageBatch.slotEmptyText", { label: imageReferenceLabel(slotIndex) })}
                                 disabled={running}
                                 canRemoveBox={samePromptSlots.length > 1}
                                 onRemoveBox={() => onSamePromptSlotsChange((prev) => prev.filter((_, idx) => idx !== slotIndex))}
@@ -438,10 +435,10 @@ export function BatchEditorPanel({
                     {previewTaskCount > 0 ? (
                         <div className="flex items-center justify-between gap-2 rounded-lg border border-stone-200 px-3 py-2 text-xs dark:border-stone-800">
                             <span className="text-stone-600 dark:text-stone-300">
-                                已自动配对 <strong>{previewTaskCount}</strong> 组任务（右侧可实时预览）
+                                <Trans i18nKey="imageBatch.matchedGroups" values={{ count: previewTaskCount }} components={{ strong: <strong /> }} />
                             </span>
                             <Button size="small" icon={<SlidersHorizontal className="size-3.5" />} disabled={running} onClick={onConvertToCustom}>
-                                转自由队列微调
+                                {t("imageBatch.convertToCustom")}
                             </Button>
                         </div>
                     ) : null}
@@ -452,12 +449,12 @@ export function BatchEditorPanel({
                 <div className="space-y-4">
                     <div>
                         <div className="mb-1.5 flex items-center justify-between gap-2">
-                            <span className="text-sm font-semibold">第 1 步 · 放入共用参考图（可选）</span>
+                            <span className="text-sm font-semibold">{t("imageBatch.step1SharedRefsOptional")}</span>
                         </div>
                         <ImageDropBox
-                            title={<span className="text-xs font-medium text-stone-600 dark:text-stone-300">所有提示词将共用这里放入的参考图（不放则纯文生图）</span>}
+                            title={<span className="text-xs font-medium text-stone-600 dark:text-stone-300">{t("imageBatch.sharedRefsHint")}</span>}
                             images={sharedRefs}
-                            emptyText="拖入或上传 1 张或多张参考图（可留空纯文生图）"
+                            emptyText={t("imageBatch.sharedRefsEmpty")}
                             disabled={running}
                             onAddFiles={async (files) => {
                                 const uploaded = await readUploadedFiles(files);
@@ -478,7 +475,7 @@ export function BatchEditorPanel({
 
                     <div>
                         <div className="mb-1.5 flex flex-wrap items-center justify-between gap-2">
-                            <span className="text-sm font-semibold">第 2 步 · 批量输入多条提示词</span>
+                            <span className="text-sm font-semibold">{t("imageBatch.step2MultiPrompts")}</span>
                             <div className="flex flex-wrap gap-1.5">
                                 <Segmented
                                     size="small"
@@ -486,12 +483,12 @@ export function BatchEditorPanel({
                                     value={splitMode}
                                     onChange={(val) => onSplitModeChange(val as PromptSplitMode)}
                                     options={[
-                                        { label: "每行一条", value: "line" },
-                                        { label: "空行分段", value: "blank" },
+                                        { label: t("imageBatch.splitLine"), value: "line" },
+                                        { label: t("imageBatch.splitBlank"), value: "blank" },
                                     ]}
                                 />
                                 <Button size="small" icon={<BookOpen className="size-3.5" />} disabled={running} onClick={() => onOpenPromptDialog("multi-prompt")}>
-                                    追加提示词
+                                    {t("imageBatch.appendPrompts")}
                                 </Button>
                             </div>
                         </div>
@@ -502,17 +499,17 @@ export function BatchEditorPanel({
                             disabled={running}
                             placeholder={
                                 splitMode === "line"
-                                    ? "每行输入一条提示词，例如：\n赛博朋克霓虹夜景风格\n吉卜力手绘水彩风格\n极简产品白底棚拍光影"
-                                    : "用空行分隔多条长段落提示词，每段生成一组任务"
+                                    ? t("imageBatch.multiPromptLinePlaceholder")
+                                    : t("imageBatch.multiPromptBlankPlaceholder")
                             }
                         />
                         {previewTaskCount > 0 ? (
                             <div className="mt-2 flex items-center justify-between gap-2 rounded-lg border border-stone-200 px-3 py-2 text-xs dark:border-stone-800">
                                 <span className="text-stone-600 dark:text-stone-300">
-                                    已实时识别 <strong>{previewTaskCount}</strong> 条提示词（右侧可预览每组）
+                                    <Trans i18nKey="imageBatch.parsedPromptsCount" values={{ count: previewTaskCount }} components={{ strong: <strong /> }} />
                                 </span>
                                 <Button size="small" icon={<SlidersHorizontal className="size-3.5" />} disabled={running} onClick={onConvertToCustom}>
-                                    转自由队列微调
+                                    {t("imageBatch.convertToCustom")}
                                 </Button>
                             </div>
                         ) : null}
@@ -523,7 +520,7 @@ export function BatchEditorPanel({
             {scenario === "custom" ? (
                 <div className="space-y-2.5">
                     <div className="flex items-center justify-between gap-2">
-                        <span className="text-sm font-semibold">独立任务队列（{customItems.length} 组）</span>
+                        <span className="text-sm font-semibold">{t("imageBatch.customQueueTitle", { count: customItems.length })}</span>
                         <Button
                             size="small"
                             type="dashed"
@@ -531,7 +528,7 @@ export function BatchEditorPanel({
                             disabled={running}
                             onClick={() => onCustomItemsChange((prev) => [...prev, createEmptyBatchItem()])}
                         >
-                            添加一项
+                            {t("imageBatch.addItem")}
                         </Button>
                     </div>
 
@@ -546,11 +543,11 @@ export function BatchEditorPanel({
                                                 #{itemIdx + 1}
                                             </Tag>
                                             <span className="text-xs text-stone-500 dark:text-stone-400">
-                                                {denseRefs.length ? `${denseRefs.length} 张参考图` : "纯文生图"}
+                                                {denseRefs.length ? t("imageBatch.itemRefCount", { count: denseRefs.length }) : t("imageBatch.textToImageTag")}
                                             </span>
                                         </div>
                                         <div className="flex items-center gap-1">
-                                            <Tooltip title="上传参考图到此项">
+                                            <Tooltip title={t("imageBatch.uploadToItemTooltip")}>
                                                 <Button
                                                     size="small"
                                                     type="text"
@@ -563,7 +560,7 @@ export function BatchEditorPanel({
                                                     }}
                                                 />
                                             </Tooltip>
-                                            <Tooltip title="从我的资产添加参考图">
+                                            <Tooltip title={t("imageBatch.addAssetToItemTooltip")}>
                                                 <Button
                                                     size="small"
                                                     type="text"
@@ -572,7 +569,7 @@ export function BatchEditorPanel({
                                                     onClick={() => onOpenAssetPicker({ mode: "custom-item", itemId: item.id })}
                                                 />
                                             </Tooltip>
-                                            <Tooltip title="复制此项">
+                                            <Tooltip title={t("imageBatch.copyItemTooltip")}>
                                                 <Button
                                                     size="small"
                                                     type="text"
@@ -588,7 +585,7 @@ export function BatchEditorPanel({
                                                     }
                                                 />
                                             </Tooltip>
-                                            <Tooltip title="删除此项">
+                                            <Tooltip title={t("imageBatch.deleteItemTooltip")}>
                                                 <Button
                                                     size="small"
                                                     type="text"
@@ -610,7 +607,7 @@ export function BatchEditorPanel({
                                         }
                                         disabled={running}
                                         autoSize={{ minRows: 1, maxRows: 4 }}
-                                        placeholder={`输入第 ${itemIdx + 1} 项提示词...`}
+                                        placeholder={t("imageBatch.customItemPlaceholder", { index: itemIdx + 1 })}
                                     />
 
                                     {denseRefs.length ? (
@@ -641,7 +638,7 @@ export function BatchEditorPanel({
                                                                     ),
                                                                 )
                                                             }
-                                                            aria-label="删除参考图"
+                                                            aria-label={t("imageBatch.deleteRefAria")}
                                                         >
                                                             <Trash2 className="size-3" />
                                                         </button>

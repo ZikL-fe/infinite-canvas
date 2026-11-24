@@ -167,7 +167,7 @@ function MyAssetsTab({ onInsert }: { onInsert: (payload: InsertAssetPayload) => 
                         current={page}
                         pageSize={pageSize}
                         total={filtered.length}
-                        showTotal={(count) => `共 ${count} 条`}
+                        showTotal={(count) => t("common.totalItems", { count })}
                         showSizeChanger
                         pageSizeOptions={[10, 20, 30, 50, 100]}
                         onChange={(nextPage, nextSize) => {

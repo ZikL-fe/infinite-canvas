@@ -1,6 +1,7 @@
 /** 后端服务 REST API 客户端：封装鉴权刷新、个人中心、账本日志、对象存储直传、WebDAV 归档及后台管理接口。 */
 import { saveAs } from "file-saver";
 
+import i18n from "@/i18n";
 import type { ModelPricing } from "@/stores/use-config-store";
 import { useUserStore, type BootstrapStatus, type LocalUser, type UserRole, type UserStatus } from "@/stores/use-user-store";
 
@@ -457,9 +458,9 @@ export async function refreshAccessToken(): Promise<string | null> {
 async function parseErrorMessage(response: Response) {
     try {
         const payload = (await response.json()) as { error?: string; message?: string };
-        return payload.error || payload.message || `请求失败（HTTP ${response.status}）`;
+        return payload.error || payload.message || i18n.t("apiErrors.serverHttpFailed", { status: response.status });
     } catch {
-        return `请求失败（HTTP ${response.status}）`;
+        return i18n.t("apiErrors.serverHttpFailed", { status: response.status });
     }
 }
 
@@ -788,7 +789,7 @@ export const storageApi = {
             body: blob,
         });
         if (!uploadRes.ok) {
-            throw new Error(`直传对象存储失败（HTTP ${uploadRes.status}），请检查桶 CORS 配置`);
+            throw new Error(i18n.t("apiErrors.s3UploadFailed", { status: uploadRes.status }));
         }
         const confirmed = await storageApi.confirmUpload({
             mediaId: presign.mediaId,
@@ -816,7 +817,7 @@ export const storageApi = {
             body: file,
         });
         if (!uploadRes.ok) {
-            throw new Error(`直传对象存储失败（HTTP ${uploadRes.status}），请检查桶 CORS 配置`);
+            throw new Error(i18n.t("apiErrors.s3UploadFailed", { status: uploadRes.status }));
         }
         return storageApi.confirmUpload({ mediaId: presign.mediaId });
     },

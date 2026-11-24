@@ -1,6 +1,7 @@
 /** 后台表格统一操作栏：限制最多展示 3 个入口（超出折叠至「更多」下拉），保证单行不换行。 */
 import { App, Button, Dropdown, Popconfirm, type MenuProps } from "antd";
 import { ChevronDown } from "lucide-react";
+import { useTranslation } from "react-i18next";
 
 export type TableActionItem = {
     key: string;
@@ -17,6 +18,7 @@ export const ADMIN_TABLE_CLASS = "[&_th]:!whitespace-nowrap [&_td]:!whitespace-n
 
 export function TableRowActions({ items }: { items: TableActionItem[] }) {
     const { modal } = App.useApp();
+    const { t } = useTranslation();
 
     if (!items.length) return null;
 
@@ -110,7 +112,7 @@ export function TableRowActions({ items }: { items: TableActionItem[] }) {
                         onClick={(e) => e.stopPropagation()}
                     >
                         <span className="inline-flex items-center gap-0.5">
-                            更多
+                            {t("common.more")}
                             <ChevronDown className="size-3" />
                         </span>
                     </Button>

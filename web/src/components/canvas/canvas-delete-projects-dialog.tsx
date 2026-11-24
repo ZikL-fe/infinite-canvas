@@ -21,7 +21,7 @@ export function CanvasDeleteProjectsDialog() {
             removeSelectedIds(ids);
             setDeleteIds([]);
         } catch (error) {
-            message.error(error instanceof Error ? error.message : "删除失败，请重试");
+            message.error(error instanceof Error ? error.message : t("common.deleteFailed"));
         } finally {
             setDeleting(false);
         }

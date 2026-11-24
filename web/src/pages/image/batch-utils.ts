@@ -1,6 +1,7 @@
 /** 生图工作台批量模式纯函数工具：三种批量场景的任务推导、槽位对齐校验、并发排队执行与类型定义。 */
 import { nanoid } from "nanoid";
 
+import i18n from "@/i18n";
 import type { ReferenceImage } from "@/types/image";
 
 export const MAX_BATCH_IMAGES = 100;
@@ -87,7 +88,7 @@ export function buildSamePromptBatchTasks(
         return {
             tasks: [],
             mismatchError: null,
-            missingReason: "请在第 1 张参考图区域添加至少 1 张图片",
+            missingReason: i18n.t("imageBatch.slot1Required"),
         };
     }
 
@@ -99,7 +100,12 @@ export function buildSamePromptBatchTasks(
         const expected = multiSlots[0].list.length;
         const mismatch = multiSlots.find((entry) => entry.list.length !== expected);
         if (mismatch) {
-            mismatchError = `第 ${multiSlots[0].slotIndex + 1} 张参考图有 ${expected} 张，而第 ${mismatch.slotIndex + 1} 张有 ${mismatch.list.length} 张；多个多图位置数量需保持一致（仅放 1 张则自动应用到全部）`;
+            mismatchError = i18n.t("imageBatch.slotMismatchError", {
+                slotA: multiSlots[0].slotIndex + 1,
+                countA: expected,
+                slotB: mismatch.slotIndex + 1,
+                countB: mismatch.list.length,
+            });
         }
     }
 
@@ -114,7 +120,7 @@ export function buildSamePromptBatchTasks(
     return {
         tasks,
         mismatchError,
-        missingReason: !prompt ? "请填写共用提示词" : null,
+        missingReason: !prompt ? i18n.t("imageBatch.sharedPromptRequired") : null,
     };
 }
 
@@ -131,7 +137,7 @@ export function buildMultiPromptBatchTasks(
     if (!prompts.length) {
         return {
             tasks: [],
-            missingReason: "请输入至少一条提示词",
+            missingReason: i18n.t("imageBatch.multiPromptRequired"),
         };
     }
     return {

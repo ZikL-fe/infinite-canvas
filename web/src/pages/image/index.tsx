@@ -216,9 +216,9 @@ export default function ImagePage() {
                     mismatchError: null,
                     missingReason:
                         batchCustomItems.length === 0
-                            ? "请添加至少 1 组任务"
+                            ? t("imageBatch.needAtLeastOneGroup")
                             : batchCustomItems.some((item) => !item.prompt.trim())
-                              ? "请补全自由队列中所有任务的提示词"
+                              ? t("imageBatch.completeCustomPrompts")
                               : null,
                 };
 
@@ -434,13 +434,13 @@ export default function ImagePage() {
             if (addToBatch) {
                 if (batchScenario === "same-prompt") {
                     setBatchSamePromptSlots((prev) => prev.map((list, idx) => (idx === 0 ? [...list, nextRef] : list)));
-                    message.success("已加入「第 1 张参考图」队列");
+                    message.success(t("imageBatch.addedToSlot1"));
                 } else if (batchScenario === "multi-prompt") {
                     setBatchSharedRefs((prev) => [...prev, nextRef]);
-                    message.success("已加入共用参考图");
+                    message.success(t("imageBatch.addedToSharedRefs"));
                 } else {
                     setBatchCustomItems((prev) => [...prev, createEmptyBatchItem(batchSharedPrompt.trim(), [nextRef])]);
-                    message.success("已新增一条带该参考图的任务");
+                    message.success(t("imageBatch.addedCustomTask"));
                 }
                 return;
             }
@@ -544,7 +544,7 @@ export default function ImagePage() {
             setSelectedLogIds([]);
             setDeleteConfirmOpen(false);
         } catch (error) {
-            message.error(error instanceof Error ? error.message : "删除失败，请重试");
+            message.error(error instanceof Error ? error.message : t("common.deleteFailed"));
         } finally {
             setDeletingLogs(false);
         }
@@ -823,14 +823,14 @@ export default function ImagePage() {
 
     const convertBatchPlanToCustom = () => {
         if (!resolvedBatchPlan.tasks.length) {
-            message.warning("请先在当前模式中添加至少 1 组任务");
+            message.warning(t("imageBatch.needOneGroupToConvert"));
             return;
         }
         setBatchCustomItems(
             resolvedBatchPlan.tasks.map((task) => createEmptyBatchItem(task.prompt, task.references)),
         );
         setBatchScenario("custom");
-        message.success(`已将 ${resolvedBatchPlan.tasks.length} 组任务转入「自由队列」，可单独微调每项`);
+        message.success(t("imageBatch.convertedToCustom", { count: resolvedBatchPlan.tasks.length }));
     };
 
     const updateBatchJobGroups = (jobId: string, updater: (groups: BatchResultGroup[]) => BatchResultGroup[]) => {
@@ -847,11 +847,11 @@ export default function ImagePage() {
             return;
         }
         if (!resolvedBatchPlan.tasks.length) {
-            message.error("请先配置至少 1 组生成任务");
+            message.error(t("imageBatch.needOneTaskConfig"));
             return;
         }
         if (batchTotalImages > MAX_BATCH_IMAGES) {
-            message.error(`单批次最多生成 ${MAX_BATCH_IMAGES} 张图片（当前预计 ${batchTotalImages} 张）`);
+            message.error(t("imageBatch.maxImagesError", { max: MAX_BATCH_IMAGES, total: batchTotalImages }));
             return;
         }
 
@@ -1002,11 +1002,11 @@ export default function ImagePage() {
                     state.cancelledCount += 1;
                     state.failCount += 1;
                     totalFail += 1;
-                    state.errors.push("已停止队列");
+                    state.errors.push(t("imageBatch.queueStopped"));
                     updateBatchJobGroups(jobId, (prev) =>
                         prev.map((g) =>
                             g.id === state.group.id
-                                ? { ...g, results: updateResultAt(g.results, task.slotIndex, { status: "failed", error: "已停止队列" }) }
+                                ? { ...g, results: updateResultAt(g.results, task.slotIndex, { status: "failed", error: t("imageBatch.queueStopped") }) }
                                 : g,
                         ),
                     );
@@ -1016,13 +1016,13 @@ export default function ImagePage() {
             );
 
             if (stopController.stopped) {
-                message.info(`已停止剩余队列，本次成功生成 ${totalSuccess} 张`);
+                message.info(t("imageBatch.stoppedSummary", { success: totalSuccess }));
             } else if (totalFail === 0) {
-                message.success(`批量生成完成，共成功 ${totalSuccess} 张`);
+                message.success(t("imageBatch.completedAll", { success: totalSuccess }));
             } else if (totalSuccess > 0) {
-                message.warning(`批量生成完成：成功 ${totalSuccess} 张，失败 ${totalFail} 张`);
+                message.warning(t("imageBatch.completedPartial", { success: totalSuccess, fail: totalFail }));
             } else {
-                message.error("批量生成全部失败，请检查模型配置或提示词");
+                message.error(t("imageBatch.completedAllFailed"));
             }
         } finally {
             batchStopControllersRef.current.delete(jobId);
@@ -1127,7 +1127,7 @@ export default function ImagePage() {
                 loadBlob: () => loadGeneratedImageBlob(image),
             })),
             zipFilename: `image-batch-${Date.now()}.zip`,
-            emptyWarning: "暂无可下载的生成图片",
+            emptyWarning: t("imageBatch.noDownloadableBatch"),
         });
     };
 
@@ -1141,7 +1141,7 @@ export default function ImagePage() {
                 loadBlob: () => loadGeneratedImageBlob(image),
             })),
             zipFilename: `image-results-${Date.now()}.zip`,
-            emptyWarning: "当前结果中暂无可下载的图片",
+            emptyWarning: t("imageBatch.noDownloadableSingle"),
         });
     };
 
@@ -1158,7 +1158,7 @@ export default function ImagePage() {
         await downloadZip({
             entries,
             zipFilename: `image-logs-${Date.now()}.zip`,
-            emptyWarning: "所选记录中没有可下载的成功图片",
+            emptyWarning: t("imageBatch.noDownloadableLogs"),
         });
     };
 
@@ -1241,8 +1241,8 @@ export default function ImagePage() {
                                         value={workbenchMode}
                                         onChange={(val) => setWorkbenchMode(val as "single" | "batch")}
                                         options={[
-                                            { label: "单次生图", value: "single" },
-                                            { label: "批量生图", value: "batch" },
+                                            { label: t("imageBatch.singleMode"), value: "single" },
+                                            { label: t("imageBatch.batchMode"), value: "batch" },
                                         ]}
                                     />
                                     <div className="flex gap-2 lg:hidden">
@@ -1349,7 +1349,7 @@ export default function ImagePage() {
                                                     {t("workbench.clipboard")}
                                                 </Button>
                                                 <Button size="small" icon={<Upload className="size-3.5" />} loading={uploadingRefs} onClick={() => fileInputRef.current?.click()}>
-                                                    {uploadingRefs ? "上传中..." : t("workbench.upload")}
+                                                    {uploadingRefs ? t("common.uploadingEllipsis") : t("workbench.upload")}
                                                 </Button>
                                             </div>
                                         </div>
@@ -1425,7 +1425,7 @@ export default function ImagePage() {
                                         </div>
                                     ) : batchTotalImages > MAX_BATCH_IMAGES ? (
                                         <div className="text-xs text-red-500">
-                                            单批次最多生成 {MAX_BATCH_IMAGES} 张图片（当前 {resolvedBatchPlan.tasks.length} 组 × {generationCount} 张 = {batchTotalImages} 张）
+                                            {t("imageBatch.maxImagesInlineError", { max: MAX_BATCH_IMAGES, groups: resolvedBatchPlan.tasks.length, count: generationCount, total: batchTotalImages })}
                                         </div>
                                     ) : null}
                                     <Button
@@ -1436,7 +1436,7 @@ export default function ImagePage() {
                                         disabled={!batchCanGenerate}
                                         onClick={() => void generateBatch()}
                                     >
-                                        开始批量生成（{resolvedBatchPlan.tasks.length} 组 × {generationCount} 张 = {batchTotalImages} 张）
+                                        {t("imageBatch.startBatchButton", { groups: resolvedBatchPlan.tasks.length, count: generationCount, total: batchTotalImages })}
                                     </Button>
                                 </div>
                             ) : (
@@ -1453,13 +1453,13 @@ export default function ImagePage() {
                                 <h2 className="text-xl font-semibold">
                                     {workbenchMode === "batch"
                                         ? !batchShowPreview && batchGroups.length
-                                            ? "批量生成结果"
-                                            : "待生成队列预览"
+                                            ? t("imageBatch.batchResultsTitle")
+                                            : t("imageBatch.batchPreviewTitle")
                                         : t("workbench.results")}
                                 </h2>
                                 {workbenchMode === "batch" && (batchShowPreview || !batchGroups.length) && resolvedBatchPlan.tasks.length ? (
                                     <Tag color="blue" className="m-0">
-                                        {resolvedBatchPlan.tasks.length} 组 · 共 {batchTotalImages} 张
+                                        {t("imageBatch.batchSummaryTag", { groups: resolvedBatchPlan.tasks.length, total: batchTotalImages })}
                                     </Tag>
                                 ) : null}
                             </div>
@@ -1483,12 +1483,12 @@ export default function ImagePage() {
                                             }
                                         }}
                                     >
-                                        后台生成中：{totalRunningJobs} 个任务（点击查看）
+                                        {t("imageBatch.backgroundRunning", { count: totalRunningJobs })}
                                     </Tag>
                                 ) : null}
                                 {workbenchMode === "batch" && batchGroups.length ? (
                                     <Button size="small" onClick={() => setBatchShowPreview((prev) => !prev)}>
-                                        {batchShowPreview ? "查看当前批次结果" : "回到队列预览"}
+                                        {batchShowPreview ? t("imageBatch.viewBatchResults") : t("imageBatch.backToQueuePreview")}
                                     </Button>
                                 ) : null}
                                 {workbenchMode === "batch" && !batchShowPreview && activeBatchJob?.running ? (
@@ -1499,10 +1499,10 @@ export default function ImagePage() {
                                         onClick={() => {
                                             const ctrl = batchStopControllersRef.current.get(activeBatchJob.id);
                                             if (ctrl) ctrl.stopped = true;
-                                            message.info("正在停止未开始的队列任务...");
+                                            message.info(t("imageBatch.stoppingQueue"));
                                         }}
                                     >
-                                        停止队列
+                                        {t("imageBatch.stopQueue")}
                                     </Button>
                                 ) : null}
                                 {workbenchMode === "batch" &&
@@ -1514,7 +1514,7 @@ export default function ImagePage() {
                                         loading={downloadingZip}
                                         onClick={() => void downloadAllBatchResults()}
                                     >
-                                        打包下载全部 ({batchGroups.reduce((sum, g) => sum + g.results.filter((r) => r.status === "success").length, 0)})
+                                        {t("imageBatch.downloadAllCount", { count: batchGroups.reduce((sum, g) => sum + g.results.filter((r) => r.status === "success").length, 0) })}
                                     </Button>
                                 ) : null}
                                 {workbenchMode === "single" &&
@@ -1525,7 +1525,7 @@ export default function ImagePage() {
                                         loading={downloadingZip}
                                         onClick={() => void downloadAllSingleResults()}
                                     >
-                                        打包下载 ({displayedSingleResults.filter((r) => r.status === "success" && r.image).length})
+                                        {t("imageBatch.downloadCount", { count: displayedSingleResults.filter((r) => r.status === "success" && r.image).length })}
                                     </Button>
                                 ) : null}
                             </div>
@@ -1537,16 +1537,16 @@ export default function ImagePage() {
                                         const okCount = group.results.filter((r) => r.status === "success").length;
                                         const statusTag =
                                             group.status === "success"
-                                                ? { color: "green", text: `已完成 ${okCount}/${group.results.length}` }
+                                                ? { color: "green", text: t("imageBatch.statusDone", { ok: okCount, total: group.results.length }) }
                                                 : group.status === "partial"
-                                                  ? { color: "orange", text: `部分成功 ${okCount}/${group.results.length}` }
+                                                  ? { color: "orange", text: t("imageBatch.statusPartial", { ok: okCount, total: group.results.length }) }
                                                   : group.status === "failed"
-                                                    ? { color: "red", text: "全部失败" }
+                                                    ? { color: "red", text: t("imageBatch.statusFailed") }
                                                     : group.status === "cancelled"
-                                                      ? { color: "default", text: "已停止" }
+                                                      ? { color: "default", text: t("imageBatch.statusCancelled") }
                                                       : group.status === "pending"
-                                                        ? { color: "blue", text: "生成中" }
-                                                        : { color: "default", text: "排队中" };
+                                                        ? { color: "blue", text: t("imageBatch.statusPending") }
+                                                        : { color: "default", text: t("imageBatch.statusQueued") };
                                         return (
                                             <div key={group.id} className="rounded-lg border border-stone-200 p-3 dark:border-stone-800">
                                                 <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
@@ -1622,13 +1622,13 @@ export default function ImagePage() {
                                                         ))}
                                                     </div>
                                                 ) : (
-                                                    <Tag className="m-0 shrink-0">纯文生图</Tag>
+                                                    <Tag className="m-0 shrink-0">{t("imageBatch.textToImageTag")}</Tag>
                                                 )}
                                                 <Typography.Paragraph ellipsis={{ rows: 2, tooltip: task.prompt }} className="!mb-0 min-w-0 flex-1 text-sm">
-                                                    {task.prompt || <span className="text-stone-400">待填写提示词…</span>}
+                                                    {task.prompt || <span className="text-stone-400">{t("imageBatch.pendingPromptPlaceholder")}</span>}
                                                 </Typography.Paragraph>
                                             </div>
-                                            <Tag className="m-0 shrink-0">将生成 {generationCount} 张</Tag>
+                                            <Tag className="m-0 shrink-0">{t("imageBatch.willGenerateCount", { count: generationCount })}</Tag>
                                         </div>
                                     ))}
                                 </div>
@@ -1637,15 +1637,15 @@ export default function ImagePage() {
                                     <ImagePlus className="mb-3 size-11 text-stone-400" />
                                     <div className="mb-1 text-sm font-medium text-stone-700 dark:text-stone-200">
                                         {batchScenario === "same-prompt"
-                                            ? "多图同词：第 1 步写共用提示词，第 2 步批量放入参考图"
+                                            ? t("imageBatch.emptySameTitle")
                                             : batchScenario === "multi-prompt"
-                                              ? "一图多词：第 1 步放共用参考图（可选），第 2 步输入多条提示词"
-                                              : "自由队列：为每条任务单独配置提示词与参考图"}
+                                              ? t("imageBatch.emptyMultiTitle")
+                                              : t("imageBatch.emptyCustomTitle")}
                                     </div>
                                     <div className="max-w-md text-xs leading-5 text-stone-500 dark:text-stone-400">
                                         {batchScenario === "same-prompt"
-                                            ? "左侧配置后，这里会实时列出配对好的每一组任务清单（含图1/图2/图3组合），确认无误即可一键批量生成。"
-                                            : "左侧输入后，这里会实时列出即将生成的每一组任务清单，点击左下角即可排队并发生成。"}
+                                            ? t("imageBatch.emptySameDesc")
+                                            : t("imageBatch.emptyOtherDesc")}
                                     </div>
                                 </div>
                             )
@@ -1908,7 +1908,7 @@ function LogPanel({
                     {allSelected ? t("common.cancel") : t("workbench.selectAll")}
                 </Button>
                 <Button size="small" icon={<Download className="size-3.5" />} loading={downloadingSelected} disabled={!selectedLogIds.length} onClick={onDownloadSelected}>
-                    打包下载
+                    {t("common.batchDownload")}
                 </Button>
                 <Button size="small" danger icon={<Trash2 className="size-3.5" />} disabled={!selectedLogIds.length} onClick={onDeleteSelected}>
                     {t("common.delete")}

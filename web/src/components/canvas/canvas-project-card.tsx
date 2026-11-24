@@ -83,7 +83,7 @@ export function CanvasProjectCard({ project }: { project: CanvasProject }) {
                                 onClick={async () => {
                                     if (exporting) return;
                                     setExporting(true);
-                                    const hide = message.loading("正在导出画布…", 0);
+                                    const hide = message.loading(t("canvas.project.exporting"), 0);
                                     try {
                                         await exportCanvasProjects([project], project.title || t("canvas.title"));
                                     } finally {

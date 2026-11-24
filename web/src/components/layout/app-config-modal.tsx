@@ -53,9 +53,9 @@ export function AppConfigPanel({ showDoneButton = false, initialTab = "preferenc
         try {
             const ok = await syncRuntimeSettings();
             if (ok && useConfigStore.getState().config.channels.length) {
-                message.success("已刷新可用模型渠道");
+                message.success(t("configPanel.channelsRefreshed"));
             } else {
-                message.warning("暂未获取到已启用的模型渠道");
+                message.warning(t("configPanel.noEnabledChannels"));
             }
         } finally {
             setRefreshingChannels(false);
@@ -87,7 +87,7 @@ export function AppConfigPanel({ showDoneButton = false, initialTab = "preferenc
     return (
         <>
             <div className="flex flex-wrap items-center justify-between gap-3 border-b border-stone-200 pb-3 dark:border-stone-800">
-                <div className="text-xs text-stone-500">模型渠道统一由系统管理员在后台配置，此处仅管理个人偏好、提示词来源与本地存储</div>
+                <div className="text-xs text-stone-500">{t("configPanel.adminManagedHint")}</div>
                 <div className="flex gap-2">
                     <Button icon={<Upload className="size-4" />} onClick={() => configInputRef.current?.click()}>
                         {t("config.import")}
@@ -112,11 +112,11 @@ export function AppConfigPanel({ showDoneButton = false, initialTab = "preferenc
                                         type="info"
                                         showIcon
                                         className="mb-4"
-                                        message="请先登录账号"
-                                        description="模型渠道由系统管理员在后台统一配置，登录后即可选择并使用平台已开通的模型。"
+                                        message={t("configPanel.loginRequiredTitle")}
+                                        description={t("configPanel.loginRequiredDescription")}
                                         action={
                                             <Button size="small" type="primary" onClick={() => goToPage("/auth")}>
-                                                去登录
+                                                {t("configPanel.goToLogin")}
                                             </Button>
                                         }
                                     />
@@ -125,16 +125,16 @@ export function AppConfigPanel({ showDoneButton = false, initialTab = "preferenc
                                         type="warning"
                                         showIcon
                                         className="mb-4"
-                                        message="暂无可用模型渠道"
-                                        description="管理员尚未在后台配置或启用模型渠道，请联系管理员添加后再选择模型。"
+                                        message={t("configPanel.noChannelsTitle")}
+                                        description={t("configPanel.noChannelsDescription")}
                                         action={
                                             <div className="flex items-center gap-2">
                                                 <Button size="small" icon={<RefreshCw className="size-3.5" />} loading={refreshingChannels} onClick={() => void handleRefreshChannels()}>
-                                                    刷新渠道
+                                                    {t("configPanel.refreshChannels")}
                                                 </Button>
                                                 {user.role === "admin" ? (
                                                     <Button size="small" type="primary" onClick={() => goToPage("/admin")}>
-                                                        前往后台配置
+                                                        {t("configPanel.goToAdmin")}
                                                     </Button>
                                                 ) : null}
                                             </div>

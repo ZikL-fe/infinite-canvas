@@ -2,8 +2,10 @@
 import { useCallback, useEffect, useState } from "react";
 import { Alert, App, Avatar, Button, Card, Col, DatePicker, Descriptions, Empty, Form, Image, Input, InputNumber, Modal, Popconfirm, Progress, Radio, Row, Segmented, Select, Space, Spin, Statistic, Switch, Table, Tabs, Tag, Tooltip, Typography, theme as antdTheme } from "antd";
 import type { Dayjs } from "dayjs";
+import type { TFunction } from "i18next";
 import localforage from "localforage";
 import { AudioLines, Bell, Download, Eye, FileIcon, Gift, ImageIcon, KeyRound, Laptop, Megaphone, Pin, RefreshCw, Search, TrendingUp, User, Video } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
 
 import { useBatchZipDownload } from "@/hooks/use-batch-zip-download";
@@ -48,37 +50,40 @@ export function formatBytes(bytes: number) {
     return `${val >= 100 || idx === 0 ? val.toFixed(0) : val.toFixed(2)} ${units[idx]}`;
 }
 
-const kindLabels: Record<string, string> = {
-    image: "图片",
-    video: "视频",
-    audio: "音频",
-    file: "其他文件",
-};
+function getKindLabel(kind: string, t: TFunction) {
+    if (kind === "image" || kind === "video" || kind === "audio" || kind === "file") {
+        return t(`userPanels.mediaKinds.${kind}`);
+    }
+    return kind;
+}
 
-export const MEDIA_MODULE_OPTIONS: Array<{ value: "" | MediaSourceModule; label: string }> = [
-    { value: "", label: "全部模块" },
-    { value: "canvas", label: "无限画布" },
-    { value: "image_workbench", label: "生图工作台" },
-    { value: "video_workbench", label: "视频工作台" },
-    { value: "assets", label: "我的资产" },
-];
+export function getMediaModuleOptions(t: TFunction): Array<{ value: "" | MediaSourceModule; label: string }> {
+    return [
+        { value: "", label: t("userPanels.mediaModules.all") },
+        { value: "canvas", label: t("userPanels.mediaModules.canvas") },
+        { value: "image_workbench", label: t("userPanels.mediaModules.image_workbench") },
+        { value: "video_workbench", label: t("userPanels.mediaModules.video_workbench") },
+        { value: "assets", label: t("userPanels.mediaModules.assets") },
+    ];
+}
 
-const mediaModuleMeta: Record<MediaSourceModule, { label: string; color: string }> = {
-    canvas: { label: "无限画布", color: "blue" },
-    image_workbench: { label: "生图工作台", color: "purple" },
-    video_workbench: { label: "视频工作台", color: "geekblue" },
-    assets: { label: "我的资产", color: "cyan" },
+const mediaModuleColors: Record<MediaSourceModule, string> = {
+    canvas: "blue",
+    image_workbench: "purple",
+    video_workbench: "geekblue",
+    assets: "cyan",
 };
 
 export function MediaModuleTags({ modules }: { modules?: MediaSourceModule[] }) {
+    const { t } = useTranslation();
     if (!modules?.length) {
-        return <Tag style={{ marginInlineEnd: 0 }}>独立文件</Tag>;
+        return <Tag style={{ marginInlineEnd: 0 }}>{t("userPanels.mediaModules.standalone")}</Tag>;
     }
     return (
         <Space size={4} wrap={false}>
             {modules.map((mod) => (
-                <Tag key={mod} color={mediaModuleMeta[mod]?.color} style={{ marginInlineEnd: 0 }}>
-                    {mediaModuleMeta[mod]?.label || mod}
+                <Tag key={mod} color={mediaModuleColors[mod]} style={{ marginInlineEnd: 0 }}>
+                    {mod in mediaModuleColors ? t(`userPanels.mediaModules.${mod}`) : mod}
                 </Tag>
             ))}
         </Space>
@@ -86,14 +91,18 @@ export function MediaModuleTags({ modules }: { modules?: MediaSourceModule[] }) 
 }
 
 export function WorkspaceSizeCell({ mediaBytes = 0, dataBytes = 0 }: { mediaBytes?: number; dataBytes?: number }) {
-    const tip = `云端媒体 ${formatBytes(mediaBytes)} · 记录元数据 ${formatBytes(dataBytes)}`;
+    const { t } = useTranslation();
+    const tip = t("userPanels.workspaceSizeTip", {
+        media: formatBytes(mediaBytes),
+        data: formatBytes(dataBytes),
+    });
     return (
         <Tooltip title={tip}>
             <span className="inline-flex items-baseline gap-1 whitespace-nowrap">
                 <span>{formatBytes(mediaBytes > 0 ? mediaBytes : dataBytes)}</span>
                 {mediaBytes <= 0 && dataBytes > 0 ? (
                     <Typography.Text type="secondary" className="text-xs">
-                        仅元数据
+                        {t("userPanels.metadataOnly")}
                     </Typography.Text>
                 ) : null}
             </span>
@@ -101,31 +110,40 @@ export function WorkspaceSizeCell({ mediaBytes = 0, dataBytes = 0 }: { mediaByte
     );
 }
 
-export const ledgerReasonMeta: Record<string, { label: string; color: string }> = {
-    text_gen: { label: "对话调用", color: "blue" },
-    image_gen: { label: "图片生成", color: "purple" },
-    video_gen: { label: "视频生成", color: "geekblue" },
-    audio_gen: { label: "语音生成", color: "cyan" },
-    redeem_code: { label: "兑换码兑换", color: "green" },
-    admin_adjust: { label: "后台调整", color: "gold" },
-    refund: { label: "失败退回", color: "lime" },
-    plan_grant: { label: "套餐赠送", color: "green" },
+const ledgerReasonColors: Record<string, string> = {
+    text_gen: "blue",
+    image_gen: "purple",
+    video_gen: "geekblue",
+    audio_gen: "cyan",
+    redeem_code: "green",
+    admin_adjust: "gold",
+    refund: "lime",
+    plan_grant: "green",
 };
 
-const taskStatusMeta: Record<string, { label: string; color: string }> = {
-    not_started: { label: "未开始", color: "default" },
-    processing: { label: "进行中", color: "processing" },
-    completed: { label: "已完成", color: "success" },
-    failed: { label: "已失败", color: "error" },
-    failed_refunded: { label: "失败退回", color: "orange" },
-    refunded: { label: "失败退回", color: "orange" },
+function getLedgerReasonMeta(reason: string, t: TFunction): { label: string; color: string } | undefined {
+    if (!(reason in ledgerReasonColors)) return undefined;
+    return { label: t(`userPanels.ledgerReasons.${reason}`), color: ledgerReasonColors[reason] };
+}
+
+const taskStatusColors: Record<string, string> = {
+    not_started: "default",
+    processing: "processing",
+    completed: "success",
+    failed: "error",
+    failed_refunded: "orange",
+    refunded: "orange",
 };
 
-function getLedgerTaskStatus(record: CreditLedgerItem) {
+function getLedgerTaskStatus(record: CreditLedgerItem, t: TFunction) {
     const raw = typeof record.meta?.taskStatus === "string" ? record.meta.taskStatus : "";
-    if (raw && taskStatusMeta[raw]) return taskStatusMeta[raw];
-    if (record.reason === "refund") return taskStatusMeta.refunded;
-    return taskStatusMeta.completed;
+    if (raw && raw in taskStatusColors) {
+        return { label: t(`userPanels.taskStatuses.${raw}`), color: taskStatusColors[raw] };
+    }
+    if (record.reason === "refund") {
+        return { label: t("userPanels.taskStatuses.refunded"), color: taskStatusColors.refunded };
+    }
+    return { label: t("userPanels.taskStatuses.completed"), color: taskStatusColors.completed };
 }
 
 function formatDurationSec(ms: number) {
@@ -133,7 +151,7 @@ function formatDurationSec(ms: number) {
 }
 
 /** 根据流式状态与分段耗时计算 `tok/s` 输出速度及 `首字 / 总耗时`、`上游/拿图/云存` 展示文案。 */
-function getLedgerTimingStats(meta?: Record<string, unknown>) {
+function getLedgerTimingStats(meta: Record<string, unknown> | undefined, t: TFunction) {
     const isStream = typeof meta?.isStream === "boolean" ? meta.isStream : undefined;
     const durationMs = typeof meta?.durationMs === "number" && meta.durationMs > 0 ? meta.durationMs : undefined;
     const firstTokenMs = typeof meta?.firstTokenMs === "number" && meta.firstTokenMs > 0 ? meta.firstTokenMs : undefined;
@@ -157,9 +175,9 @@ function getLedgerTimingStats(meta?: Record<string, unknown>) {
     }
 
     const stageParts: string[] = [];
-    if (upstreamMs !== undefined) stageParts.push(`上游 ${formatDurationSec(upstreamMs)}`);
-    if (fetchImageMs !== undefined) stageParts.push(`拿图 ${formatDurationSec(fetchImageMs)}`);
-    if (cloudSaveMs !== undefined) stageParts.push(`云存 ${formatDurationSec(cloudSaveMs)}`);
+    if (upstreamMs !== undefined) stageParts.push(t("userPanels.timing.stageUpstream", { duration: formatDurationSec(upstreamMs) }));
+    if (fetchImageMs !== undefined) stageParts.push(t("userPanels.timing.stageFetch", { duration: formatDurationSec(fetchImageMs) }));
+    if (cloudSaveMs !== undefined) stageParts.push(t("userPanels.timing.stageCloud", { duration: formatDurationSec(cloudSaveMs) }));
     const stageText = stageParts.join(" · ");
 
     return {
@@ -176,20 +194,29 @@ function getLedgerTimingStats(meta?: Record<string, unknown>) {
     };
 }
 
-function formatLedgerUsageDetail(record: CreditLedgerItem) {
+function formatLedgerUsageDetail(record: CreditLedgerItem, t: TFunction) {
     const meta = record.meta || {};
     const parts: string[] = [];
     if (typeof meta.inputTokens === "number" || typeof meta.outputTokens === "number") {
-        const cached = typeof meta.cachedInputTokens === "number" && meta.cachedInputTokens > 0 ? ` · 缓存 ${meta.cachedInputTokens}` : "";
-        parts.push(`输入 ${meta.inputTokens ?? 0}${cached} · 输出 ${meta.outputTokens ?? 0} tokens`);
+        const cached =
+            typeof meta.cachedInputTokens === "number" && meta.cachedInputTokens > 0
+                ? t("userPanels.usageDetail.cachedPart", { count: meta.cachedInputTokens })
+                : "";
+        parts.push(
+            t("userPanels.usageDetail.tokens", {
+                input: meta.inputTokens ?? 0,
+                cached,
+                output: meta.outputTokens ?? 0,
+            }),
+        );
     }
-    if (typeof meta.count === "number") parts.push(`${meta.count} 张`);
+    if (typeof meta.count === "number") parts.push(t("userPanels.usageDetail.countImages", { count: meta.count }));
     if (typeof meta.resolutionTier === "string" && meta.resolutionTier) parts.push(meta.resolutionTier.toUpperCase());
     else if (typeof meta.size === "string" && meta.size) parts.push(meta.size);
-    if (typeof meta.seconds === "number") parts.push(`${meta.seconds} 秒`);
-    if (meta.hasReferenceVideo === true) parts.push("含参考视频");
-    if (typeof meta.durationSeconds === "number") parts.push(`时长 ${meta.durationSeconds} 秒`);
-    if (typeof meta.code === "string" && meta.code) parts.push(`兑换码 ${meta.code}`);
+    if (typeof meta.seconds === "number") parts.push(t("userPanels.usageDetail.seconds", { seconds: meta.seconds }));
+    if (meta.hasReferenceVideo === true) parts.push(t("userPanels.usageDetail.hasRefVideo"));
+    if (typeof meta.durationSeconds === "number") parts.push(t("userPanels.usageDetail.durationSeconds", { seconds: meta.durationSeconds }));
+    if (typeof meta.code === "string" && meta.code) parts.push(t("userPanels.usageDetail.redeemCode", { code: meta.code }));
     if (typeof meta.detail === "string" && meta.detail) parts.push(meta.detail);
     if (typeof meta.note === "string" && meta.note) parts.push(meta.note);
     return parts.join(" · ") || "—";
@@ -214,6 +241,7 @@ export function ConsumptionTrendCard({
     rangeCalls: number;
     loading?: boolean;
 }) {
+    const { t } = useTranslation();
     const { token } = antdTheme.useToken();
     const maxCredits = Math.max(0.0001, ...dailyTrend.map((d) => d.credits));
     const totalTopCredits = topModels.reduce((sum, item) => sum + item.credits, 0);
@@ -232,16 +260,16 @@ export function ConsumptionTrendCard({
                     extra={
                         <Space>
                             <Typography.Text type="secondary" className="text-xs">
-                                周期消耗 {rangeConsumedCredits} 积分 · {rangeCalls} 次
+                                {t("userPanels.trendCard.rangeSummary", { credits: rangeConsumedCredits, calls: rangeCalls })}
                             </Typography.Text>
                             <Segmented
                                 size="small"
                                 value={days}
                                 onChange={(val) => onDaysChange(Number(val))}
                                 options={[
-                                    { label: "7 天", value: 7 },
-                                    { label: "14 天", value: 14 },
-                                    { label: "30 天", value: 30 },
+                                    { label: t("userPanels.trendCard.daysOption", { days: 7 }), value: 7 },
+                                    { label: t("userPanels.trendCard.daysOption", { days: 14 }), value: 14 },
+                                    { label: t("userPanels.trendCard.daysOption", { days: 30 }), value: 30 },
                                 ]}
                             />
                         </Space>
@@ -252,7 +280,14 @@ export function ConsumptionTrendCard({
                             {dailyTrend.map((item) => {
                                 const heightPct = item.credits > 0 ? Math.max(6, Math.round((item.credits / maxCredits) * 100)) : 2;
                                 return (
-                                    <Tooltip key={item.date} title={`${item.date}：消耗 ${item.credits} 积分（${item.calls} 次）`}>
+                                    <Tooltip
+                                        key={item.date}
+                                        title={t("userPanels.trendCard.tooltip", {
+                                            date: item.date,
+                                            credits: item.credits,
+                                            calls: item.calls,
+                                        })}
+                                    >
                                         <div className="flex h-full min-w-0 flex-1 flex-col items-center justify-end gap-1.5">
                                             <div className="flex w-full flex-1 items-end justify-center">
                                                 <div
@@ -273,12 +308,12 @@ export function ConsumptionTrendCard({
                             })}
                         </div>
                     ) : (
-                        <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无消耗趋势数据" />
+                        <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={t("userPanels.trendCard.noTrendData")} />
                     )}
                 </Card>
             </Col>
             <Col xs={24} lg={9}>
-                <Card loading={loading} title={`近 ${days} 天模型消耗排行`} className="h-full">
+                <Card loading={loading} title={t("userPanels.trendCard.topModelsTitle", { days })} className="h-full">
                     {topModels.length ? (
                         <div className="flex flex-col gap-3">
                             {topModels.map((item) => {
@@ -288,7 +323,7 @@ export function ConsumptionTrendCard({
                                         <div className="flex items-center justify-between gap-2 text-sm">
                                             <span className="truncate font-medium">{item.model}</span>
                                             <Typography.Text type="secondary" className="shrink-0 text-xs">
-                                                {item.credits} 积分 · {item.calls} 次
+                                                {t("userPanels.trendCard.itemSummary", { credits: item.credits, calls: item.calls })}
                                             </Typography.Text>
                                         </div>
                                         <Progress percent={percent} size="small" showInfo={false} />
@@ -297,7 +332,7 @@ export function ConsumptionTrendCard({
                             })}
                         </div>
                     ) : (
-                        <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无模型消耗记录" />
+                        <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={t("userPanels.trendCard.noModelData")} />
                     )}
                 </Card>
             </Col>
@@ -305,12 +340,12 @@ export function ConsumptionTrendCard({
     );
 }
 
-const announcementLevelTag: Record<AnnouncementItem["level"], { label: string; color: string; dotColor: string }> = {
-    default: { label: "默认", color: "default", dotColor: "#6b7280" },
-    ongoing: { label: "进行中", color: "blue", dotColor: "#2563eb" },
-    success: { label: "成功", color: "green", dotColor: "#16a34a" },
-    warning: { label: "警告", color: "orange", dotColor: "#f97316" },
-    error: { label: "错误", color: "red", dotColor: "#ef4444" },
+const announcementLevelStyle: Record<AnnouncementItem["level"], { color: string; dotColor: string }> = {
+    default: { color: "default", dotColor: "#6b7280" },
+    ongoing: { color: "blue", dotColor: "#2563eb" },
+    success: { color: "green", dotColor: "#16a34a" },
+    warning: { color: "orange", dotColor: "#f97316" },
+    error: { color: "red", dotColor: "#ef4444" },
 };
 
 export function AnnouncementsCard({
@@ -322,7 +357,17 @@ export function AnnouncementsCard({
     loading?: boolean;
     extra?: React.ReactNode;
 }) {
+    const { t, i18n } = useTranslation();
+    const locale = i18n.resolvedLanguage || undefined;
     const [detail, setDetail] = useState<AnnouncementItem | null>(null);
+
+    const getLevelInfo = (level: AnnouncementItem["level"]) => {
+        const key = level in announcementLevelStyle ? level : "default";
+        return {
+            ...announcementLevelStyle[key],
+            label: t(`userPanels.announcementLevels.${key}`),
+        };
+    };
 
     return (
         <>
@@ -331,7 +376,7 @@ export function AnnouncementsCard({
                 title={
                     <span className="inline-flex items-center gap-2">
                         <Megaphone className="size-4" />
-                        平台公告
+                        {t("userPanels.announcementsCard.title")}
                     </span>
                 }
                 extra={extra}
@@ -339,7 +384,7 @@ export function AnnouncementsCard({
                 {items.length ? (
                     <div className="flex flex-col gap-2.5">
                         {items.map((item) => {
-                            const lvl = announcementLevelTag[item.level] || announcementLevelTag.default;
+                            const lvl = getLevelInfo(item.level);
                             return (
                                 <div
                                     key={item.id}
@@ -350,7 +395,7 @@ export function AnnouncementsCard({
                                         <div className="flex items-center gap-2">
                                             {item.isPinned ? (
                                                 <Tag color="red" icon={<Pin className="mr-0.5 inline size-3" />}>
-                                                    置顶
+                                                    {t("userPanels.announcementsCard.pinned")}
                                                 </Tag>
                                             ) : null}
                                             <Tag color={lvl.color}>
@@ -362,7 +407,7 @@ export function AnnouncementsCard({
                                             <span className="font-medium">{item.title}</span>
                                         </div>
                                         <Typography.Text type="secondary" className="text-xs">
-                                            {new Date(item.createdAt).toLocaleString("zh-CN")}
+                                            {new Date(item.createdAt).toLocaleString(locale)}
                                         </Typography.Text>
                                     </div>
                                     <Typography.Paragraph type="secondary" ellipsis={{ rows: 2 }} style={{ margin: "6px 0 0" }}>
@@ -373,7 +418,7 @@ export function AnnouncementsCard({
                         })}
                     </div>
                 ) : (
-                    <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无平台公告" />
+                    <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={t("userPanels.announcementsCard.empty")} />
                 )}
             </Card>
 
@@ -381,12 +426,10 @@ export function AnnouncementsCard({
                 {detail ? (
                     <div className="flex flex-col gap-3">
                         <Space>
-                            {detail.isPinned ? <Tag color="red">置顶</Tag> : null}
-                            <Tag color={(announcementLevelTag[detail.level] || announcementLevelTag.default).color}>
-                                {(announcementLevelTag[detail.level] || announcementLevelTag.default).label}
-                            </Tag>
+                            {detail.isPinned ? <Tag color="red">{t("userPanels.announcementsCard.pinned")}</Tag> : null}
+                            <Tag color={getLevelInfo(detail.level).color}>{getLevelInfo(detail.level).label}</Tag>
                             <Typography.Text type="secondary" className="text-xs">
-                                发布于 {new Date(detail.createdAt).toLocaleString("zh-CN")}
+                                {t("userPanels.announcementsCard.publishedAt", { time: new Date(detail.createdAt).toLocaleString(locale) })}
                             </Typography.Text>
                         </Space>
                         <div className="whitespace-pre-wrap text-sm leading-6">{detail.content}</div>
@@ -398,6 +441,7 @@ export function AnnouncementsCard({
 }
 
 export function UserOverviewPanel({ onOpenWallet }: { onOpenWallet?: () => void }) {
+    const { t } = useTranslation();
     const { message } = App.useApp();
     const [days, setDays] = useState(7);
     const [data, setData] = useState<AccountOverviewResponse | null>(null);
@@ -409,12 +453,12 @@ export function UserOverviewPanel({ onOpenWallet }: { onOpenWallet?: () => void 
             try {
                 setData(await accountApi.getOverview(targetDays));
             } catch (error) {
-                message.error(error instanceof Error ? error.message : "加载个人概览失败");
+                message.error(error instanceof Error ? error.message : t("userPanels.overview.loadFailed"));
             } finally {
                 setLoading(false);
             }
         },
-        [days, message],
+        [days, message, t],
     );
 
     useEffect(() => {
@@ -426,15 +470,15 @@ export function UserOverviewPanel({ onOpenWallet }: { onOpenWallet?: () => void 
             <Row gutter={[16, 16]}>
                 <Col xs={24} sm={12} md={6}>
                     <Card loading={loading}>
-                        <Tooltip title={`精确余额：${formatExactCredits(data?.creditBalance ?? 0)} 积分`}>
+                        <Tooltip title={t("userPanels.overview.exactBalance", { value: formatExactCredits(data?.creditBalance ?? 0) })}>
                             <div>
                                 <Statistic
-                                    title="当前可用积分"
+                                    title={t("userPanels.overview.currentCredits")}
                                     value={formatCompactCredits(data?.creditBalance ?? 0)}
                                     suffix={
                                         onOpenWallet ? (
                                             <Button type="link" size="small" onClick={onOpenWallet}>
-                                                去兑换
+                                                {t("userPanels.overview.goRedeem")}
                                             </Button>
                                         ) : null
                                     }
@@ -445,18 +489,18 @@ export function UserOverviewPanel({ onOpenWallet }: { onOpenWallet?: () => void 
                 </Col>
                 <Col xs={24} sm={12} md={6}>
                     <Card loading={loading}>
-                        <Tooltip title={`精确值：${formatExactCredits(data?.todayConsumedCredits ?? 0)} 积分`}>
+                        <Tooltip title={t("userPanels.overview.exactValue", { value: formatExactCredits(data?.todayConsumedCredits ?? 0) })}>
                             <div>
-                                <Statistic title="今日消耗积分" value={formatCompactCredits(data?.todayConsumedCredits ?? 0)} />
+                                <Statistic title={t("userPanels.overview.todayConsumed")} value={formatCompactCredits(data?.todayConsumedCredits ?? 0)} />
                             </div>
                         </Tooltip>
                     </Card>
                 </Col>
                 <Col xs={24} sm={12} md={6}>
                     <Card loading={loading}>
-                        <Tooltip title={`精确值：${formatExactCredits(data?.totalConsumedCredits ?? 0)} 积分`}>
+                        <Tooltip title={t("userPanels.overview.exactValue", { value: formatExactCredits(data?.totalConsumedCredits ?? 0) })}>
                             <div>
-                                <Statistic title="累计消耗积分" value={formatCompactCredits(data?.totalConsumedCredits ?? 0)} />
+                                <Statistic title={t("userPanels.overview.totalConsumed")} value={formatCompactCredits(data?.totalConsumedCredits ?? 0)} />
                             </div>
                         </Tooltip>
                     </Card>
@@ -464,11 +508,11 @@ export function UserOverviewPanel({ onOpenWallet }: { onOpenWallet?: () => void 
                 <Col xs={24} sm={12} md={6}>
                     <Card loading={loading}>
                         <Statistic
-                            title="云端存储配额 / 画布"
+                            title={t("userPanels.overview.storageAndCanvas")}
                             value={`${formatBytes(data?.storageUsedBytes ?? 0)} / ${formatBytes(data?.storageQuotaBytes ?? 0)}`}
                             suffix={
                                 <Typography.Text type="secondary" className="text-xs">
-                                    {data?.canvasProjectCount ?? 0} 画布
+                                    {t("userPanels.overview.canvasCount", { count: data?.canvasProjectCount ?? 0 })}
                                 </Typography.Text>
                             }
                         />
@@ -477,7 +521,7 @@ export function UserOverviewPanel({ onOpenWallet }: { onOpenWallet?: () => void 
             </Row>
 
             <ConsumptionTrendCard
-                title="我的积分消耗趋势"
+                title={t("userPanels.overview.trendTitle")}
                 days={days}
                 onDaysChange={setDays}
                 dailyTrend={data?.dailyTrend ?? []}
@@ -493,6 +537,8 @@ export function UserOverviewPanel({ onOpenWallet }: { onOpenWallet?: () => void 
 }
 
 export function ProfileSecurityPanel() {
+    const { t, i18n } = useTranslation();
+    const locale = i18n.resolvedLanguage || undefined;
     const { message } = App.useApp();
     const user = useUserStore((state) => state.user);
     const setUser = useUserStore((state) => state.setUser);
@@ -539,11 +585,11 @@ export function ProfileSecurityPanel() {
                 threshold: alertCfg?.threshold ?? alertCfg?.platformThreshold ?? 10,
             });
         } catch (error) {
-            message.error(error instanceof Error ? error.message : "加载个人信息失败");
+            message.error(error instanceof Error ? error.message : t("userPanels.profile.loadFailed"));
         } finally {
             setLoading(false);
         }
-    }, [alertForm, message, profileForm, setUser]);
+    }, [alertForm, message, profileForm, setUser, t]);
 
     const loadSessions = useCallback(async () => {
         setSessionsLoading(true);
@@ -567,7 +613,7 @@ export function ProfileSecurityPanel() {
             const { email } = await profileForm.validateFields(["email"]);
             const clean = (email || "").trim();
             if (!clean) {
-                message.warning("请先填写需要绑定的邮箱");
+                message.warning(t("userPanels.profile.enterEmailFirst"));
                 return;
             }
             await bindEmailCodeSender.sendCode(() => accountApi.sendEmailBindCode(clean));
@@ -587,10 +633,10 @@ export function ProfileSecurityPanel() {
             });
             setUser(res.user);
             bindEmailCodeSender.resetCooldown();
-            message.success("个人信息已保存");
+            message.success(t("userPanels.profile.saved"));
             void loadProfile();
         } catch (error) {
-            message.error(error instanceof Error ? error.message : "保存失败");
+            message.error(error instanceof Error ? error.message : t("userPanels.profile.saveFailed"));
         } finally {
             setSavingProfile(false);
         }
@@ -605,10 +651,10 @@ export function ProfileSecurityPanel() {
                 lowBalanceAlertEnabled,
                 lowBalanceThreshold,
             });
-            message.success("余额不足提醒设置已保存");
+            message.success(t("userPanels.profile.alertSaved"));
             void loadProfile();
         } catch (error) {
-            message.error(error instanceof Error ? error.message : "保存提醒设置失败");
+            message.error(error instanceof Error ? error.message : t("userPanels.profile.alertSaveFailed"));
         } finally {
             setSavingAlert(false);
         }
@@ -635,11 +681,11 @@ export function ProfileSecurityPanel() {
             });
             passwordForm.resetFields();
             changePasswordCodeSender.resetCooldown();
-            message.success("密码已修改");
+            message.success(t("userPanels.profile.passwordChanged"));
             void loadSessions();
             void loadProfile();
         } catch (error) {
-            message.error(error instanceof Error ? error.message : "修改密码失败");
+            message.error(error instanceof Error ? error.message : t("userPanels.profile.passwordChangeFailed"));
         } finally {
             setChangingPassword(false);
         }
@@ -648,20 +694,20 @@ export function ProfileSecurityPanel() {
     const handleRevokeSession = async (id: string) => {
         try {
             await accountApi.revokeSession(id);
-            message.success("已下线该登录设备");
+            message.success(t("userPanels.profile.sessionRevoked"));
             void loadSessions();
         } catch (error) {
-            message.error(error instanceof Error ? error.message : "操作失败");
+            message.error(error instanceof Error ? error.message : t("userPanels.profile.opFailed"));
         }
     };
 
     const handleRevokeOtherSessions = async () => {
         try {
             await accountApi.revokeOtherSessions();
-            message.success("已退出其他所有登录设备");
+            message.success(t("userPanels.profile.otherSessionsRevoked"));
             void loadSessions();
         } catch (error) {
-            message.error(error instanceof Error ? error.message : "操作失败");
+            message.error(error instanceof Error ? error.message : t("userPanels.profile.opFailed"));
         }
     };
 
@@ -685,9 +731,9 @@ export function ProfileSecurityPanel() {
             <Row gutter={[16, 16]}>
                 <Col xs={24} sm={12} md={6}>
                     <Card loading={loading}>
-                        <Tooltip title={`精确余额：${formatExactCredits(detail?.creditBalance ?? 0)} 积分`}>
+                        <Tooltip title={t("userPanels.overview.exactBalance", { value: formatExactCredits(detail?.creditBalance ?? 0) })}>
                             <div>
-                                <Statistic title="当前积分余额" value={formatCompactCredits(detail?.creditBalance ?? 0)} />
+                                <Statistic title={t("userPanels.profile.currentCredits")} value={formatCompactCredits(detail?.creditBalance ?? 0)} />
                             </div>
                         </Tooltip>
                     </Card>
@@ -695,74 +741,83 @@ export function ProfileSecurityPanel() {
                 <Col xs={24} sm={12} md={6}>
                     <Card loading={loading}>
                         <Statistic
-                            title="云端存储配额"
+                            title={t("userPanels.profile.storageQuota")}
                             value={`${formatBytes(detail?.storageUsedBytes ?? 0)} / ${formatBytes(detail?.storageQuotaBytes ?? 0)}`}
                         />
                     </Card>
                 </Col>
                 <Col xs={24} sm={12} md={6}>
                     <Card loading={loading}>
-                        <Statistic title="云端画布数" value={profileData?.stats.canvasProjectCount ?? 0} />
+                        <Statistic title={t("userPanels.profile.canvasCount")} value={profileData?.stats.canvasProjectCount ?? 0} />
                     </Card>
                 </Col>
                 <Col xs={24} sm={12} md={6}>
                     <Card loading={loading}>
-                        <Statistic title="我的素材数" value={profileData?.stats.assetCount ?? 0} />
+                        <Statistic title={t("userPanels.profile.assetCount")} value={profileData?.stats.assetCount ?? 0} />
                     </Card>
                 </Col>
             </Row>
 
-            <Card title="账号详情">
+            <Card title={t("userPanels.profile.accountDetails")}>
                 <Descriptions column={{ xs: 1, sm: 2 }} bordered size="small">
-                    <Descriptions.Item label="用户名">@{detail?.username}</Descriptions.Item>
-                    <Descriptions.Item label="账号角色">
-                        <Tag color={detail?.role === "admin" ? "blue" : "default"}>{detail?.role === "admin" ? "系统管理员" : "普通用户"}</Tag>
+                    <Descriptions.Item label={t("userPanels.profile.username")}>@{detail?.username}</Descriptions.Item>
+                    <Descriptions.Item label={t("userPanels.profile.role")}>
+                        <Tag color={detail?.role === "admin" ? "blue" : "default"}>
+                            {detail?.role === "admin" ? t("userPanels.profile.roleAdmin") : t("userPanels.profile.roleUser")}
+                        </Tag>
                     </Descriptions.Item>
-                    <Descriptions.Item label="账号状态">
-                        <Tag color={detail?.status === "active" ? "green" : "red"}>{detail?.status === "active" ? "正常" : "已禁用"}</Tag>
+                    <Descriptions.Item label={t("userPanels.profile.status")}>
+                        <Tag color={detail?.status === "active" ? "green" : "red"}>
+                            {detail?.status === "active" ? t("userPanels.profile.statusActive") : t("userPanels.profile.statusDisabled")}
+                        </Tag>
                     </Descriptions.Item>
-                    <Descriptions.Item label="云端对象存储配额">
+                    <Descriptions.Item label={t("userPanels.profile.cloudStorageQuota")}>
                         <div className="flex flex-wrap items-center gap-2">
                             <span>
-                                已用 {formatBytes(detail?.storageUsedBytes ?? 0)} / 配额 {formatBytes(detail?.storageQuotaBytes ?? 0)}
-                                {detail?.storageQuotaExpiresAt
-                                    ? ` · 有效期至 ${new Date(detail.storageQuotaExpiresAt).toLocaleString("zh-CN")}`
-                                    : " · 不限期"}
+                                {t("userPanels.profile.usedAndQuota", {
+                                    used: formatBytes(detail?.storageUsedBytes ?? 0),
+                                    quota: formatBytes(detail?.storageQuotaBytes ?? 0),
+                                    expiry: detail?.storageQuotaExpiresAt
+                                        ? t("userPanels.profile.expiryUntil", { time: new Date(detail.storageQuotaExpiresAt).toLocaleString(locale) })
+                                        : t("userPanels.profile.expiryNone"),
+                                })}
                             </span>
                             {detail?.storageQuotaExpiresAt && new Date(detail.storageQuotaExpiresAt).getTime() <= Date.now() ? (
-                                <Tag color="red">已过期</Tag>
+                                <Tag color="red">{t("userPanels.profile.expired")}</Tag>
                             ) : (detail?.storageQuotaBytes ?? 0) <= 0 || (detail?.storageUsedBytes ?? 0) >= (detail?.storageQuotaBytes ?? 0) ? (
-                                <Tag color="red">配额已满 / 需扩容</Tag>
+                                <Tag color="red">{t("userPanels.profile.quotaFullExpand")}</Tag>
                             ) : (
-                                <Tag color="green">正常</Tag>
+                                <Tag color="green">{t("userPanels.profile.statusActive")}</Tag>
                             )}
                         </div>
                     </Descriptions.Item>
                     {detail?.role === "admin" ? (
-                        <Descriptions.Item label="WebDAV 分配" span={2}>
+                        <Descriptions.Item label={t("userPanels.profile.webdavAssign")} span={2}>
                             {profileData?.webdav?.enabled ? (
                                 <div className="flex flex-wrap items-center gap-2">
                                     <Tag color={profileData.webdav.isExpired ? "red" : "cyan"}>{profileData.webdav.directory}</Tag>
-                                    {profileData.webdav.isExpired ? <Tag color="red">已过期</Tag> : null}
-                                    {profileData.webdav.isQuotaExceeded ? <Tag color="volcano">空间已满</Tag> : null}
+                                    {profileData.webdav.isExpired ? <Tag color="red">{t("userPanels.profile.expired")}</Tag> : null}
+                                    {profileData.webdav.isQuotaExceeded ? <Tag color="volcano">{t("userPanels.profile.quotaExceededTag")}</Tag> : null}
                                     <Typography.Text type="secondary" className="text-xs">
-                                        已用 {formatBytes(profileData.webdav.usedBytes ?? 0)}
-                                        {profileData.webdav.quotaBytes ? ` / ${formatBytes(profileData.webdav.quotaBytes)}` : " / 不限空间"}
+                                        {t("userPanels.profile.webdavUsed", { used: formatBytes(profileData.webdav.usedBytes ?? 0) })}
+                                        {profileData.webdav.quotaBytes
+                                            ? ` / ${formatBytes(profileData.webdav.quotaBytes)}`
+                                            : t("userPanels.profile.webdavUnlimited")}
                                         {profileData.webdav.expiresAt
-                                            ? ` · 有效期至 ${new Date(profileData.webdav.expiresAt).toLocaleString("zh-CN")}`
-                                            : " · 永久有效"}
+                                            ? t("userPanels.profile.expiryUntil", { time: new Date(profileData.webdav.expiresAt).toLocaleString(locale) })
+                                            : t("userPanels.profile.webdavPermanent")}
                                     </Typography.Text>
                                 </div>
                             ) : (
-                                <Tag>未分配</Tag>
+                                <Tag>{t("userPanels.profile.unassigned")}</Tag>
                             )}
                         </Descriptions.Item>
                     ) : null}
-                    <Descriptions.Item label="注册时间">
-                        {profileData?.user.createdAt ? new Date(profileData.user.createdAt).toLocaleString("zh-CN") : "—"}
+                    <Descriptions.Item label={t("userPanels.profile.createdAt")}>
+                        {profileData?.user.createdAt ? new Date(profileData.user.createdAt).toLocaleString(locale) : "—"}
                     </Descriptions.Item>
-                    <Descriptions.Item label="最近登录">
-                        {profileData?.user.lastLoginAt ? new Date(profileData.user.lastLoginAt).toLocaleString("zh-CN") : "—"}
+                    <Descriptions.Item label={t("userPanels.profile.lastLoginAt")}>
+                        {profileData?.user.lastLoginAt ? new Date(profileData.user.lastLoginAt).toLocaleString(locale) : "—"}
                     </Descriptions.Item>
                 </Descriptions>
             </Card>
@@ -773,7 +828,7 @@ export function ProfileSecurityPanel() {
                         title={
                             <span className="inline-flex items-center gap-2">
                                 <User className="size-4" />
-                                基本资料维护
+                                {t("userPanels.profile.profileCardTitle")}
                             </span>
                         }
                     >
@@ -789,22 +844,26 @@ export function ProfileSecurityPanel() {
                             </div>
                         </div>
                         <Form form={profileForm} layout="vertical" onFinish={handleSaveProfile}>
-                            <Form.Item name="displayName" label="显示名称" rules={[{ required: true, message: "请输入显示名称" }]}>
-                                <Input maxLength={48} placeholder="请输入显示名称" />
+                            <Form.Item
+                                name="displayName"
+                                label={t("userPanels.profile.displayName")}
+                                rules={[{ required: true, message: t("userPanels.profile.displayNameReq") }]}
+                            >
+                                <Input maxLength={48} placeholder={t("userPanels.profile.displayNameReq")} />
                             </Form.Item>
                             <Form.Item
                                 name="email"
                                 label={
                                     <span className="inline-flex items-center gap-2">
-                                        <span>绑定邮箱</span>
+                                        <span>{t("userPanels.profile.email")}</span>
                                         {detail?.email ? (
                                             detail.emailVerifiedAt ? (
                                                 <Tag color="green" style={{ marginInlineEnd: 0 }}>
-                                                    已验证
+                                                    {t("userPanels.profile.emailVerified")}
                                                 </Tag>
                                             ) : (
                                                 <Tag color="orange" style={{ marginInlineEnd: 0 }}>
-                                                    未验证
+                                                    {t("userPanels.profile.emailUnverified")}
                                                 </Tag>
                                             )
                                         ) : null}
@@ -812,9 +871,9 @@ export function ProfileSecurityPanel() {
                                 }
                                 rules={[
                                     ...(profileData?.requireEmailOnRegister && detail?.role !== "admin"
-                                        ? [{ required: true, message: "当前平台要求绑定邮箱" }]
+                                        ? [{ required: true, message: t("userPanels.profile.emailReq") }]
                                         : []),
-                                    { type: "email" as const, message: "邮箱格式不正确" },
+                                    { type: "email" as const, message: t("userPanels.profile.emailInvalid") },
                                 ]}
                             >
                                 <Input placeholder="example@domain.com" />
@@ -822,26 +881,28 @@ export function ProfileSecurityPanel() {
                             {needsEmailVerifyCode ? (
                                 <Form.Item
                                     name="emailCode"
-                                    label="邮箱验证码"
-                                    rules={[{ required: true, message: "更改或验证邮箱时请输入验证码" }]}
+                                    label={t("userPanels.profile.emailCode")}
+                                    rules={[{ required: true, message: t("userPanels.profile.emailCodeReq") }]}
                                 >
                                     <Space.Compact className="w-full">
-                                        <Input placeholder="输入 6 位验证码" maxLength={8} />
+                                        <Input placeholder={t("userPanels.profile.codePlaceholder")} maxLength={8} />
                                         <Button
                                             loading={bindEmailCodeSender.sending}
                                             disabled={bindEmailCodeSender.cooldown > 0}
                                             onClick={() => void handleSendBindEmailCode()}
                                         >
-                                            {bindEmailCodeSender.cooldown > 0 ? `${bindEmailCodeSender.cooldown}s 后重试` : "获取验证码"}
+                                            {bindEmailCodeSender.cooldown > 0
+                                                ? t("userPanels.profile.retryAfter", { seconds: bindEmailCodeSender.cooldown })
+                                                : t("userPanels.profile.getCode")}
                                         </Button>
                                     </Space.Compact>
                                 </Form.Item>
                             ) : null}
-                            <Form.Item name="avatarUrl" label="头像地址（可选）">
+                            <Form.Item name="avatarUrl" label={t("userPanels.profile.avatarUrl")}>
                                 <Input placeholder="https://..." />
                             </Form.Item>
                             <Button type="primary" htmlType="submit" loading={savingProfile}>
-                                保存资料
+                                {t("userPanels.profile.saveProfile")}
                             </Button>
                         </Form>
                     </Card>
@@ -852,7 +913,7 @@ export function ProfileSecurityPanel() {
                         title={
                             <span className="inline-flex items-center gap-2">
                                 <KeyRound className="size-4" />
-                                账号安全 · 修改密码
+                                {t("userPanels.profile.securityTitle")}
                             </span>
                         }
                         extra={
@@ -864,42 +925,46 @@ export function ProfileSecurityPanel() {
                                     passwordForm.resetFields(["currentPassword", "emailCode"]);
                                 }}
                                 options={[
-                                    { label: "原密码验证", value: "password" },
-                                    { label: "邮箱验证码", value: "email", disabled: !canResetByEmail },
+                                    { label: t("userPanels.profile.modePassword"), value: "password" },
+                                    { label: t("userPanels.profile.modeEmail"), value: "email", disabled: !canResetByEmail },
                                 ]}
                             />
                         }
                     >
                         {!canResetByEmail ? (
                             <Typography.Text type="secondary" className="mb-3 block text-xs">
-                                {emailServiceEnabled ? "提示：绑定邮箱后即可使用邮箱验证码修改密码。" : "提示：管理员启用邮件服务且账号绑定邮箱后，可使用邮箱验证码改密。"}
+                                {emailServiceEnabled ? t("userPanels.profile.emailResetHintEnabled") : t("userPanels.profile.emailResetHintDisabled")}
                             </Typography.Text>
                         ) : null}
                         <Form form={passwordForm} layout="vertical" initialValues={{ revokeOtherSessions: true }} onFinish={handleChangePassword}>
                             {passwordMode === "password" ? (
-                                <Form.Item name="currentPassword" label="当前密码" rules={[{ required: true, message: "请输入当前密码" }]}>
-                                    <Input.Password placeholder="输入当前使用的密码" />
+                                <Form.Item
+                                    name="currentPassword"
+                                    label={t("userPanels.profile.currentPassword")}
+                                    rules={[{ required: true, message: t("userPanels.profile.currentPasswordReq") }]}
+                                >
+                                    <Input.Password placeholder={t("userPanels.profile.currentPasswordPlaceholder")} />
                                 </Form.Item>
                             ) : (
                                 <>
-                                    <Form.Item label="接收验证码邮箱">
+                                    <Form.Item label={t("userPanels.profile.receiveCodeEmail")}>
                                         <Input value={detail?.email || ""} disabled />
                                     </Form.Item>
                                     <Form.Item
                                         name="emailCode"
-                                        label="邮箱验证码"
-                                        rules={[{ required: true, message: "请输入邮箱验证码" }]}
+                                        label={t("userPanels.profile.emailCode")}
+                                        rules={[{ required: true, message: t("userPanels.profile.emailCodeInputReq") }]}
                                     >
                                         <Space.Compact className="w-full">
-                                            <Input placeholder="输入 6 位验证码" maxLength={8} />
+                                            <Input placeholder={t("userPanels.profile.codePlaceholder")} maxLength={8} />
                                             <Button
                                                 loading={changePasswordCodeSender.sending}
                                                 disabled={changePasswordCodeSender.cooldown > 0}
                                                 onClick={() => void handleSendChangePasswordCode()}
                                             >
                                                 {changePasswordCodeSender.cooldown > 0
-                                                    ? `${changePasswordCodeSender.cooldown}s 后重试`
-                                                    : "发送验证码"}
+                                                    ? t("userPanels.profile.retryAfter", { seconds: changePasswordCodeSender.cooldown })
+                                                    : t("userPanels.profile.sendCode")}
                                             </Button>
                                         </Space.Compact>
                                     </Form.Item>
@@ -907,35 +972,35 @@ export function ProfileSecurityPanel() {
                             )}
                             <Form.Item
                                 name="newPassword"
-                                label="新密码"
+                                label={t("userPanels.profile.newPassword")}
                                 rules={[
-                                    { required: true, message: "请输入新密码" },
-                                    { min: 6, message: "新密码至少 6 位" },
+                                    { required: true, message: t("userPanels.profile.newPasswordReq") },
+                                    { min: 6, message: t("userPanels.profile.newPasswordMin") },
                                 ]}
                             >
-                                <Input.Password placeholder="至少 6 位字符" />
+                                <Input.Password placeholder={t("userPanels.profile.newPasswordPlaceholder")} />
                             </Form.Item>
                             <Form.Item
                                 name="confirmPassword"
-                                label="确认新密码"
+                                label={t("userPanels.profile.confirmPassword")}
                                 dependencies={["newPassword"]}
                                 rules={[
-                                    { required: true, message: "请再次输入新密码" },
+                                    { required: true, message: t("userPanels.profile.confirmPasswordReq") },
                                     ({ getFieldValue }) => ({
                                         validator(_, value) {
                                             if (!value || getFieldValue("newPassword") === value) return Promise.resolve();
-                                            return Promise.reject(new Error("两次输入的新密码不一致"));
+                                            return Promise.reject(new Error(t("userPanels.profile.confirmMismatch")));
                                         },
                                     }),
                                 ]}
                             >
-                                <Input.Password placeholder="再次输入新密码" />
+                                <Input.Password placeholder={t("userPanels.profile.confirmPlaceholder")} />
                             </Form.Item>
-                            <Form.Item name="revokeOtherSessions" label="修改密码后退出其他所有登录设备" valuePropName="checked">
+                            <Form.Item name="revokeOtherSessions" label={t("userPanels.profile.revokeOtherSessions")} valuePropName="checked">
                                 <Switch />
                             </Form.Item>
                             <Button type="primary" htmlType="submit" loading={changingPassword}>
-                                更新密码
+                                {t("userPanels.profile.updatePassword")}
                             </Button>
                         </Form>
                     </Card>
@@ -946,7 +1011,7 @@ export function ProfileSecurityPanel() {
                 title={
                     <span className="inline-flex items-center gap-2">
                         <Bell className="size-4" />
-                        积分余额不足邮件提醒
+                        {t("userPanels.profile.lowBalanceTitle")}
                     </span>
                 }
             >
@@ -955,16 +1020,16 @@ export function ProfileSecurityPanel() {
                         type="info"
                         showIcon
                         className="mb-4"
-                        message="平台邮件服务当前未启用"
-                        description="你可以预先保存提醒偏好；待管理员启用邮件服务且当前账号绑定邮箱后将自动生效。"
+                        message={t("userPanels.profile.mailDisabledTitle")}
+                        description={t("userPanels.profile.mailDisabledDesc")}
                     />
                 ) : !detail?.email ? (
                     <Alert
                         type="warning"
                         showIcon
                         className="mb-4"
-                        message="当前账号尚未绑定邮箱"
-                        description="请先在上方「基本资料维护」中绑定邮箱，才能接收余额不足提醒邮件。"
+                        message={t("userPanels.profile.noEmailTitle")}
+                        description={t("userPanels.profile.noEmailDesc")}
                     />
                 ) : null}
                 <Form
@@ -975,17 +1040,17 @@ export function ProfileSecurityPanel() {
                 >
                     <Row gutter={16} align="bottom">
                         <Col xs={24} md={12}>
-                            <Form.Item name="mode" label="提醒策略">
+                            <Form.Item name="mode" label={t("userPanels.profile.alertPolicyLabel")}>
                                 <Radio.Group>
                                     <Radio value="inherit">
-                                        跟随平台默认（
+                                        {t("userPanels.profile.alertInheritPrefix")}
                                         {profileData?.lowBalanceAlert?.platformEnabled
-                                            ? `低于 ${profileData.lowBalanceAlert.platformThreshold} 积分`
-                                            : "已关闭"}
-                                        ）
+                                            ? t("userPanels.profile.alertBelowThreshold", { threshold: profileData.lowBalanceAlert.platformThreshold })
+                                            : t("userPanels.profile.alertClosed")}
+                                        )
                                     </Radio>
-                                    <Radio value="custom_on">自定义阈值</Radio>
-                                    <Radio value="off">关闭提醒</Radio>
+                                    <Radio value="custom_on">{t("userPanels.profile.alertCustom")}</Radio>
+                                    <Radio value="off">{t("userPanels.profile.alertOff")}</Radio>
                                 </Radio.Group>
                             </Form.Item>
                         </Col>
@@ -993,8 +1058,8 @@ export function ProfileSecurityPanel() {
                             <Col xs={24} md={6}>
                                 <Form.Item
                                     name="threshold"
-                                    label="低于多少积分时发送邮件"
-                                    rules={[{ required: true, message: "请填写积分阈值" }]}
+                                    label={t("userPanels.profile.thresholdLabel")}
+                                    rules={[{ required: true, message: t("userPanels.profile.thresholdReq") }]}
                                 >
                                     <InputNumber min={0} max={1000000} precision={2} className="w-full" />
                                 </Form.Item>
@@ -1003,16 +1068,17 @@ export function ProfileSecurityPanel() {
                         <Col xs={24} md={6}>
                             <Form.Item>
                                 <Button type="primary" htmlType="submit" loading={savingAlert}>
-                                    保存提醒设置
+                                    {t("userPanels.profile.saveAlertSettings")}
                                 </Button>
                             </Form.Item>
                         </Col>
                     </Row>
                     <Typography.Text type="secondary" className="text-xs">
-                        防骚扰规则：跌破阈值时发送一次提醒；余额回充到阈值以上后重置，或至少间隔{" "}
-                        {profileData?.lowBalanceAlert?.cooldownHours ?? 24} 小时才会再次提醒。
+                        {t("userPanels.profile.alertRateLimitNote", { hours: profileData?.lowBalanceAlert?.cooldownHours ?? 24 })}
                         {profileData?.lowBalanceAlert?.lastAlertedAt
-                            ? ` 上次提醒：${new Date(profileData.lowBalanceAlert.lastAlertedAt).toLocaleString("zh-CN")}`
+                            ? t("userPanels.profile.lastAlertedAt", {
+                                  time: new Date(profileData.lowBalanceAlert.lastAlertedAt).toLocaleString(locale),
+                              })
                             : ""}
                     </Typography.Text>
                 </Form>
@@ -1022,16 +1088,16 @@ export function ProfileSecurityPanel() {
                 title={
                     <span className="inline-flex items-center gap-2">
                         <Laptop className="size-4" />
-                        登录设备与会话管理
+                        {t("userPanels.profile.sessionsTitle")}
                     </span>
                 }
                 extra={
                     <Space>
-                        <Popconfirm title="确定下线除当前浏览器之外的所有登录设备吗？" onConfirm={() => void handleRevokeOtherSessions()}>
-                            <Button size="small">退出其他所有设备</Button>
+                        <Popconfirm title={t("userPanels.profile.confirmRevokeOthers")} onConfirm={() => void handleRevokeOtherSessions()}>
+                            <Button size="small">{t("userPanels.profile.revokeOthers")}</Button>
                         </Popconfirm>
                         <Button size="small" icon={<RefreshCw className="size-3.5" />} loading={sessionsLoading} onClick={() => void loadSessions()}>
-                            刷新
+                            {t("common.refresh")}
                         </Button>
                     </Space>
                 }
@@ -1046,43 +1112,43 @@ export function ProfileSecurityPanel() {
                     pagination={false}
                     columns={[
                         {
-                            title: "设备 / 浏览器",
+                            title: t("userPanels.profile.colDevice"),
                             key: "ua",
                             width: 340,
                             render: (_, record) => (
                                 <div className="flex max-w-[320px] items-center gap-2">
                                     <Typography.Text ellipsis={{ tooltip: record.userAgent }} className="min-w-0 flex-1">
-                                        {record.userAgent || "未知设备"}
+                                        {record.userAgent || t("userPanels.profile.unknownDevice")}
                                     </Typography.Text>
                                     {record.isCurrent ? (
                                         <Tag color="green" style={{ marginInlineEnd: 0 }}>
-                                            当前设备
+                                            {t("userPanels.profile.currentDevice")}
                                         </Tag>
                                     ) : null}
                                 </div>
                             ),
                         },
-                        { title: "IP", dataIndex: "ip", width: 130, render: (v: string) => v || "—" },
-                        { title: "登录时间", dataIndex: "createdAt", width: 170, render: (v: string) => new Date(v).toLocaleString("zh-CN") },
-                        { title: "过期时间", dataIndex: "expiresAt", width: 170, render: (v: string) => new Date(v).toLocaleString("zh-CN") },
+                        { title: t("userPanels.profile.colIp"), dataIndex: "ip", width: 130, render: (v: string) => v || "—" },
+                        { title: t("userPanels.profile.colLoginTime"), dataIndex: "createdAt", width: 170, render: (v: string) => new Date(v).toLocaleString(locale) },
+                        { title: t("userPanels.profile.colExpiresAt"), dataIndex: "expiresAt", width: 170, render: (v: string) => new Date(v).toLocaleString(locale) },
                         {
-                            title: "操作",
+                            title: t("userPanels.profile.colActions"),
                             key: "actions",
                             fixed: "right",
                             width: 75,
                             render: (_, record) =>
                                 record.isCurrent ? (
                                     <Typography.Text type="secondary" className="text-xs">
-                                        当前
+                                        {t("userPanels.profile.currentShort")}
                                     </Typography.Text>
                                 ) : (
                                     <TableRowActions
                                         items={[
                                             {
                                                 key: "revoke",
-                                                label: "下线",
+                                                label: t("userPanels.profile.revokeAction"),
                                                 danger: true,
-                                                confirm: "确定强制下线该设备吗？",
+                                                confirm: t("userPanels.profile.confirmRevoke"),
                                                 onClick: () => void handleRevokeSession(record.id),
                                             },
                                         ]}
@@ -1121,6 +1187,8 @@ function LedgerDetailModal({
     showUser?: boolean;
     onClose: () => void;
 }) {
+    const { t, i18n } = useTranslation();
+    const locale = i18n.resolvedLanguage || undefined;
     const { message } = App.useApp();
     const { token } = antdTheme.useToken();
     const [mediaItems, setMediaItems] = useState<MediaItem[]>([]);
@@ -1165,13 +1233,13 @@ function LedgerDetailModal({
         try {
             const url = media.url || (await storageApi.getUrl(media.id)).url;
             if (!url) {
-                message.error("文件链接暂不可用");
+                message.error(t("userPanels.ledgerDetail.fileUrlUnavailable"));
                 return;
             }
             setPreviewOriginalUrl(url);
             setPreviewMedia(media);
         } catch (error) {
-            message.error(error instanceof Error ? error.message : "加载原文件失败");
+            message.error(error instanceof Error ? error.message : t("userPanels.ledgerDetail.loadOriginalFailed"));
         } finally {
             setLoadingPreviewId(null);
         }
@@ -1182,23 +1250,23 @@ function LedgerDetailModal({
         try {
             await storageApi.downloadFile(media);
         } catch (error) {
-            message.error(error instanceof Error ? error.message : "下载失败");
+            message.error(error instanceof Error ? error.message : t("userPanels.ledgerDetail.downloadFailed"));
         } finally {
             setDownloadingId(null);
         }
     };
-    const reasonInfo = item ? ledgerReasonMeta[item.reason] : undefined;
+    const reasonInfo = item ? getLedgerReasonMeta(item.reason, t) : undefined;
     const modelName = typeof item?.meta?.model === "string" && item.meta.model ? item.meta.model : "";
     const hasTokens = typeof item?.meta?.inputTokens === "number" || typeof item?.meta?.outputTokens === "number";
     const imageSpec = [
-        typeof item?.meta?.count === "number" ? `${item.meta.count} 张` : "",
+        typeof item?.meta?.count === "number" ? t("userPanels.usageDetail.countImages", { count: item.meta.count }) : "",
         typeof item?.meta?.resolutionTier === "string" && item.meta.resolutionTier ? item.meta.resolutionTier.toUpperCase() : "",
         typeof item?.meta?.size === "string" && item.meta.size ? item.meta.size : "",
     ]
         .filter(Boolean)
         .join(" · ");
     const hasMediaDuration = typeof item?.meta?.seconds === "number" || typeof item?.meta?.durationSeconds === "number";
-    const timing = getLedgerTimingStats(item?.meta);
+    const timing = getLedgerTimingStats(item?.meta, t);
     const errorMessage = typeof item?.meta?.errorMessage === "string" ? item.meta.errorMessage.trim() : "";
     const errorStatus = typeof item?.meta?.errorStatus === "number" ? item.meta.errorStatus : undefined;
     const refundedCredits =
@@ -1217,11 +1285,11 @@ function LedgerDetailModal({
     return (
         <Modal
             open={Boolean(item)}
-            title="日志详情"
+            title={t("userPanels.ledgerDetail.title")}
             onCancel={onClose}
             footer={
                 <Button type="primary" onClick={onClose}>
-                    关闭
+                    {t("common.close")}
                 </Button>
             }
             width={620}
@@ -1239,35 +1307,38 @@ function LedgerDetailModal({
                             <Tag color={reasonInfo?.color} style={{ marginInlineEnd: 0 }}>
                                 {reasonInfo?.label || item.reason}
                             </Tag>
-                            <Tag color={getLedgerTaskStatus(item).color} style={{ marginInlineEnd: 0 }}>
-                                {getLedgerTaskStatus(item).label}
+                            <Tag color={getLedgerTaskStatus(item, t).color} style={{ marginInlineEnd: 0 }}>
+                                {getLedgerTaskStatus(item, t).label}
                             </Tag>
                             {typeof timing.isStream === "boolean" ? (
                                 <Tag color={timing.isStream ? "cyan" : undefined} style={{ marginInlineEnd: 0 }}>
-                                    {timing.isStream ? "流" : "非流"}
+                                    {timing.isStream ? t("userPanels.ledgerDetail.stream") : t("userPanels.ledgerDetail.nonStream")}
                                 </Tag>
                             ) : null}
                             {modelName ? <Tag style={{ marginInlineEnd: 0 }}>{modelName}</Tag> : null}
                             <Typography.Text type="secondary" className="text-xs">
-                                {new Date(item.createdAt).toLocaleString("zh-CN")}
+                                {new Date(item.createdAt).toLocaleString(locale)}
                             </Typography.Text>
                         </div>
                         <div className="flex items-baseline gap-2.5">
                             {isFailedTask ? (
                                 <Tag color="orange" style={{ marginInlineEnd: 0 }}>
-                                    0 积分
+                                    {t("userPanels.ledgerDetail.zeroCredits")}
                                 </Tag>
                             ) : refundedCredits > 0 ? (
                                 <Tag color={displayDelta === 0 ? "orange" : "volcano"} style={{ marginInlineEnd: 0 }}>
-                                    净变动 {displayDelta} 积分（已退 +{refundedCredits}）
+                                    {t("userPanels.ledgerDetail.netDeltaRefund", { delta: displayDelta, refunded: refundedCredits })}
                                 </Tag>
                             ) : (
                                 <Tag color={displayDelta >= 0 ? "green" : "volcano"} style={{ marginInlineEnd: 0 }}>
-                                    {displayDelta >= 0 ? `+${displayDelta}` : displayDelta} 积分
+                                    {t("userPanels.ledgerDetail.deltaCredits", { delta: displayDelta >= 0 ? `+${displayDelta}` : displayDelta })}
                                 </Tag>
                             )}
                             <Typography.Text type="secondary" className="text-xs">
-                                结余 <span className="font-medium" style={{ color: token.colorText }}>{item.balanceAfter}</span>
+                                {t("userPanels.ledgerDetail.balanceAfterPrefix")}{" "}
+                                <span className="font-medium" style={{ color: token.colorText }}>
+                                    {item.balanceAfter}
+                                </span>
                             </Typography.Text>
                         </div>
                     </div>
@@ -1279,32 +1350,32 @@ function LedgerDetailModal({
                         >
                             <div>
                                 <Typography.Text type="secondary" className="block text-xs">
-                                    原预扣积分
+                                    {t("userPanels.ledgerDetail.chargedCredits")}
                                 </Typography.Text>
                                 <div className="mt-0.5 text-sm font-medium">{chargedCredits > 0 ? `-${chargedCredits}` : "—"}</div>
                             </div>
                             <div>
                                 <Typography.Text type="secondary" className="block text-xs">
-                                    退回积分
+                                    {t("userPanels.ledgerDetail.refundedCredits")}
                                 </Typography.Text>
                                 <div className="mt-0.5 text-sm font-medium text-emerald-500">+{refundedCredits}</div>
                             </div>
                             <div>
                                 <Typography.Text type="secondary" className="block text-xs">
-                                    实际净扣
+                                    {t("userPanels.ledgerDetail.netDeducted")}
                                 </Typography.Text>
                                 <div className="mt-0.5 text-sm font-medium">{isFailedTask ? 0 : Math.abs(item.delta)}</div>
                             </div>
                             <div>
                                 <Typography.Text type="secondary" className="block text-xs">
-                                    退回时间
+                                    {t("userPanels.ledgerDetail.refundedAt")}
                                 </Typography.Text>
-                                <div className="mt-0.5 text-xs">{refundedAt ? new Date(refundedAt).toLocaleString("zh-CN") : "—"}</div>
+                                <div className="mt-0.5 text-xs">{refundedAt ? new Date(refundedAt).toLocaleString(locale) : "—"}</div>
                             </div>
                             {refundDetail ? (
                                 <div className="col-span-2 sm:col-span-4">
                                     <Typography.Text type="secondary" className="text-xs">
-                                        退回原因：{refundDetail}
+                                        {t("userPanels.ledgerDetail.refundReason", { reason: refundDetail })}
                                     </Typography.Text>
                                 </div>
                             ) : null}
@@ -1315,10 +1386,14 @@ function LedgerDetailModal({
                         <Alert
                             type="error"
                             showIcon
-                            title={errorStatus !== undefined ? `请求失败（HTTP ${errorStatus}）` : "生成失败原因"}
+                            title={
+                                errorStatus !== undefined
+                                    ? t("userPanels.ledgerDetail.httpErrorTitle", { status: errorStatus })
+                                    : t("userPanels.ledgerDetail.failedReasonTitle")
+                            }
                             description={
                                 <div className="mt-1 max-h-44 overflow-auto whitespace-pre-wrap break-all font-mono text-xs leading-5">
-                                    {errorMessage || `上游返回异常状态码 HTTP ${errorStatus}`}
+                                    {errorMessage || t("userPanels.ledgerDetail.httpErrorFallback", { status: errorStatus })}
                                 </div>
                             }
                         />
@@ -1330,7 +1405,7 @@ function LedgerDetailModal({
                     >
                         <div className="min-w-0">
                             <Typography.Text type="secondary" className="block text-xs">
-                                日志 ID
+                                {t("userPanels.ledgerDetail.logId")}
                             </Typography.Text>
                             <Typography.Text copyable className="mt-0.5 block break-all font-mono text-xs">
                                 {item.id}
@@ -1340,7 +1415,7 @@ function LedgerDetailModal({
                         {showUser && (item.username || item.displayName) ? (
                             <div className="min-w-0">
                                 <Typography.Text type="secondary" className="block text-xs">
-                                    所属用户
+                                    {t("userPanels.ledgerDetail.ownerUser")}
                                 </Typography.Text>
                                 <div className="mt-0.5 truncate text-sm font-medium">
                                     {item.displayName || item.username}
@@ -1356,7 +1431,7 @@ function LedgerDetailModal({
                         {item.refId ? (
                             <div className="min-w-0">
                                 <Typography.Text type="secondary" className="block text-xs">
-                                    关联单号
+                                    {t("userPanels.ledgerDetail.refId")}
                                 </Typography.Text>
                                 <Typography.Text copyable className="mt-0.5 block break-all font-mono text-xs">
                                     {item.refId}
@@ -1367,13 +1442,15 @@ function LedgerDetailModal({
                         {timing.durationText ? (
                             <div className="min-w-0">
                                 <Typography.Text type="secondary" className="block text-xs">
-                                    {timing.isStream && timing.firstTokenMs !== undefined ? "耗时（首字 / 总耗时）" : "请求耗时"}
+                                    {timing.isStream && timing.firstTokenMs !== undefined
+                                        ? t("userPanels.ledgerDetail.timingStreamLabel")
+                                        : t("userPanels.ledgerDetail.timingRequestLabel")}
                                 </Typography.Text>
                                 <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-sm font-medium">
                                     <span>{timing.durationText}</span>
                                     {timing.clientAborted ? (
                                         <Tag color="orange" style={{ marginInlineEnd: 0 }}>
-                                            前端提前断开
+                                            {t("userPanels.ledgerDetail.clientAborted")}
                                         </Tag>
                                     ) : null}
                                 </div>
@@ -1388,7 +1465,7 @@ function LedgerDetailModal({
                         {timing.tokPerSec > 0 ? (
                             <div className="min-w-0">
                                 <Typography.Text type="secondary" className="block text-xs">
-                                    生成速度
+                                    {t("userPanels.ledgerDetail.genSpeed")}
                                 </Typography.Text>
                                 <div className="mt-0.5 text-sm font-medium">{timing.tokPerSec} tok/s</div>
                             </div>
@@ -1397,12 +1474,14 @@ function LedgerDetailModal({
                         {hasTokens ? (
                             <div className="min-w-0 sm:col-span-2">
                                 <Typography.Text type="secondary" className="block text-xs">
-                                    Token 用量
+                                    {t("userPanels.ledgerDetail.tokenUsage")}
                                 </Typography.Text>
                                 <div className="mt-0.5 text-sm">
-                                    输入 {Number(item.meta?.inputTokens ?? 0).toLocaleString()} · 缓存{" "}
-                                    {Number(item.meta?.cachedInputTokens ?? 0).toLocaleString()} · 输出{" "}
-                                    {Number(item.meta?.outputTokens ?? 0).toLocaleString()}
+                                    {t("userPanels.ledgerDetail.tokenUsageDetail", {
+                                        input: Number(item.meta?.inputTokens ?? 0).toLocaleString(locale),
+                                        cached: Number(item.meta?.cachedInputTokens ?? 0).toLocaleString(locale),
+                                        output: Number(item.meta?.outputTokens ?? 0).toLocaleString(locale),
+                                    })}
                                 </div>
                             </div>
                         ) : null}
@@ -1410,7 +1489,7 @@ function LedgerDetailModal({
                         {imageSpec ? (
                             <div className="min-w-0">
                                 <Typography.Text type="secondary" className="block text-xs">
-                                    图片规格
+                                    {t("userPanels.ledgerDetail.imageSpec")}
                                 </Typography.Text>
                                 <div className="mt-0.5 text-sm">{imageSpec}</div>
                             </div>
@@ -1419,11 +1498,13 @@ function LedgerDetailModal({
                         {hasMediaDuration ? (
                             <div className="min-w-0">
                                 <Typography.Text type="secondary" className="block text-xs">
-                                    音视频时长
+                                    {t("userPanels.ledgerDetail.mediaDuration")}
                                 </Typography.Text>
                                 <div className="mt-0.5 text-sm">
-                                    {typeof item.meta?.seconds === "number" ? `${item.meta.seconds} 秒` : `${item.meta?.durationSeconds} 秒`}
-                                    {item.meta?.hasReferenceVideo === true ? "（含参考视频）" : ""}
+                                    {typeof item.meta?.seconds === "number"
+                                        ? t("userPanels.usageDetail.seconds", { seconds: item.meta.seconds })
+                                        : t("userPanels.usageDetail.seconds", { seconds: item.meta?.durationSeconds })}
+                                    {item.meta?.hasReferenceVideo === true ? t("userPanels.ledgerDetail.hasRefVideoSuffix") : ""}
                                 </div>
                             </div>
                         ) : null}
@@ -1431,7 +1512,7 @@ function LedgerDetailModal({
                         {typeof item.meta?.code === "string" && item.meta.code ? (
                             <div className="min-w-0">
                                 <Typography.Text type="secondary" className="block text-xs">
-                                    兑换码
+                                    {t("userPanels.ledgerDetail.redeemCode")}
                                 </Typography.Text>
                                 <Typography.Text copyable className="mt-0.5 block font-mono text-xs">
                                     {item.meta.code}
@@ -1442,7 +1523,7 @@ function LedgerDetailModal({
                         {typeof item.meta?.detail === "string" && item.meta.detail ? (
                             <div className="min-w-0 sm:col-span-2">
                                 <Typography.Text type="secondary" className="block text-xs">
-                                    详情说明
+                                    {t("userPanels.ledgerDetail.detailInfo")}
                                 </Typography.Text>
                                 <div className="mt-0.5 text-sm">{item.meta.detail}</div>
                             </div>
@@ -1451,7 +1532,7 @@ function LedgerDetailModal({
                         {typeof item.meta?.note === "string" && item.meta.note ? (
                             <div className="min-w-0 sm:col-span-2">
                                 <Typography.Text type="secondary" className="block text-xs">
-                                    备注信息
+                                    {t("userPanels.ledgerDetail.noteInfo")}
                                 </Typography.Text>
                                 <div className="mt-0.5 text-sm">{item.meta.note}</div>
                             </div>
@@ -1461,7 +1542,7 @@ function LedgerDetailModal({
                     {isMediaGeneration ? (
                         <div>
                             <Typography.Text type="secondary" className="mb-1.5 block text-xs">
-                                生成结果（缩略图与原文件下载）
+                                {t("userPanels.ledgerDetail.generatedResults")}
                             </Typography.Text>
                             {mediaLoading ? (
                                 <div
@@ -1470,7 +1551,7 @@ function LedgerDetailModal({
                                 >
                                     <Spin size="small" />
                                     <Typography.Text type="secondary" className="text-xs">
-                                        正在加载生成结果缩略图...
+                                        {t("userPanels.ledgerDetail.loadingThumbs")}
                                     </Typography.Text>
                                 </div>
                             ) : mediaItems.length ? (
@@ -1490,7 +1571,7 @@ function LedgerDetailModal({
                                                     onClick={() => void handlePreviewGenerated(media)}
                                                     disabled={Boolean(loadingPreviewId)}
                                                     className="group relative size-16 shrink-0 cursor-pointer overflow-hidden rounded border-0 bg-transparent p-0"
-                                                    title="点击预览原文件"
+                                                    title={t("userPanels.ledgerDetail.previewOriginalTitle")}
                                                 >
                                                     {thumb ? (
                                                         <img src={thumb} alt={fileLabel} className="size-full object-cover transition group-hover:scale-105" />
@@ -1509,7 +1590,7 @@ function LedgerDetailModal({
                                                 </button>
                                                 <div className="min-w-0 flex-1">
                                                     <div className="flex flex-wrap items-center gap-1.5">
-                                                        <Tag style={{ marginInlineEnd: 0 }}>{kindLabels[media.kind] || media.kind}</Tag>
+                                                        <Tag style={{ marginInlineEnd: 0 }}>{getKindLabel(media.kind, t)}</Tag>
                                                         {media.width && media.height ? (
                                                             <Typography.Text type="secondary" className="whitespace-nowrap text-xs">
                                                                 {media.width}×{media.height}
@@ -1530,12 +1611,12 @@ function LedgerDetailModal({
                                                         loading={isLoadingPreview}
                                                         onClick={() => void handlePreviewGenerated(media)}
                                                     >
-                                                        预览
+                                                        {t("userPanels.ledgerDetail.previewBtn")}
                                                     </Button>
                                                     <Popconfirm
-                                                        title="确定下载该原文件到本地吗？"
-                                                        okText="确认下载"
-                                                        cancelText="取消"
+                                                        title={t("userPanels.ledgerDetail.confirmDownloadTitle")}
+                                                        okText={t("userPanels.ledgerDetail.confirmDownloadOk")}
+                                                        cancelText={t("common.cancel")}
                                                         onConfirm={() => void handleDownloadGenerated(media)}
                                                     >
                                                         <Button
@@ -1545,7 +1626,7 @@ function LedgerDetailModal({
                                                             icon={<Download className="size-3.5" />}
                                                             loading={downloadingId === media.id}
                                                         >
-                                                            下载
+                                                            {t("common.download")}
                                                         </Button>
                                                     </Popconfirm>
                                                 </Space>
@@ -1559,7 +1640,7 @@ function LedgerDetailModal({
                                     style={{ borderColor: token.colorBorderSecondary }}
                                 >
                                     <Typography.Text type="secondary" className="text-xs">
-                                        暂无关联云端媒体文件（可能因配额不足、任务未完成或文件已删除）
+                                        {t("userPanels.ledgerDetail.noLinkedMedia")}
                                     </Typography.Text>
                                 </div>
                             )}
@@ -1569,7 +1650,7 @@ function LedgerDetailModal({
                     {item.meta && Object.keys(item.meta).length > 0 ? (
                         <div>
                             <Typography.Text type="secondary" className="mb-1.5 block text-xs">
-                                原始元数据（Meta JSON）
+                                {t("userPanels.ledgerDetail.rawMeta")}
                             </Typography.Text>
                             <pre
                                 className="max-h-56 overflow-auto rounded-lg border p-3 font-mono text-xs"
@@ -1587,7 +1668,7 @@ function LedgerDetailModal({
             ) : null}
             <Modal
                 open={Boolean(previewMedia)}
-                title="生成结果预览"
+                title={t("userPanels.ledgerDetail.previewModalTitle")}
                 onCancel={() => {
                     setPreviewMedia(null);
                     setPreviewOriginalUrl("");
@@ -1600,7 +1681,7 @@ function LedgerDetailModal({
                                 loading={downloadingId === previewMedia.id}
                                 onClick={() => void handleDownloadGenerated(previewMedia)}
                             >
-                                下载原文件
+                                {t("common.downloadOriginal")}
                             </Button>
                         ) : null}
                         <Button
@@ -1610,7 +1691,7 @@ function LedgerDetailModal({
                                 setPreviewOriginalUrl("");
                             }}
                         >
-                            关闭
+                            {t("common.close")}
                         </Button>
                     </Space>
                 }
@@ -1626,7 +1707,7 @@ function LedgerDetailModal({
                         <video src={previewOriginalUrl} controls autoPlay className="max-h-[70vh] w-full rounded-lg bg-black" />
                     ) : (
                         <a href={previewOriginalUrl} target="_blank" rel="noreferrer">
-                            打开文件链接
+                            {t("common.openFileLink")}
                         </a>
                     )
                 ) : null}
@@ -1636,6 +1717,8 @@ function LedgerDetailModal({
 }
 
 export function MyWalletPanel({ compact = false, onOpenLogs }: { compact?: boolean; onOpenLogs?: () => void }) {
+    const { t, i18n } = useTranslation();
+    const locale = i18n.resolvedLanguage || undefined;
     const { message } = App.useApp();
     const user = useUserStore((state) => state.user);
     const setUser = useUserStore((state) => state.setUser);
@@ -1676,12 +1759,12 @@ export function MyWalletPanel({ compact = false, onOpenLogs }: { compact?: boole
                 const latestUser = useUserStore.getState().user;
                 if (latestUser) setUser({ ...latestUser, creditBalance: res.balance });
             } catch (error) {
-                message.error(error instanceof Error ? error.message : "加载充值日志失败");
+                message.error(error instanceof Error ? error.message : t("userPanels.wallet.loadFailed"));
             } finally {
                 setLoading(false);
             }
         },
-        [dateRange, message, page, pageSize, reasonFilter, setUser],
+        [dateRange, message, page, pageSize, reasonFilter, setUser, t],
     );
 
     useEffect(() => {
@@ -1691,13 +1774,13 @@ export function MyWalletPanel({ compact = false, onOpenLogs }: { compact?: boole
     const handleRedeem = async () => {
         const code = redeemCode.trim();
         if (!code) {
-            message.warning("请输入积分兑换码");
+            message.warning(t("userPanels.wallet.enterCodeWarning"));
             return;
         }
         setRedeeming(true);
         try {
             const res = await billingApi.redeem(code);
-            message.success(`兑换成功！获得 ${res.creditsAdded} 积分，当前余额 ${res.balance}`);
+            message.success(t("userPanels.wallet.redeemSuccess", { credits: res.creditsAdded, balance: res.balance }));
             setRedeemCode("");
             setBalance(res.balance);
             const latestUser = useUserStore.getState().user;
@@ -1705,7 +1788,7 @@ export function MyWalletPanel({ compact = false, onOpenLogs }: { compact?: boole
             setPage(1);
             void loadLedger(1, reasonFilter, dateRange);
         } catch (error) {
-            message.error(error instanceof Error ? error.message : "兑换失败");
+            message.error(error instanceof Error ? error.message : t("userPanels.wallet.redeemFailed"));
         } finally {
             setRedeeming(false);
         }
@@ -1722,31 +1805,31 @@ export function MyWalletPanel({ compact = false, onOpenLogs }: { compact?: boole
             <Card size={compact ? "small" : "default"}>
                 <div className="flex flex-wrap items-center justify-between gap-4">
                     <div className="flex flex-wrap items-center gap-6">
-                        <Tooltip title={`精确余额：${formatExactCredits(balance)} 积分`}>
+                        <Tooltip title={t("userPanels.overview.exactBalance", { value: formatExactCredits(balance) })}>
                             <div>
-                                <Statistic title="当前可用积分" value={formatCompactCredits(balance)} />
+                                <Statistic title={t("userPanels.wallet.currentCredits")} value={formatCompactCredits(balance)} />
                             </div>
                         </Tooltip>
-                        <Tooltip title={`精确入账：${formatExactCredits(summary.totalRecharged)} 积分`}>
+                        <Tooltip title={t("userPanels.wallet.exactRecharged", { value: formatExactCredits(summary.totalRecharged) })}>
                             <div>
-                                <Statistic title="筛选内入账总额" value={formatCompactCredits(summary.totalRecharged)} />
+                                <Statistic title={t("userPanels.wallet.filteredRecharged")} value={formatCompactCredits(summary.totalRecharged)} />
                             </div>
                         </Tooltip>
                         {onOpenLogs ? (
                             <Button type="link" size="small" onClick={onOpenLogs}>
-                                前往查看使用日志
+                                {t("userPanels.wallet.goUsageLogs")}
                             </Button>
                         ) : null}
                     </div>
                     <Space.Compact style={{ width: compact ? 310 : 360 }}>
                         <Input
                             value={redeemCode}
-                            placeholder="输入积分兑换码，如 IC-XXXX-XXXX-XXXX"
+                            placeholder={t("userPanels.wallet.codePlaceholder")}
                             onChange={(e) => setRedeemCode(e.target.value)}
                             onPressEnter={() => void handleRedeem()}
                         />
                         <Button type="primary" icon={<Gift className="size-4" />} loading={redeeming} onClick={() => void handleRedeem()}>
-                            立即兑换
+                            {t("userPanels.wallet.redeemNow")}
                         </Button>
                     </Space.Compact>
                 </div>
@@ -1754,10 +1837,10 @@ export function MyWalletPanel({ compact = false, onOpenLogs }: { compact?: boole
 
             <Card
                 size={compact ? "small" : "default"}
-                title={`充值与额度变动日志（共 ${summary.recordCount} 条）`}
+                title={t("userPanels.wallet.cardTitle", { count: summary.recordCount })}
                 extra={
                     <Button size="small" icon={<RefreshCw className="size-3.5" />} loading={loading} onClick={() => void loadLedger()}>
-                        刷新
+                        {t("common.refresh")}
                     </Button>
                 }
             >
@@ -1770,10 +1853,10 @@ export function MyWalletPanel({ compact = false, onOpenLogs }: { compact?: boole
                             setReasonFilter(val);
                         }}
                         options={[
-                            { value: "", label: "全部充值类型" },
-                            { value: "redeem_code", label: "兑换码兑换" },
-                            { value: "admin_adjust", label: "后台调整" },
-                            { value: "plan_grant", label: "套餐赠送" },
+                            { value: "", label: t("userPanels.wallet.allTypes") },
+                            { value: "redeem_code", label: t("userPanels.ledgerReasons.redeem_code") },
+                            { value: "admin_adjust", label: t("userPanels.ledgerReasons.admin_adjust") },
+                            { value: "plan_grant", label: t("userPanels.ledgerReasons.plan_grant") },
                         ]}
                     />
                     <DatePicker.RangePicker
@@ -1782,9 +1865,9 @@ export function MyWalletPanel({ compact = false, onOpenLogs }: { compact?: boole
                             setPage(1);
                             setDateRange(dates);
                         }}
-                        placeholder={["开始日期", "结束日期"]}
+                        placeholder={[t("userPanels.wallet.startDate"), t("userPanels.wallet.endDate")]}
                     />
-                    {reasonFilter || dateRange ? <Button onClick={resetFilters}>重置筛选</Button> : null}
+                    {reasonFilter || dateRange ? <Button onClick={resetFilters}>{t("userPanels.wallet.resetFilters")}</Button> : null}
                 </div>
 
                 <Table<CreditLedgerItem>
@@ -1802,7 +1885,7 @@ export function MyWalletPanel({ compact = false, onOpenLogs }: { compact?: boole
                         current: page,
                         pageSize,
                         total,
-                        showTotal: (count) => `共 ${count} 条`,
+                        showTotal: (count) => t("common.totalItems", { count }),
                         showSizeChanger: true,
                         pageSizeOptions: [10, 20, 30, 50, 100],
                         onChange: (p, size) => {
@@ -1816,26 +1899,26 @@ export function MyWalletPanel({ compact = false, onOpenLogs }: { compact?: boole
                     }}
                     columns={[
                         {
-                            title: "时间",
+                            title: t("userPanels.wallet.colTime"),
                             dataIndex: "createdAt",
                             width: 170,
-                            render: (v: string) => new Date(v).toLocaleString("zh-CN"),
+                            render: (v: string) => new Date(v).toLocaleString(locale),
                         },
                         {
-                            title: "类型",
+                            title: t("userPanels.wallet.colType"),
                             dataIndex: "reason",
                             width: 110,
                             render: (reason: string) => {
-                                const info = ledgerReasonMeta[reason];
+                                const info = getLedgerReasonMeta(reason, t);
                                 return <Tag color={info?.color}>{info?.label || reason}</Tag>;
                             },
                         },
                         {
-                            title: "明细 / 备注",
+                            title: t("userPanels.wallet.colDetail"),
                             key: "detail",
                             width: 240,
                             render: (_, record) => {
-                                const text = formatLedgerUsageDetail(record);
+                                const text = formatLedgerUsageDetail(record, t);
                                 return (
                                     <Typography.Text type="secondary" ellipsis={{ tooltip: text }} className="block max-w-[220px]">
                                         {text}
@@ -1844,7 +1927,7 @@ export function MyWalletPanel({ compact = false, onOpenLogs }: { compact?: boole
                             },
                         },
                         {
-                            title: "积分变动",
+                            title: t("userPanels.wallet.colDelta"),
                             dataIndex: "delta",
                             width: 115,
                             render: (delta: number, record: CreditLedgerItem) => {
@@ -1861,8 +1944,8 @@ export function MyWalletPanel({ compact = false, onOpenLogs }: { compact?: boole
                                             : refundedCredits;
                                     const tip =
                                         refundedCredits > 0
-                                            ? `原扣 -${charged} · 已退回 +${refundedCredits} · 实际净扣 0`
-                                            : "请求失败，未扣除积分";
+                                            ? t("userPanels.wallet.failedRefundTip", { charged, refunded: refundedCredits })
+                                            : t("userPanels.wallet.failedNoChargeTip");
                                     return (
                                         <Tooltip title={tip}>
                                             <Tag color="orange">0</Tag>
@@ -1875,7 +1958,13 @@ export function MyWalletPanel({ compact = false, onOpenLogs }: { compact?: boole
                                             ? record.meta.chargedCredits
                                             : Math.round((Math.abs(Math.min(0, delta)) + refundedCredits) * 10000) / 10000;
                                     return (
-                                        <Tooltip title={`原扣 -${charged} · 已退回 +${refundedCredits} · 实际净扣 ${Math.abs(delta)}`}>
+                                        <Tooltip
+                                            title={t("userPanels.wallet.partialRefundTip", {
+                                                charged,
+                                                refunded: refundedCredits,
+                                                net: Math.abs(delta),
+                                            })}
+                                        >
                                             <Tag color={delta === 0 ? "orange" : "volcano"}>{delta === 0 ? "0" : delta}</Tag>
                                         </Tooltip>
                                     );
@@ -1884,12 +1973,12 @@ export function MyWalletPanel({ compact = false, onOpenLogs }: { compact?: boole
                             },
                         },
                         {
-                            title: "结余",
+                            title: t("userPanels.wallet.colBalanceAfter"),
                             dataIndex: "balanceAfter",
                             width: 90,
                         },
                         {
-                            title: "操作",
+                            title: t("userPanels.wallet.colActions"),
                             key: "actions",
                             width: 72,
                             fixed: "right",
@@ -1898,7 +1987,7 @@ export function MyWalletPanel({ compact = false, onOpenLogs }: { compact?: boole
                                     items={[
                                         {
                                             key: "detail",
-                                            label: "详情",
+                                            label: t("common.details"),
                                             onClick: () => setDetailItem(record),
                                         },
                                     ]}
@@ -1915,6 +2004,8 @@ export function MyWalletPanel({ compact = false, onOpenLogs }: { compact?: boole
 }
 
 export function UsageLogsPanel({ defaultScope = "self" }: { defaultScope?: "all" | "self" }) {
+    const { t, i18n } = useTranslation();
+    const locale = i18n.resolvedLanguage || undefined;
     const { message } = App.useApp();
     const { token } = antdTheme.useToken();
     const user = useUserStore((state) => state.user);
@@ -1991,12 +2082,12 @@ export function UsageLogsPanel({ defaultScope = "self" }: { defaultScope?: "all"
                     setSummary(res.summary);
                 }
             } catch (error) {
-                message.error(error instanceof Error ? error.message : "加载使用日志失败");
+                message.error(error instanceof Error ? error.message : t("userPanels.usageLogs.loadFailed"));
             } finally {
                 setLoading(false);
             }
         },
-        [dateRange, isAdmin, logIdFilter, message, modelFilter, page, pageSize, reasonFilter, scope, statusFilter, userQueryFilter],
+        [dateRange, isAdmin, logIdFilter, message, modelFilter, page, pageSize, reasonFilter, scope, statusFilter, t, userQueryFilter],
     );
 
     useEffect(() => {
@@ -2018,7 +2109,7 @@ export function UsageLogsPanel({ defaultScope = "self" }: { defaultScope?: "all"
     return (
         <div className="flex flex-col gap-4">
             <Card
-                title={`使用日志（共 ${summary.recordCount} 条）`}
+                title={t("userPanels.usageLogs.cardTitle", { count: summary.recordCount })}
                 extra={
                     <Space>
                         {isAdmin ? (
@@ -2030,13 +2121,13 @@ export function UsageLogsPanel({ defaultScope = "self" }: { defaultScope?: "all"
                                     setScope(val as "all" | "self");
                                 }}
                                 options={[
-                                    { label: "所有用户", value: "all" },
-                                    { label: "仅看自己", value: "self" },
+                                    { label: t("userPanels.usageLogs.scopeAll"), value: "all" },
+                                    { label: t("userPanels.usageLogs.scopeSelf"), value: "self" },
                                 ]}
                             />
                         ) : null}
                         <Button size="small" icon={<RefreshCw className="size-3.5" />} loading={loading} onClick={() => void loadLogs()}>
-                            刷新
+                            {t("common.refresh")}
                         </Button>
                     </Space>
                 }
@@ -2050,11 +2141,11 @@ export function UsageLogsPanel({ defaultScope = "self" }: { defaultScope?: "all"
                             setReasonFilter(val);
                         }}
                         options={[
-                            { value: "", label: "全部使用类型" },
-                            { value: "text_gen", label: "对话调用" },
-                            { value: "image_gen", label: "图片生成" },
-                            { value: "video_gen", label: "视频生成" },
-                            { value: "audio_gen", label: "语音生成" },
+                            { value: "", label: t("userPanels.usageLogs.allUsageTypes") },
+                            { value: "text_gen", label: t("userPanels.ledgerReasons.text_gen") },
+                            { value: "image_gen", label: t("userPanels.ledgerReasons.image_gen") },
+                            { value: "video_gen", label: t("userPanels.ledgerReasons.video_gen") },
+                            { value: "audio_gen", label: t("userPanels.ledgerReasons.audio_gen") },
                         ]}
                     />
                     <Select
@@ -2065,19 +2156,19 @@ export function UsageLogsPanel({ defaultScope = "self" }: { defaultScope?: "all"
                             setStatusFilter(val);
                         }}
                         options={[
-                            { value: "", label: "全部状态" },
-                            { value: "not_started", label: "未开始" },
-                            { value: "processing", label: "进行中" },
-                            { value: "completed", label: "已完成" },
-                            { value: "failed", label: "已失败" },
-                            { value: "failed_refunded", label: "失败退回" },
+                            { value: "", label: t("userPanels.usageLogs.allStatuses") },
+                            { value: "not_started", label: t("userPanels.taskStatuses.not_started") },
+                            { value: "processing", label: t("userPanels.taskStatuses.processing") },
+                            { value: "completed", label: t("userPanels.taskStatuses.completed") },
+                            { value: "failed", label: t("userPanels.taskStatuses.failed") },
+                            { value: "failed_refunded", label: t("userPanels.taskStatuses.failed_refunded") },
                         ]}
                     />
                     <Input
                         allowClear
                         value={modelFilter}
                         prefix={<Search className="size-3.5 opacity-50" />}
-                        placeholder="按模型名称筛选"
+                        placeholder={t("userPanels.usageLogs.filterModel")}
                         style={{ width: 180 }}
                         onChange={(e) => {
                             setPage(1);
@@ -2089,7 +2180,7 @@ export function UsageLogsPanel({ defaultScope = "self" }: { defaultScope?: "all"
                             allowClear
                             value={userQueryFilter}
                             prefix={<User className="size-3.5 opacity-50" />}
-                            placeholder="按用户名 / 昵称搜索"
+                            placeholder={t("userPanels.usageLogs.searchUser")}
                             style={{ width: 180 }}
                             onChange={(e) => {
                                 setPage(1);
@@ -2101,7 +2192,7 @@ export function UsageLogsPanel({ defaultScope = "self" }: { defaultScope?: "all"
                         allowClear
                         value={logIdFilter}
                         prefix={<Search className="size-3.5 opacity-50" />}
-                        placeholder="按日志 ID 查询"
+                        placeholder={t("userPanels.usageLogs.searchLogId")}
                         style={{ width: 190 }}
                         onChange={(e) => {
                             setPage(1);
@@ -2114,10 +2205,10 @@ export function UsageLogsPanel({ defaultScope = "self" }: { defaultScope?: "all"
                             setPage(1);
                             setDateRange(dates);
                         }}
-                        placeholder={["开始日期", "结束日期"]}
+                        placeholder={[t("userPanels.wallet.startDate"), t("userPanels.wallet.endDate")]}
                     />
                     {reasonFilter || statusFilter || modelFilter || userQueryFilter || logIdFilter || dateRange ? (
-                        <Button onClick={resetFilters}>重置筛选</Button>
+                        <Button onClick={resetFilters}>{t("userPanels.wallet.resetFilters")}</Button>
                     ) : null}
                 </div>
 
@@ -2130,51 +2221,59 @@ export function UsageLogsPanel({ defaultScope = "self" }: { defaultScope?: "all"
                 >
                     <div>
                         <Typography.Text type="secondary" className="text-xs">
-                            调用次数
+                            {t("userPanels.usageLogs.callCount")}
                         </Typography.Text>
-                        <div className="mt-0.5 text-base font-semibold">{summary.consumeCalls} 次</div>
+                        <div className="mt-0.5 text-base font-semibold">
+                            {t("userPanels.usageLogs.callCountValue", { count: summary.consumeCalls })}
+                        </div>
                     </div>
                     <div>
                         <Typography.Text type="secondary" className="text-xs">
-                            消耗积分
+                            {t("userPanels.usageLogs.consumedCredits")}
                         </Typography.Text>
                         <div className="mt-0.5 text-base font-semibold">
                             {summary.totalConsumed}
                             {summary.totalRecharged > 0 ? (
                                 <Typography.Text type="secondary" className="ml-1.5 text-xs font-normal">
-                                    (退回 +{summary.totalRecharged})
+                                    {t("userPanels.usageLogs.refundedTag", { amount: summary.totalRecharged })}
                                 </Typography.Text>
                             ) : null}
                         </div>
                     </div>
                     <div>
                         <Tooltip
-                            title={`输入 ${summary.totalInputTokens.toLocaleString()} · 缓存 ${summary.totalCachedTokens.toLocaleString()} · 输出 ${summary.totalOutputTokens.toLocaleString()} Tokens；图片 ${summary.totalImages} 张；音视频 ${summary.totalMediaSeconds} 秒`}
+                            title={t("userPanels.usageLogs.usageStatsTooltip", {
+                                input: summary.totalInputTokens.toLocaleString(locale),
+                                cached: summary.totalCachedTokens.toLocaleString(locale),
+                                output: summary.totalOutputTokens.toLocaleString(locale),
+                                images: summary.totalImages,
+                                seconds: summary.totalMediaSeconds,
+                            })}
                         >
                             <div className="cursor-help">
                                 <Typography.Text type="secondary" className="text-xs">
-                                    消耗量统计
+                                    {t("userPanels.usageLogs.usageStatsTitle")}
                                 </Typography.Text>
                                 <div className="mt-0.5 flex flex-wrap items-center gap-x-1.5 text-xs font-medium leading-6">
-                                    <span>{summary.totalImages} 张图</span>
+                                    <span>{t("userPanels.usageLogs.imagesUnit", { count: summary.totalImages })}</span>
                                     <span>·</span>
-                                    <span>{summary.totalMediaSeconds} 秒</span>
+                                    <span>{t("userPanels.usageLogs.secondsUnit", { count: summary.totalMediaSeconds })}</span>
                                     <span>·</span>
-                                    <span>{summary.totalTokens.toLocaleString()} Tokens</span>
+                                    <span>{summary.totalTokens.toLocaleString(locale)} Tokens</span>
                                 </div>
                             </div>
                         </Tooltip>
                     </div>
                     <div>
-                        <Tooltip title="统计周期内平均每分钟请求数（无日期筛选时按首尾调用跨度计算，至少按 1 分钟计），另附单分钟峰值与近 1 分钟实时 RPM">
+                        <Tooltip title={t("userPanels.usageLogs.rpmTooltip")}>
                             <div className="cursor-help">
                                 <Typography.Text type="secondary" className="text-xs">
-                                    RPM（每分钟请求）
+                                    {t("userPanels.usageLogs.rpmTitle")}
                                 </Typography.Text>
                                 <div className="mt-0.5 flex flex-wrap items-baseline gap-1.5">
                                     <span className="text-base font-semibold">{summary.avgRpm}</span>
                                     <Typography.Text type="secondary" className="text-xs">
-                                        峰值 {summary.peakRpm} · 近1分 {summary.recentRpm}
+                                        {t("userPanels.usageLogs.rpmSub", { peak: summary.peakRpm, recent: summary.recentRpm })}
                                     </Typography.Text>
                                 </div>
                             </div>
@@ -2197,7 +2296,7 @@ export function UsageLogsPanel({ defaultScope = "self" }: { defaultScope?: "all"
                         current: page,
                         pageSize,
                         total,
-                        showTotal: (count) => `共 ${count} 条`,
+                        showTotal: (count) => t("common.totalItems", { count }),
                         showSizeChanger: true,
                         pageSizeOptions: [10, 20, 30, 50, 100],
                         onChange: (p, size) => {
@@ -2213,7 +2312,7 @@ export function UsageLogsPanel({ defaultScope = "self" }: { defaultScope?: "all"
                         ...(showUserColumn
                             ? [
                                   {
-                                      title: "用户",
+                                      title: t("userPanels.usageLogs.colUser"),
                                       key: "user",
                                       width: 140,
                                       render: (_: unknown, record: CreditLedgerItem) => (
@@ -2230,26 +2329,26 @@ export function UsageLogsPanel({ defaultScope = "self" }: { defaultScope?: "all"
                               ]
                             : []),
                         {
-                            title: "时间",
+                            title: t("userPanels.wallet.colTime"),
                             dataIndex: "createdAt",
                             width: 170,
-                            render: (v: string) => new Date(v).toLocaleString("zh-CN"),
+                            render: (v: string) => new Date(v).toLocaleString(locale),
                         },
                         {
-                            title: "类型",
+                            title: t("userPanels.wallet.colType"),
                             dataIndex: "reason",
                             width: 100,
                             render: (reason: string) => {
-                                const info = ledgerReasonMeta[reason];
+                                const info = getLedgerReasonMeta(reason, t);
                                 return <Tag color={info?.color}>{info?.label || reason}</Tag>;
                             },
                         },
                         {
-                            title: "状态",
+                            title: t("userPanels.myMedia.colStatus"),
                             key: "taskStatus",
                             width: 85,
                             render: (_, record) => {
-                                const st = getLedgerTaskStatus(record);
+                                const st = getLedgerTaskStatus(record, t);
                                 const err = typeof record.meta?.errorMessage === "string" ? record.meta.errorMessage.trim() : "";
                                 return err ? (
                                     <Tooltip title={err}>
@@ -2261,7 +2360,7 @@ export function UsageLogsPanel({ defaultScope = "self" }: { defaultScope?: "all"
                             },
                         },
                         {
-                            title: "模型",
+                            title: t("userPanels.usageLogs.colModel"),
                             key: "model",
                             width: 160,
                             render: (_, record) =>
@@ -2272,35 +2371,52 @@ export function UsageLogsPanel({ defaultScope = "self" }: { defaultScope?: "all"
                                 ),
                         },
                         {
-                            title: "流",
+                            title: t("userPanels.usageLogs.colStream"),
                             key: "stream",
                             width: 72,
                             render: (_, record) => {
-                                const { isStream } = getLedgerTimingStats(record.meta);
+                                const { isStream } = getLedgerTimingStats(record.meta, t);
                                 if (typeof isStream !== "boolean") return <Typography.Text type="secondary">—</Typography.Text>;
-                                return <Tag color={isStream ? "cyan" : undefined}>{isStream ? "流" : "非流"}</Tag>;
+                                return (
+                                    <Tag color={isStream ? "cyan" : undefined}>
+                                        {isStream ? t("userPanels.ledgerDetail.stream") : t("userPanels.ledgerDetail.nonStream")}
+                                    </Tag>
+                                );
                             },
                         },
                         {
-                            title: "耗时 / 速度",
+                            title: t("userPanels.usageLogs.colTiming"),
                             key: "timing",
                             width: 170,
                             render: (_, record) => {
-                                const { isStream, durationText, firstTokenMs, upstreamMs, stageText, clientAborted, tokPerSec } = getLedgerTimingStats(record.meta);
+                                const { isStream, durationText, firstTokenMs, upstreamMs, stageText, clientAborted, tokPerSec } = getLedgerTimingStats(
+                                    record.meta,
+                                    t,
+                                );
                                 if (!durationText && !tokPerSec) return <Typography.Text type="secondary">—</Typography.Text>;
                                 const tooltipTitle =
                                     isStream && firstTokenMs !== undefined
-                                        ? `首字耗时 ${formatDurationSec(firstTokenMs)} / 总耗时 ${formatDurationSec(Number(record.meta?.durationMs ?? 0))}`
+                                        ? t("userPanels.usageLogs.streamTooltip", {
+                                              first: formatDurationSec(firstTokenMs),
+                                              total: formatDurationSec(Number(record.meta?.durationMs ?? 0)),
+                                          })
                                         : stageText
-                                          ? `总耗时 ${durationText}（${stageText}${clientAborted ? " · 前端提前断开" : ""}）`
-                                          : `总耗时 ${durationText}${clientAborted ? "（前端提前断开）" : ""}`;
+                                          ? t("userPanels.usageLogs.stageTooltip", {
+                                                total: durationText,
+                                                stage: stageText,
+                                                aborted: clientAborted ? t("userPanels.usageLogs.abortedInline") : "",
+                                            })
+                                          : t("userPanels.usageLogs.plainTooltip", {
+                                                total: durationText,
+                                                aborted: clientAborted ? t("userPanels.usageLogs.abortedParen") : "",
+                                            });
                                 return (
                                     <div className="flex flex-col leading-tight">
                                         {durationText ? (
                                             <Tooltip title={tooltipTitle}>
                                                 <span className="font-mono text-xs">
                                                     {durationText}
-                                                    {clientAborted ? " · 断连" : ""}
+                                                    {clientAborted ? t("userPanels.usageLogs.disconnectedShort") : ""}
                                                 </span>
                                             </Tooltip>
                                         ) : null}
@@ -2310,7 +2426,7 @@ export function UsageLogsPanel({ defaultScope = "self" }: { defaultScope?: "all"
                                             </Typography.Text>
                                         ) : upstreamMs !== undefined ? (
                                             <Typography.Text type="secondary" className="font-mono text-[11px]">
-                                                上游 {formatDurationSec(upstreamMs)}
+                                                {t("userPanels.usageLogs.upstreamShort", { duration: formatDurationSec(upstreamMs) })}
                                             </Typography.Text>
                                         ) : null}
                                     </div>
@@ -2318,11 +2434,11 @@ export function UsageLogsPanel({ defaultScope = "self" }: { defaultScope?: "all"
                             },
                         },
                         {
-                            title: "用量与详情",
+                            title: t("userPanels.usageLogs.colDetail"),
                             key: "detail",
                             width: 240,
                             render: (_, record) => {
-                                const text = formatLedgerUsageDetail(record);
+                                const text = formatLedgerUsageDetail(record, t);
                                 return (
                                     <Typography.Text type="secondary" ellipsis={{ tooltip: text }} className="block max-w-[220px]">
                                         {text}
@@ -2331,7 +2447,7 @@ export function UsageLogsPanel({ defaultScope = "self" }: { defaultScope?: "all"
                             },
                         },
                         {
-                            title: "积分变动",
+                            title: t("userPanels.wallet.colDelta"),
                             dataIndex: "delta",
                             width: 115,
                             render: (delta: number, record: CreditLedgerItem) => {
@@ -2348,8 +2464,8 @@ export function UsageLogsPanel({ defaultScope = "self" }: { defaultScope?: "all"
                                             : refundedCredits;
                                     const tip =
                                         refundedCredits > 0
-                                            ? `原扣 -${charged} · 已退回 +${refundedCredits} · 实际净扣 0`
-                                            : "请求失败，未扣除积分";
+                                            ? t("userPanels.wallet.failedRefundTip", { charged, refunded: refundedCredits })
+                                            : t("userPanels.wallet.failedNoChargeTip");
                                     return (
                                         <Tooltip title={tip}>
                                             <Tag color="orange">0</Tag>
@@ -2362,7 +2478,13 @@ export function UsageLogsPanel({ defaultScope = "self" }: { defaultScope?: "all"
                                             ? record.meta.chargedCredits
                                             : Math.round((Math.abs(Math.min(0, delta)) + refundedCredits) * 10000) / 10000;
                                     return (
-                                        <Tooltip title={`原扣 -${charged} · 已退回 +${refundedCredits} · 实际净扣 ${Math.abs(delta)}`}>
+                                        <Tooltip
+                                            title={t("userPanels.wallet.partialRefundTip", {
+                                                charged,
+                                                refunded: refundedCredits,
+                                                net: Math.abs(delta),
+                                            })}
+                                        >
                                             <Tag color={delta === 0 ? "orange" : "volcano"}>{delta === 0 ? "0" : delta}</Tag>
                                         </Tooltip>
                                     );
@@ -2371,12 +2493,12 @@ export function UsageLogsPanel({ defaultScope = "self" }: { defaultScope?: "all"
                             },
                         },
                         {
-                            title: "结余",
+                            title: t("userPanels.wallet.colBalanceAfter"),
                             dataIndex: "balanceAfter",
                             width: 90,
                         },
                         {
-                            title: "操作",
+                            title: t("userPanels.wallet.colActions"),
                             key: "actions",
                             width: 72,
                             fixed: "right",
@@ -2385,7 +2507,7 @@ export function UsageLogsPanel({ defaultScope = "self" }: { defaultScope?: "all"
                                     items={[
                                         {
                                             key: "detail",
-                                            label: "详情",
+                                            label: t("common.details"),
                                             onClick: () => setDetailItem(record),
                                         },
                                     ]}
@@ -2402,6 +2524,8 @@ export function UsageLogsPanel({ defaultScope = "self" }: { defaultScope?: "all"
 }
 
 export function MyMediaPanel() {
+    const { t, i18n } = useTranslation();
+    const locale = i18n.resolvedLanguage || undefined;
     const { message } = App.useApp();
     const navigate = useNavigate();
     const user = useUserStore((state) => state.user);
@@ -2456,11 +2580,11 @@ export function MyMediaPanel() {
             setStorageGrants(profileRes.storageQuotaDetail?.grants ?? []);
             setUser(profileRes.user);
         } catch (error) {
-            message.error(error instanceof Error ? error.message : "加载媒体列表失败");
+            message.error(error instanceof Error ? error.message : t("userPanels.myMedia.loadFailed"));
         } finally {
             setLoading(false);
         }
-    }, [kind, message, moduleFilter, page, pageSize, q, setUser]);
+    }, [kind, message, moduleFilter, page, pageSize, q, setUser, t]);
 
     const loadWorkspaceTab = useCallback(
         async (tab: "canvas" | "image_workbench" | "video_workbench") => {
@@ -2477,12 +2601,12 @@ export function MyMediaPanel() {
                     setCloudVideoLogs(res.logs as Array<{ id: string; title?: string; prompt?: string; model?: string; status?: string; mediaCount?: number; mediaBytes?: number; dataBytes?: number; createdAt?: number }>);
                 }
             } catch (error) {
-                message.error(error instanceof Error ? error.message : "加载云端数据失败");
+                message.error(error instanceof Error ? error.message : t("userPanels.myMedia.loadCloudFailed"));
             } finally {
                 setWorkspaceLoading(false);
             }
         },
-        [message],
+        [message, t],
     );
 
     useEffect(() => {
@@ -2514,24 +2638,24 @@ export function MyMediaPanel() {
         try {
             await storageApi.remove(mediaId);
             notifyCloudWorkspaceChanged("media", { sync: false });
-            message.success("已从云端删除并释放存储空间");
+            message.success(t("userPanels.myMedia.deletedMedia"));
             if (items.length <= 1 && page > 1) {
                 setPage((prev) => Math.max(1, prev - 1));
             } else {
                 void loadData();
             }
         } catch (error) {
-            message.error(error instanceof Error ? error.message : "删除失败");
+            message.error(error instanceof Error ? error.message : t("common.deleteFailed"));
         }
     };
 
     const handleDeleteCloudCanvas = async (projectId: string) => {
         try {
             await deleteCanvasProjectsWithCloud([projectId]);
-            message.success("已删除画布及孤立云端媒体");
+            message.success(t("userPanels.myMedia.deletedCanvas"));
             await Promise.all([loadData(), loadWorkspaceTab("canvas")]);
         } catch (error) {
-            message.error(error instanceof Error ? error.message : "删除画布失败");
+            message.error(error instanceof Error ? error.message : t("userPanels.myMedia.deleteCanvasFailed"));
         }
     };
 
@@ -2544,10 +2668,10 @@ export function MyMediaPanel() {
                 () => cleanupImages(),
                 kindType,
             );
-            message.success("已删除记录及孤立云端媒体");
+            message.success(t("userPanels.myMedia.deletedRecord"));
             await Promise.all([loadData(), loadWorkspaceTab(kindType === "video" ? "video_workbench" : "image_workbench")]);
         } catch (error) {
-            message.error(error instanceof Error ? error.message : "删除记录失败");
+            message.error(error instanceof Error ? error.message : t("userPanels.myMedia.deleteRecordFailed"));
         }
     };
 
@@ -2556,7 +2680,7 @@ export function MyMediaPanel() {
         try {
             await storageApi.downloadFile(record);
         } catch (error) {
-            message.error(error instanceof Error ? error.message : "下载失败");
+            message.error(error instanceof Error ? error.message : t("userPanels.ledgerDetail.downloadFailed"));
         } finally {
             setDownloadingId(null);
         }
@@ -2577,7 +2701,7 @@ export function MyMediaPanel() {
         try {
             const url = record.url || (await storageApi.getUrl(record.id)).url;
             if (!url) {
-                message.error("文件链接暂不可用");
+                message.error(t("userPanels.ledgerDetail.fileUrlUnavailable"));
                 return;
             }
             setPreviewOriginalUrl(url);
@@ -2606,21 +2730,27 @@ export function MyMediaPanel() {
                 })();
             }
         } catch (error) {
-            message.error(error instanceof Error ? error.message : "加载原文件失败");
+            message.error(error instanceof Error ? error.message : t("userPanels.ledgerDetail.loadOriginalFailed"));
         }
     };
 
     const handleRedeemStorage = async () => {
         const code = storageRedeemCode.trim();
         if (!code) {
-            message.warning("请输入云端存储兑换码");
+            message.warning(t("userPanels.myMedia.enterCodeWarning"));
             return;
         }
         setRedeemingStorage(true);
         try {
             const res = await storageApi.redeem(code);
             message.success(
-                `兑换成功！新增 ${formatBytes(res.storageBytesAdded)}（${res.storageDurationDays ? `有效期 ${res.storageDurationDays} 天` : "永久有效"}），当前总配额 ${formatBytes(res.storageQuotaBytes)}`,
+                t("userPanels.myMedia.redeemSuccess", {
+                    added: formatBytes(res.storageBytesAdded),
+                    duration: res.storageDurationDays
+                        ? t("userPanels.myMedia.durationDays", { days: res.storageDurationDays })
+                        : t("userPanels.myMedia.durationPermanent"),
+                    quota: formatBytes(res.storageQuotaBytes),
+                }),
             );
             setStorageRedeemCode("");
             setQuotaBytes(res.storageQuotaBytes);
@@ -2637,7 +2767,7 @@ export function MyMediaPanel() {
                 });
             }
         } catch (error) {
-            message.error(error instanceof Error ? error.message : "兑换失败");
+            message.error(error instanceof Error ? error.message : t("userPanels.wallet.redeemFailed"));
         } finally {
             setRedeemingStorage(false);
         }
@@ -2651,14 +2781,20 @@ export function MyMediaPanel() {
     return (
         <div className="flex flex-col gap-5">
             <Card
-                title={`我的云端存储配额（已用 ${formatBytes(usedBytes)} / 总配额 ${formatBytes(quotaBytes)}${quotaExpiresAt ? ` · 有效期至 ${new Date(quotaExpiresAt).toLocaleString("zh-CN")}` : " · 不限期"}）`}
+                title={t("userPanels.myMedia.cardTitle", {
+                    used: formatBytes(usedBytes),
+                    quota: formatBytes(quotaBytes),
+                    expiry: quotaExpiresAt
+                        ? t("userPanels.profile.expiryUntil", { time: new Date(quotaExpiresAt).toLocaleString(locale) })
+                        : t("userPanels.profile.expiryNone"),
+                })}
                 extra={
                     quotaExpired ? (
-                        <Tag color="red">配额已过期，请兑换扩容或联系管理员续期</Tag>
+                        <Tag color="red">{t("userPanels.myMedia.quotaExpiredTag")}</Tag>
                     ) : quotaExceeded ? (
-                        <Tag color="red">配额不足，请删除闲置媒体或兑换扩容</Tag>
+                        <Tag color="red">{t("userPanels.myMedia.quotaFullTag")}</Tag>
                     ) : (
-                        <Tag color="green">剩余可用 {formatBytes(Math.max(0, quotaBytes - usedBytes))}</Tag>
+                        <Tag color="green">{t("userPanels.myMedia.remainingQuotaTag", { remaining: formatBytes(Math.max(0, quotaBytes - usedBytes)) })}</Tag>
                     )
                 }
             >
@@ -2670,27 +2806,27 @@ export function MyMediaPanel() {
                         <Space.Compact style={{ width: 340 }}>
                             <Input
                                 value={storageRedeemCode}
-                                placeholder="输入云端存储兑换码，如 ST-XXXX-XXXX-XXXX"
+                                placeholder={t("userPanels.myMedia.codePlaceholder")}
                                 onChange={(e) => setStorageRedeemCode(e.target.value)}
                                 onPressEnter={() => void handleRedeemStorage()}
                             />
                             <Button type="primary" icon={<Gift className="size-4" />} loading={redeemingStorage} onClick={() => void handleRedeemStorage()}>
-                                兑换扩容
+                                {t("userPanels.myMedia.redeemExpand")}
                             </Button>
                         </Space.Compact>
                     </div>
 
                     {baseQuotaBytes > 0 || storageGrants.length > 0 ? (
                         <div className="flex flex-wrap items-center gap-2 pt-1 text-xs">
-                            <Typography.Text type="secondary">配额明细（资源包各自独立计算到期时间，到期后自动回落）：</Typography.Text>
+                            <Typography.Text type="secondary">{t("userPanels.myMedia.quotaBreakdownLabel")}</Typography.Text>
                             {baseQuotaBytes > 0 ? (
                                 <Tag color={baseQuotaExpired ? "default" : "blue"} style={{ marginInlineEnd: 0 }}>
-                                    基础配额 {formatBytes(baseQuotaBytes)} ·{" "}
+                                    {t("userPanels.myMedia.baseQuotaTag", { size: formatBytes(baseQuotaBytes) })} ·{" "}
                                     {baseQuotaExpiresAt
                                         ? baseQuotaExpired
-                                            ? "已过期"
-                                            : `至 ${new Date(baseQuotaExpiresAt).toLocaleDateString("zh-CN")}`
-                                        : "永久"}
+                                            ? t("userPanels.myMedia.quotaExpiredShort")
+                                            : t("userPanels.myMedia.untilDate", { date: new Date(baseQuotaExpiresAt).toLocaleDateString(locale) })
+                                        : t("userPanels.myMedia.permanentShort")}
                                 </Tag>
                             ) : null}
                             {storageGrants.map((grant) => (
@@ -2703,12 +2839,12 @@ export function MyMediaPanel() {
                                     {grant.refId ? ` (${grant.refId})` : ""}
                                     {" · "}
                                     {grant.status === "revoked"
-                                        ? "已停用"
+                                        ? t("userPanels.myMedia.revokedShort")
                                         : grant.expiresAt
                                           ? grant.isExpired
-                                              ? "已过期"
-                                              : `至 ${new Date(grant.expiresAt).toLocaleDateString("zh-CN")}`
-                                          : "永久"}
+                                              ? t("userPanels.myMedia.quotaExpiredShort")
+                                              : t("userPanels.myMedia.untilDate", { date: new Date(grant.expiresAt).toLocaleDateString(locale) })
+                                          : t("userPanels.myMedia.permanentShort")}
                                 </Tag>
                             ))}
                         </div>
@@ -2723,7 +2859,7 @@ export function MyMediaPanel() {
                     items={[
                         {
                             key: "media",
-                            label: `云端媒体文件 (${total})`,
+                            label: t("userPanels.myMedia.tabMedia", { count: total }),
                             children: (
                                 <>
                                     <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
@@ -2735,7 +2871,7 @@ export function MyMediaPanel() {
                                                     setPage(1);
                                                     setModuleFilter(val);
                                                 }}
-                                                options={MEDIA_MODULE_OPTIONS}
+                                                options={getMediaModuleOptions(t)}
                                             />
                                             <Select
                                                 value={kind}
@@ -2745,16 +2881,16 @@ export function MyMediaPanel() {
                                                     setKind(val);
                                                 }}
                                                 options={[
-                                                    { value: "", label: "全部类型" },
-                                                    { value: "image", label: "图片" },
-                                                    { value: "video", label: "视频" },
-                                                    { value: "audio", label: "音频" },
-                                                    { value: "file", label: "其他文件" },
+                                                    { value: "", label: t("userPanels.myMedia.allKinds") },
+                                                    { value: "image", label: t("userPanels.mediaKinds.image") },
+                                                    { value: "video", label: t("userPanels.mediaKinds.video") },
+                                                    { value: "audio", label: t("userPanels.mediaKinds.audio") },
+                                                    { value: "file", label: t("userPanels.mediaKinds.file") },
                                                 ]}
                                             />
                                             <Input.Search
                                                 allowClear
-                                                placeholder="搜索文件路径"
+                                                placeholder={t("userPanels.myMedia.searchPath")}
                                                 style={{ width: 200 }}
                                                 onSearch={(val) => {
                                                     setPage(1);
@@ -2770,11 +2906,11 @@ export function MyMediaPanel() {
                                                     loading={batchDownloading}
                                                     onClick={() => void handleBatchDownloadMedia()}
                                                 >
-                                                    打包下载 ({selectedMediaIds.length})
+                                                    {t("common.batchDownloadCount", { count: selectedMediaIds.length })}
                                                 </Button>
                                             ) : null}
                                             <Button icon={<RefreshCw className="size-4" />} loading={loading} onClick={() => void loadData()}>
-                                                刷新
+                                                {t("common.refresh")}
                                             </Button>
                                         </Space>
                                     </div>
@@ -2794,7 +2930,7 @@ export function MyMediaPanel() {
                                             total,
                                             showSizeChanger: true,
                                             pageSizeOptions: [10, 20, 30, 50, 100],
-                                            showTotal: (count) => `共 ${count} 条`,
+                                            showTotal: (count) => t("common.totalItems", { count }),
                                             onChange: (p, size) => {
                                                 if (size !== pageSize) {
                                                     setPageSize(size);
@@ -2806,7 +2942,7 @@ export function MyMediaPanel() {
                                         }}
                                         columns={[
                                             {
-                                                title: "预览 / 对象路径",
+                                                title: t("userPanels.myMedia.colPreviewPath"),
                                                 key: "preview",
                                                 width: 300,
                                                 render: (_, record) => {
@@ -2831,16 +2967,21 @@ export function MyMediaPanel() {
                                                 },
                                             },
                                             {
-                                                title: "所属模块",
+                                                title: t("userPanels.myMedia.colModule"),
                                                 key: "modules",
                                                 width: 170,
                                                 render: (_, record) => <MediaModuleTags modules={record.modules} />,
                                             },
-                                            { title: "类型", dataIndex: "kind", width: 85, render: (v: string) => <Tag>{kindLabels[v] || v}</Tag> },
-                                            { title: "大小", dataIndex: "bytes", width: 100, render: (bytes: number) => formatBytes(bytes) },
-                                            { title: "上传时间", dataIndex: "createdAt", width: 170, render: (v: string) => new Date(v).toLocaleString("zh-CN") },
                                             {
-                                                title: "操作",
+                                                title: t("userPanels.myMedia.colKind"),
+                                                dataIndex: "kind",
+                                                width: 85,
+                                                render: (v: string) => <Tag>{getKindLabel(v, t)}</Tag>,
+                                            },
+                                            { title: t("userPanels.myMedia.colSize"), dataIndex: "bytes", width: 100, render: (bytes: number) => formatBytes(bytes) },
+                                            { title: t("userPanels.myMedia.colUploadedAt"), dataIndex: "createdAt", width: 170, render: (v: string) => new Date(v).toLocaleString(locale) },
+                                            {
+                                                title: t("userPanels.wallet.colActions"),
                                                 key: "actions",
                                                 fixed: "right",
                                                 width: 100,
@@ -2849,14 +2990,14 @@ export function MyMediaPanel() {
                                                         items={[
                                                             {
                                                                 key: "view",
-                                                                label: "查看",
+                                                                label: t("common.view"),
                                                                 onClick: () => void handleViewMedia(record),
                                                             },
                                                             {
                                                                 key: "delete",
-                                                                label: "删除",
+                                                                label: t("common.delete"),
                                                                 danger: true,
-                                                                confirm: "确定从云端删除该文件并释放个人空间吗？",
+                                                                confirm: t("userPanels.myMedia.confirmDeleteMedia"),
                                                                 onClick: () => void handleDelete(record.id),
                                                             },
                                                         ]}
@@ -2870,7 +3011,7 @@ export function MyMediaPanel() {
                         },
                         {
                             key: "canvas",
-                            label: `无限画布 (${workspaceStats.canvasProjects})`,
+                            label: t("userPanels.myMedia.tabCanvas", { count: workspaceStats.canvasProjects }),
                             children: (
                                 <Table
                                     rowKey="id"
@@ -2878,27 +3019,27 @@ export function MyMediaPanel() {
                                     scroll={ADMIN_TABLE_SCROLL}
                                     loading={workspaceLoading}
                                     dataSource={cloudProjects}
-                                    pagination={{ defaultPageSize: 20, showSizeChanger: true, pageSizeOptions: [10, 20, 30, 50, 100], showTotal: (count) => `共 ${count} 条` }}
+                                    pagination={{ defaultPageSize: 20, showSizeChanger: true, pageSizeOptions: [10, 20, 30, 50, 100], showTotal: (count) => t("common.totalItems", { count }) }}
                                     columns={[
-                                        { title: "画布名称", dataIndex: "title", width: 240, ellipsis: true },
-                                        { title: "节点数", key: "nodes", width: 85, render: (_, rec) => (Array.isArray(rec.nodes) ? rec.nodes.length : 0) },
-                                        { title: "关联媒体", dataIndex: "mediaCount", width: 95, render: (v?: number) => `${v ?? 0} 个` },
-                                        { title: "数据大小", key: "size", width: 150, render: (_, rec) => <WorkspaceSizeCell mediaBytes={rec.mediaBytes} dataBytes={rec.dataBytes} /> },
-                                        { title: "最近同步", dataIndex: "updatedAt", width: 170, render: (v: string) => new Date(v).toLocaleString("zh-CN") },
+                                        { title: t("userPanels.myMedia.colCanvasTitle"), dataIndex: "title", width: 240, ellipsis: true },
+                                        { title: t("userPanels.myMedia.colNodes"), key: "nodes", width: 85, render: (_, rec) => (Array.isArray(rec.nodes) ? rec.nodes.length : 0) },
+                                        { title: t("userPanels.myMedia.colMediaCount"), dataIndex: "mediaCount", width: 95, render: (v?: number) => t("userPanels.myMedia.mediaCountVal", { count: v ?? 0 }) },
+                                        { title: t("userPanels.myMedia.colDataSize"), key: "size", width: 150, render: (_, rec) => <WorkspaceSizeCell mediaBytes={rec.mediaBytes} dataBytes={rec.dataBytes} /> },
+                                        { title: t("userPanels.myMedia.colLastSync"), dataIndex: "updatedAt", width: 170, render: (v: string) => new Date(v).toLocaleString(locale) },
                                         {
-                                            title: "操作",
+                                            title: t("userPanels.wallet.colActions"),
                                             key: "actions",
                                             fixed: "right",
                                             width: 110,
                                             render: (_, rec) => (
                                                 <TableRowActions
                                                     items={[
-                                                        { key: "open", label: "打开", onClick: () => navigate(`/canvas/${rec.id}`) },
+                                                        { key: "open", label: t("userPanels.myMedia.actionOpen"), onClick: () => navigate(`/canvas/${rec.id}`) },
                                                         {
                                                             key: "delete",
-                                                            label: "删除",
+                                                            label: t("common.delete"),
                                                             danger: true,
-                                                            confirm: "删除画布后，仅被该画布引用的云端媒体也会一并删除，确定吗？",
+                                                            confirm: t("userPanels.myMedia.confirmDeleteCanvas"),
                                                             onClick: () => void handleDeleteCloudCanvas(rec.id),
                                                         },
                                                     ]}
@@ -2911,8 +3052,8 @@ export function MyMediaPanel() {
                         },
                         ...(
                             [
-                                { key: "image_workbench", label: `生图工作台 (${workspaceStats.imageLogs})`, kindType: "image", data: cloudImageLogs },
-                                { key: "video_workbench", label: `视频创作台 (${workspaceStats.videoLogs})`, kindType: "video", data: cloudVideoLogs },
+                                { key: "image_workbench", label: t("userPanels.myMedia.tabImageWorkbench", { count: workspaceStats.imageLogs }), kindType: "image", data: cloudImageLogs },
+                                { key: "video_workbench", label: t("userPanels.myMedia.tabVideoWorkbench", { count: workspaceStats.videoLogs }), kindType: "video", data: cloudVideoLogs },
                             ] as const
                         ).map((tabCfg) => ({
                             key: tabCfg.key,
@@ -2924,30 +3065,38 @@ export function MyMediaPanel() {
                                     scroll={ADMIN_TABLE_SCROLL}
                                     loading={workspaceLoading}
                                     dataSource={tabCfg.data}
-                                    pagination={{ defaultPageSize: 20, showSizeChanger: true, pageSizeOptions: [10, 20, 30, 50, 100], showTotal: (count) => `共 ${count} 条` }}
+                                    pagination={{ defaultPageSize: 20, showSizeChanger: true, pageSizeOptions: [10, 20, 30, 50, 100], showTotal: (count) => t("common.totalItems", { count }) }}
                                     columns={[
                                         {
-                                            title: "标题 / 提示词",
+                                            title: t("userPanels.myMedia.colPromptTitle"),
                                             key: "prompt",
                                             width: 300,
                                             render: (_, rec) => (
                                                 <div className="max-w-[280px] truncate" title={rec.prompt || rec.title}>
-                                                    {rec.prompt || rec.title || "未命名记录"}
+                                                    {rec.prompt || rec.title || t("userPanels.myMedia.untitledRecord")}
                                                 </div>
                                             ),
                                         },
-                                        { title: "模型", dataIndex: "model", width: 180, ellipsis: true },
+                                        { title: t("userPanels.usageLogs.colModel"), dataIndex: "model", width: 180, ellipsis: true },
                                         {
-                                            title: "状态",
+                                            title: t("userPanels.myMedia.colStatus"),
                                             dataIndex: "status",
                                             width: 85,
-                                            render: (st: string) => <Tag color={st === "success" ? "green" : st === "failed" ? "red" : "processing"}>{st === "success" ? "成功" : st === "failed" ? "失败" : "进行中"}</Tag>,
+                                            render: (st: string) => (
+                                                <Tag color={st === "success" ? "green" : st === "failed" ? "red" : "processing"}>
+                                                    {st === "success"
+                                                        ? t("userPanels.myMedia.statusSuccess")
+                                                        : st === "failed"
+                                                          ? t("userPanels.myMedia.statusFailed")
+                                                          : t("userPanels.myMedia.statusProcessing")}
+                                                </Tag>
+                                            ),
                                         },
-                                        { title: "关联媒体", dataIndex: "mediaCount", width: 95, render: (v?: number) => `${v ?? 0} 个` },
-                                        { title: "数据大小", key: "size", width: 150, render: (_, rec) => <WorkspaceSizeCell mediaBytes={rec.mediaBytes} dataBytes={rec.dataBytes} /> },
-                                        { title: "时间", dataIndex: "createdAt", width: 170, render: (v?: number) => (v ? new Date(v).toLocaleString("zh-CN") : "—") },
+                                        { title: t("userPanels.myMedia.colMediaCount"), dataIndex: "mediaCount", width: 95, render: (v?: number) => t("userPanels.myMedia.mediaCountVal", { count: v ?? 0 }) },
+                                        { title: t("userPanels.myMedia.colDataSize"), key: "size", width: 150, render: (_, rec) => <WorkspaceSizeCell mediaBytes={rec.mediaBytes} dataBytes={rec.dataBytes} /> },
+                                        { title: t("userPanels.wallet.colTime"), dataIndex: "createdAt", width: 170, render: (v?: number) => (v ? new Date(v).toLocaleString(locale) : "—") },
                                         {
-                                            title: "操作",
+                                            title: t("userPanels.wallet.colActions"),
                                             key: "actions",
                                             fixed: "right",
                                             width: 100,
@@ -2956,14 +3105,14 @@ export function MyMediaPanel() {
                                                     items={[
                                                         {
                                                             key: "open",
-                                                            label: "前往",
+                                                            label: t("userPanels.myMedia.actionGo"),
                                                             onClick: () => navigate(tabCfg.kindType === "video" ? "/video" : "/image"),
                                                         },
                                                         {
                                                             key: "delete",
-                                                            label: "删除",
+                                                            label: t("common.delete"),
                                                             danger: true,
-                                                            confirm: "删除记录后，仅被该记录引用的云端媒体也会一并删除并释放空间，确定吗？",
+                                                            confirm: t("userPanels.myMedia.confirmDeleteRecord"),
                                                             onClick: () => void handleDeleteCloudWorkbenchLog(tabCfg.kindType, rec.id),
                                                         },
                                                     ]}
@@ -2980,7 +3129,7 @@ export function MyMediaPanel() {
 
             <Modal
                 open={Boolean(previewItem)}
-                title="媒体原文件预览"
+                title={t("userPanels.myMedia.previewModalTitle")}
                 onCancel={() => {
                     setPreviewItem(null);
                     setPreviewOriginalUrl("");
@@ -2993,7 +3142,7 @@ export function MyMediaPanel() {
                                 loading={downloadingId === previewItem.id}
                                 onClick={() => void handleDownloadMedia(previewItem)}
                             >
-                                下载原文件
+                                {t("common.downloadOriginal")}
                             </Button>
                         ) : null}
                         <Button
@@ -3003,7 +3152,7 @@ export function MyMediaPanel() {
                                 setPreviewOriginalUrl("");
                             }}
                         >
-                            关闭
+                            {t("common.close")}
                         </Button>
                     </Space>
                 }
@@ -3023,7 +3172,7 @@ export function MyMediaPanel() {
                         </div>
                     ) : (
                         <a href={previewOriginalUrl} target="_blank" rel="noreferrer">
-                            打开文件链接
+                            {t("common.openFileLink")}
                         </a>
                     )
                 ) : null}

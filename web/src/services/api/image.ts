@@ -716,7 +716,7 @@ function parseGeminiImagePayload(payload: GeminiPayload, cloudMediaIds: Array<st
         if (finishMessage) throw new Error(finishMessage);
         const finishReason = first?.finishReason?.trim();
         if (finishReason && finishReason.toUpperCase() !== "STOP") {
-            throw new Error(`上游生成未返回图片（finishReason: ${finishReason}）`);
+            throw new Error(apiText("geminiFinishReason", { reason: finishReason }));
         }
         throw new Error(apiText("geminiNoImage"));
     }

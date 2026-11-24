@@ -3,7 +3,9 @@ import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { Alert, App, Button, Card, Col, DatePicker, Descriptions, Drawer, Form, Image, Input, InputNumber, Menu, Modal, Popconfirm, Progress, Radio, Result, Row, Select, Space, Statistic, Switch, Table, Tabs, Tag, Tooltip, Typography, Upload, theme as antdTheme } from "antd";
 import type { MenuProps, UploadProps } from "antd";
 import dayjs, { type Dayjs } from "dayjs";
+import type { TFunction } from "i18next";
 import { AudioLines, BarChart3, Copy, Coins, Cpu, Database, Download, FileIcon, FolderKanban, Gift, HardDrive, ImageIcon, LayoutDashboard, Mail, Megaphone, Menu as MenuIcon, Plus, RefreshCw, ScrollText, Send, Shield, Sliders, Trash2, UploadCloud, UserCheck, Users, Video, Wifi } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 
 import { ChannelEditorDrawer } from "@/components/layout/channel-editor-drawer";
@@ -12,7 +14,7 @@ import { formatCompactCredits, formatExactCredits } from "@/lib/format-number";
 import { AnalyticsDashboardPanel } from "@/pages/admin/components/analytics-dashboard-panel";
 import { ADMIN_TABLE_CLASS, ADMIN_TABLE_SCROLL, TableRowActions } from "@/pages/admin/components/table-row-actions";
 import { UserDetailDrawer } from "@/pages/admin/components/user-detail-drawer";
-import { AnnouncementsCard, ConsumptionTrendCard, MEDIA_MODULE_OPTIONS, MediaModuleTags, MyMediaPanel, MyWalletPanel, ProfileSecurityPanel, UsageLogsPanel, UserOverviewPanel, WorkspaceSizeCell } from "@/pages/admin/user-panels";
+import { AnnouncementsCard, ConsumptionTrendCard, getMediaModuleOptions, MediaModuleTags, MyMediaPanel, MyWalletPanel, ProfileSecurityPanel, UsageLogsPanel, UserOverviewPanel, WorkspaceSizeCell } from "@/pages/admin/user-panels";
 import { useCopyText } from "@/hooks/use-copy-text";
 import {
     adminApi,
@@ -49,19 +51,16 @@ function formatBytes(bytes: number) {
     return `${val >= 100 || idx === 0 ? val.toFixed(0) : val.toFixed(2)} ${units[idx]}`;
 }
 
-const providerLabels: Record<S3Provider, string> = {
-    r2: "Cloudflare R2",
-    oss: "阿里云 OSS",
-    cos: "腾讯云 COS",
-    s3: "通用 S3 / MinIO",
-};
+function getProviderLabel(provider: S3Provider, t: TFunction) {
+    return t(`admin.providers.${provider}`);
+}
 
-const kindLabels: Record<string, string> = {
-    image: "图片",
-    video: "视频",
-    audio: "音频",
-    file: "其他文件",
-};
+function getKindLabel(kind: string, t: TFunction) {
+    if (kind === "image" || kind === "video" || kind === "audio" || kind === "file") {
+        return t(`userPanels.mediaKinds.${kind}`);
+    }
+    return kind;
+}
 
 type WebdavPlatformForm = {
     enabled: boolean;
@@ -123,6 +122,8 @@ type GlobalNoticeForm = {
 };
 
 export default function AdminPage() {
+    const { t, i18n } = useTranslation();
+    const locale = i18n.resolvedLanguage || undefined;
     const { message } = App.useApp();
     const { token } = antdTheme.useToken();
     const copyText = useCopyText();
@@ -305,12 +306,12 @@ export default function AdminPage() {
             try {
                 setOverview(await adminApi.getOverview(days));
             } catch (error) {
-                message.error(error instanceof Error ? error.message : "加载概览失败");
+                message.error(error instanceof Error ? error.message : t("admin.messages.loadOverviewFailed"));
             } finally {
                 setOverviewLoading(false);
             }
         },
-        [isAdmin, message, overviewDays],
+        [isAdmin, message, overviewDays, t],
     );
 
     const loadChannels = useCallback(async () => {
@@ -319,11 +320,11 @@ export default function AdminPage() {
             const res = await adminApi.getChannelSettings();
             setChannels(res.channels);
         } catch (error) {
-            message.error(error instanceof Error ? error.message : "加载模型渠道失败");
+            message.error(error instanceof Error ? error.message : t("admin.messages.loadChannelsFailed"));
         } finally {
             setChannelsLoading(false);
         }
-    }, [message]);
+    }, [message, t]);
 
     const loadUsers = useCallback(
         async (page = usersPage, q = userQuery, role = userRoleFilter, status = userStatusFilter, sort = userSort, pageSize = usersPageSize) => {
@@ -333,12 +334,12 @@ export default function AdminPage() {
                 setUsersList(res.items);
                 setUsersTotal(res.total);
             } catch (error) {
-                message.error(error instanceof Error ? error.message : "加载用户列表失败");
+                message.error(error instanceof Error ? error.message : t("admin.messages.loadUsersFailed"));
             } finally {
                 setUsersLoading(false);
             }
         },
-        [message, userQuery, userRoleFilter, userSort, userStatusFilter, usersPage, usersPageSize],
+        [message, t, userQuery, userRoleFilter, userSort, userStatusFilter, usersPage, usersPageSize],
     );
 
     const loadStorageSettings = useCallback(async () => {
@@ -357,9 +358,9 @@ export default function AdminPage() {
                 forcePathStyle: res.config.forcePathStyle,
             });
         } catch (error) {
-            message.error(error instanceof Error ? error.message : "读取对象存储配置失败");
+            message.error(error instanceof Error ? error.message : t("admin.messages.loadStorageFailed"));
         }
-    }, [message, storageForm]);
+    }, [message, storageForm, t]);
 
     const loadMedia = useCallback(
         async (page = mediaPage, q = mediaQuery, kind = mediaKindFilter, mod = mediaModuleFilter, pageSize = mediaPageSize) => {
@@ -371,12 +372,12 @@ export default function AdminPage() {
                 setMediaFilteredBytes(typeof res.filteredBytes === "number" ? res.filteredBytes : null);
                 if (res.workspaceStats) setMediaWorkspaceStats(res.workspaceStats);
             } catch (error) {
-                message.error(error instanceof Error ? error.message : "加载媒体列表失败");
+                message.error(error instanceof Error ? error.message : t("admin.messages.loadMediaFailed"));
             } finally {
                 setMediaLoading(false);
             }
         },
-        [mediaKindFilter, mediaModuleFilter, mediaPage, mediaPageSize, mediaQuery, message],
+        [mediaKindFilter, mediaModuleFilter, mediaPage, mediaPageSize, mediaQuery, message, t],
     );
 
     const loadWorkspaceData = useCallback(
@@ -388,12 +389,12 @@ export default function AdminPage() {
                 setWorkspaceDataItems(res.items);
                 setWorkspaceDataTotal(res.total);
             } catch (error) {
-                message.error(error instanceof Error ? error.message : "加载业务云端数据失败");
+                message.error(error instanceof Error ? error.message : t("admin.messages.loadWorkspaceFailed"));
             } finally {
                 setWorkspaceDataLoading(false);
             }
         },
-        [mediaSubTab, message, workspaceDataPage, workspaceDataPageSize, workspaceDataQuery],
+        [mediaSubTab, message, t, workspaceDataPage, workspaceDataPageSize, workspaceDataQuery],
     );
 
     const loadAuthAndWebdavSettings = useCallback(async () => {
@@ -445,9 +446,9 @@ export default function AdminPage() {
                 logRetentionDays: analyticsRes.logRetentionDays,
             });
         } catch (error) {
-            message.error(error instanceof Error ? error.message : "读取系统设置失败");
+            message.error(error instanceof Error ? error.message : t("admin.messages.loadSettingsFailed"));
         }
-    }, [analyticsForm, mailForm, message, storageExpiryForm, webdavForm]);
+    }, [analyticsForm, mailForm, message, storageExpiryForm, t, webdavForm]);
 
     const loadRedeemCodes = useCallback(
         async (page = redeemPage, q = redeemQuery, status = redeemStatusFilter, kind = redeemActiveKind, pageSize = redeemPageSize) => {
@@ -457,12 +458,12 @@ export default function AdminPage() {
                 setRedeemItems(res.items);
                 setRedeemTotal(res.total);
             } catch (error) {
-                message.error(error instanceof Error ? error.message : "加载兑换码失败");
+                message.error(error instanceof Error ? error.message : t("admin.messages.loadRedeemFailed"));
             } finally {
                 setRedeemLoading(false);
             }
         },
-        [message, redeemActiveKind, redeemPage, redeemPageSize, redeemQuery, redeemStatusFilter],
+        [message, redeemActiveKind, redeemPage, redeemPageSize, redeemQuery, redeemStatusFilter, t],
     );
 
     const loadAnnouncements = useCallback(async () => {
@@ -477,11 +478,11 @@ export default function AdminPage() {
                 content: res.notice.content,
             });
         } catch (error) {
-            message.error(error instanceof Error ? error.message : "加载公告列表失败");
+            message.error(error instanceof Error ? error.message : t("admin.messages.loadAnnouncementsFailed"));
         } finally {
             setAnnouncementsLoading(false);
         }
-    }, [message, noticeForm]);
+    }, [message, noticeForm, t]);
 
     useEffect(() => {
         if (!isAdmin) return;
@@ -547,10 +548,10 @@ export default function AdminPage() {
             <div className="flex h-full items-center justify-center p-6">
                 <Result
                     status="info"
-                    title="请先登录账号"
+                    title={t("admin.authGuard.loginRequired")}
                     extra={
                         <Button type="primary" onClick={() => navigate(`/auth?redirect=${encodeURIComponent(pathname)}`)}>
-                            前往登录
+                            {t("admin.authGuard.goLogin")}
                         </Button>
                     }
                 />
@@ -563,14 +564,14 @@ export default function AdminPage() {
             <div className="flex h-full items-center justify-center p-6">
                 <Result
                     status="403"
-                    title="无权访问管理后台"
-                    subTitle="仅系统管理员可访问管理后台，普通用户请前往个人后台。"
+                    title={t("admin.authGuard.forbiddenTitle")}
+                    subTitle={t("admin.authGuard.forbiddenSubtitle")}
                     extra={
                         <Space>
                             <Button type="primary" onClick={() => navigate("/console", { replace: true })}>
-                                前往个人后台
+                                {t("admin.authGuard.goConsole")}
                             </Button>
-                            <Button onClick={() => navigate("/", { replace: true })}>返回首页</Button>
+                            <Button onClick={() => navigate("/", { replace: true })}>{t("admin.authGuard.backHome")}</Button>
                         </Space>
                     }
                 />
@@ -584,16 +585,21 @@ export default function AdminPage() {
             await adminApi.saveChannelSettings(nextList);
             await loadChannels();
             await syncRuntimeSettings();
-            message.success("模型渠道已保存并下发");
+            message.success(t("admin.messages.channelsSaved"));
         } catch (error) {
-            message.error(error instanceof Error ? error.message : "保存模型渠道失败");
+            message.error(error instanceof Error ? error.message : t("admin.messages.channelsSaveFailed"));
         } finally {
             setChannelsSaving(false);
         }
     };
 
     const handleAddChannel = () => {
-        const draft = createModelChannel({ name: `平台渠道 ${channels.length + 1}`, baseUrl: "https://api.openai.com", apiKey: "", enabled: true });
+        const draft = createModelChannel({
+            name: t("admin.messages.defaultChannelName", { index: channels.length + 1 }),
+            baseUrl: "https://api.openai.com",
+            apiKey: "",
+            enabled: true,
+        });
         setEditingChannel(draft);
     };
 
@@ -641,10 +647,10 @@ export default function AdminPage() {
             setStorageConfigured(true);
             setStoragePreview(res.secretAccessKeyPreview);
             storageForm.setFieldValue("secretAccessKey", "");
-            message.success("对象存储配置已保存");
+            message.success(t("admin.messages.storageSaved"));
             void loadOverview();
         } catch (error) {
-            message.error(error instanceof Error ? error.message : "保存对象存储配置失败");
+            message.error(error instanceof Error ? error.message : t("admin.messages.storageSaveFailed"));
         } finally {
             setStorageSaving(false);
         }
@@ -668,12 +674,12 @@ export default function AdminPage() {
         setUploadingTest(true);
         try {
             await storageApi.uploadFile(file);
-            message.success("直传测试成功，文件已写入对象存储并完成入库");
+            message.success(t("admin.messages.directUploadSuccess"));
             options.onSuccess?.({});
             void loadMedia(1, mediaQuery, mediaKindFilter);
             void loadOverview();
         } catch (error) {
-            const err = error instanceof Error ? error : new Error("直传失败");
+            const err = error instanceof Error ? error : new Error(t("admin.messages.directUploadFailed"));
             message.error(err.message);
             options.onError?.(err);
         } finally {
@@ -684,11 +690,11 @@ export default function AdminPage() {
     const handleUpdateUser = async (targetId: string, patch: { role?: "admin" | "user"; status?: "active" | "disabled" }) => {
         try {
             await adminApi.updateUser(targetId, patch);
-            message.success("用户信息已更新");
+            message.success(t("admin.messages.userUpdated"));
             void loadUsers();
             void loadOverview();
         } catch (error) {
-            message.error(error instanceof Error ? error.message : "更新失败");
+            message.error(error instanceof Error ? error.message : t("admin.messages.updateFailed"));
         }
     };
 
@@ -723,12 +729,12 @@ export default function AdminPage() {
                 expiresAt: values.expiresAt ? values.expiresAt.toISOString() : null,
                 resetUsedBytes: Boolean(values.resetUsedBytes),
             });
-            message.success("用户 WebDAV 分配已更新");
+            message.success(t("admin.messages.userWebdavUpdated"));
             setAssigningUser(null);
             void loadUsers();
             if (assigningUser.id === user.id) void syncRuntimeSettings();
         } catch (error) {
-            message.error(error instanceof Error ? error.message : "更新失败");
+            message.error(error instanceof Error ? error.message : t("admin.messages.updateFailed"));
         } finally {
             setUserWebdavSaving(false);
         }
@@ -745,7 +751,7 @@ export default function AdminPage() {
             const res = await adminApi.getUserStorageGrants(userId);
             setStorageQuotaGrants(res.grants);
         } catch (error) {
-            message.error(error instanceof Error ? error.message : "加载存储资源包失败");
+            message.error(error instanceof Error ? error.message : t("admin.messages.loadGrantsFailed"));
         } finally {
             setStorageQuotaGrantsLoading(false);
         }
@@ -770,7 +776,7 @@ export default function AdminPage() {
         try {
             const nextStatus = grant.status === "active" ? "revoked" : "active";
             await adminApi.updateStorageGrantStatus(grant.id, nextStatus);
-            message.success(nextStatus === "revoked" ? "已停用该存储资源包" : "已恢复该存储资源包");
+            message.success(nextStatus === "revoked" ? t("admin.messages.grantRevoked") : t("admin.messages.grantRestored"));
             await loadUserStorageGrants(storageQuotaUser.id);
             void loadUsers();
             setDetailRefreshKey((v) => v + 1);
@@ -784,7 +790,7 @@ export default function AdminPage() {
                 });
             }
         } catch (error) {
-            message.error(error instanceof Error ? error.message : "更新资源包状态失败");
+            message.error(error instanceof Error ? error.message : t("admin.messages.grantUpdateFailed"));
         } finally {
             setUpdatingGrantId(null);
         }
@@ -800,7 +806,7 @@ export default function AdminPage() {
                 storageQuotaExpiresAt: values.expiresAt ? values.expiresAt.toISOString() : null,
                 recalculateUsedBytes: Boolean(values.recalculateUsedBytes),
             });
-            message.success(`云端存储配额已更新为 ${formatBytes(res.storageQuotaBytes)}`);
+            message.success(t("admin.messages.quotaUpdated", { size: formatBytes(res.storageQuotaBytes) }));
             if (storageQuotaUser.id === user.id) {
                 useUserStore.getState().setUser({
                     ...user,
@@ -814,7 +820,7 @@ export default function AdminPage() {
             setDetailRefreshKey((v) => v + 1);
             void loadOverview();
         } catch (error) {
-            message.error(error instanceof Error ? error.message : "更新云端存储配额失败");
+            message.error(error instanceof Error ? error.message : t("admin.messages.quotaUpdateFailed"));
         } finally {
             setUserStorageQuotaSaving(false);
         }
@@ -829,10 +835,10 @@ export default function AdminPage() {
             const res = await adminApi.adjustUserCredits(
                 creditUser.id,
                 isClear
-                    ? { clear: true, note: values.note?.trim() || "管理员清零积分" }
+                    ? { clear: true, note: values.note?.trim() || t("admin.messages.adminClearDefaultNote") }
                     : { delta, note: values.note?.trim() || "" },
             );
-            message.success(isClear ? "用户积分已清零" : `积分已调整，当前余额：${res.balance}`);
+            message.success(isClear ? t("admin.messages.creditsCleared") : t("admin.messages.creditsAdjusted", { balance: res.balance }));
             if (creditUser.id === user.id) {
                 useUserStore.getState().setUser({ ...user, creditBalance: res.balance });
             }
@@ -840,7 +846,7 @@ export default function AdminPage() {
             void loadUsers();
             setDetailRefreshKey((v) => v + 1);
         } catch (error) {
-            message.error(error instanceof Error ? error.message : "调整积分失败");
+            message.error(error instanceof Error ? error.message : t("admin.messages.creditsAdjustFailed"));
         } finally {
             setUserCreditSaving(false);
         }
@@ -871,7 +877,7 @@ export default function AdminPage() {
             setGeneratedCodes(res.items.map((item) => item.code));
             setCreateRedeemOpen(false);
             createRedeemForm.resetFields();
-            message.success(`已生成 ${res.items.length} 个兑换码`);
+            message.success(t("admin.messages.redeemCreated", { count: res.items.length }));
             setSelectedRedeemIds([]);
             if (kind !== redeemActiveKind) {
                 setRedeemPage(1);
@@ -880,7 +886,7 @@ export default function AdminPage() {
                 void loadRedeemCodes(1, redeemQuery, redeemStatusFilter, kind);
             }
         } catch (error) {
-            message.error(error instanceof Error ? error.message : "生成兑换码失败");
+            message.error(error instanceof Error ? error.message : t("admin.messages.redeemCreateFailed"));
         } finally {
             setCreatingRedeem(false);
         }
@@ -893,7 +899,7 @@ export default function AdminPage() {
         if (!selectedRedeemItems.length) return;
         copyText(
             selectedRedeemItems.map((item) => item.code).join("\n"),
-            `已复制 ${selectedRedeemItems.length} 个兑换码`,
+            t("admin.messages.redeemCopied", { count: selectedRedeemItems.length }),
         );
     };
 
@@ -902,11 +908,11 @@ export default function AdminPage() {
         setBatchDeletingRedeem(true);
         try {
             const res = await adminApi.batchDeleteRedeemCodes(selectedRedeemIds);
-            message.success(`已删除 ${res.deletedCount} 个兑换码`);
+            message.success(t("admin.messages.redeemDeletedCount", { count: res.deletedCount }));
             setSelectedRedeemIds([]);
             void loadRedeemCodes();
         } catch (error) {
-            message.error(error instanceof Error ? error.message : "批量删除失败");
+            message.error(error instanceof Error ? error.message : t("admin.messages.batchDeleteFailed"));
         } finally {
             setBatchDeletingRedeem(false);
         }
@@ -915,20 +921,20 @@ export default function AdminPage() {
     const handleToggleRedeemStatus = async (item: RedeemCodeItem) => {
         try {
             await adminApi.updateRedeemCode(item.id, { status: item.status === "active" ? "disabled" : "active" });
-            message.success("兑换码状态已更新");
+            message.success(t("admin.messages.redeemStatusUpdated"));
             void loadRedeemCodes();
         } catch (error) {
-            message.error(error instanceof Error ? error.message : "更新失败");
+            message.error(error instanceof Error ? error.message : t("admin.messages.updateFailed"));
         }
     };
 
     const handleDeleteRedeemCode = async (id: string) => {
         try {
             await adminApi.deleteRedeemCode(id);
-            message.success("兑换码已删除");
+            message.success(t("admin.messages.redeemDeleted"));
             void loadRedeemCodes();
         } catch (error) {
-            message.error(error instanceof Error ? error.message : "删除失败");
+            message.error(error instanceof Error ? error.message : t("common.deleteFailed"));
         }
     };
 
@@ -936,11 +942,11 @@ export default function AdminPage() {
         setWebdavSaving(true);
         try {
             await adminApi.saveWebdavSettings(values);
-            message.success("平台 WebDAV 配置已保存");
+            message.success(t("admin.messages.webdavSaved"));
             void loadAuthAndWebdavSettings();
             void syncRuntimeSettings();
         } catch (error) {
-            message.error(error instanceof Error ? error.message : "保存 WebDAV 配置失败");
+            message.error(error instanceof Error ? error.message : t("admin.messages.webdavSaveFailed"));
         } finally {
             setWebdavSaving(false);
         }
@@ -963,11 +969,11 @@ export default function AdminPage() {
         try {
             await adminApi.deleteMedia(mediaId);
             notifyCloudWorkspaceChanged("media", { sync: false });
-            message.success("媒体文件已删除并释放用户存储空间");
+            message.success(t("admin.messages.mediaDeleted"));
             void loadMedia();
             void loadOverview();
         } catch (error) {
-            message.error(error instanceof Error ? error.message : "删除失败");
+            message.error(error instanceof Error ? error.message : t("common.deleteFailed"));
         }
     };
 
@@ -983,12 +989,12 @@ export default function AdminPage() {
             setAllowRegister(res.allowRegister);
             setRequireEmailOnRegister(res.requireEmailOnRegister);
             if (patch.allowRegister !== undefined) {
-                message.success(res.allowRegister ? "已开放新用户注册" : "已关闭新用户注册");
+                message.success(res.allowRegister ? t("admin.messages.registerOpened") : t("admin.messages.registerClosed"));
             } else {
-                message.success(res.requireEmailOnRegister ? "已开启注册强制邮箱验证" : "已关闭注册强制邮箱验证");
+                message.success(res.requireEmailOnRegister ? t("admin.messages.requireEmailEnabled") : t("admin.messages.requireEmailDisabled"));
             }
         } catch (error) {
-            message.error(error instanceof Error ? error.message : "保存失败");
+            message.error(error instanceof Error ? error.message : t("admin.messages.saveFailed"));
         } finally {
             setAuthPolicySaving(false);
         }
@@ -1004,9 +1010,9 @@ export default function AdminPage() {
                 setRequireEmailOnRegister(false);
             }
             mailForm.setFieldValue("password", "");
-            message.success("邮件服务配置已保存");
+            message.success(t("admin.messages.mailSaved"));
         } catch (error) {
-            message.error(error instanceof Error ? error.message : "保存邮件配置失败");
+            message.error(error instanceof Error ? error.message : t("admin.messages.mailSaveFailed"));
         } finally {
             setMailSaving(false);
         }
@@ -1015,7 +1021,7 @@ export default function AdminPage() {
     const handleTestMailSettings = async () => {
         const cleanTo = testMailTo.trim();
         if (!cleanTo) {
-            message.warning("请先填写测试收件邮箱");
+            message.warning(t("admin.messages.testMailToWarning"));
             return;
         }
         try {
@@ -1044,9 +1050,9 @@ export default function AdminPage() {
                 exemptAdmins: res.exemptAdmins,
                 cleanupOverQuotaWithoutExpiry: res.cleanupOverQuotaWithoutExpiry,
             });
-            message.success("云存储到期清理策略已保存");
+            message.success(t("admin.messages.expirySaved"));
         } catch (error) {
-            message.error(error instanceof Error ? error.message : "保存清理策略失败");
+            message.error(error instanceof Error ? error.message : t("admin.messages.expirySaveFailed"));
         } finally {
             setStorageExpirySaving(false);
         }
@@ -1062,17 +1068,22 @@ export default function AdminPage() {
             const res = await adminApi.runStorageExpirySweep({ dryRun });
             setStorageExpiryResult(res);
             if (dryRun) {
-                message.success(`预览完成：命中 ${res.eligibleUsers} 位待处理账号`);
+                message.success(t("admin.messages.expiryPreviewDone", { count: res.eligibleUsers }));
             } else {
                 message.success(
-                    `巡检完成：预警 ${res.preExpiryWarned} 人、宽限提醒 ${res.expiredNoticed} 人、清理 ${res.cleanedUsers} 人（释放 ${formatBytes(res.freedBytesTotal)}）`,
+                    t("admin.messages.expirySweepDone", {
+                        warned: res.preExpiryWarned,
+                        noticed: res.expiredNoticed,
+                        cleaned: res.cleanedUsers,
+                        freed: formatBytes(res.freedBytesTotal),
+                    }),
                 );
                 void loadOverview(overviewDays);
                 void loadUsers();
                 void loadMedia();
             }
         } catch (error) {
-            message.error(error instanceof Error ? error.message : "执行存储到期巡检失败");
+            message.error(error instanceof Error ? error.message : t("admin.messages.expirySweepFailed"));
         } finally {
             if (dryRun) {
                 setStorageExpiryPreviewing(false);
@@ -1093,9 +1104,9 @@ export default function AdminPage() {
                 sampleIntervalMinutes: res.sampleIntervalMinutes,
                 logRetentionDays: res.logRetentionDays,
             });
-            message.success("数据采样与日志保留配置已保存");
+            message.success(t("admin.messages.analyticsSaved"));
         } catch (error) {
-            message.error(error instanceof Error ? error.message : "保存配置失败");
+            message.error(error instanceof Error ? error.message : t("admin.messages.analyticsSaveFailed"));
         } finally {
             setAnalyticsSaving(false);
         }
@@ -1104,26 +1115,26 @@ export default function AdminPage() {
     const handleCleanupExpiredLogs = async () => {
         const rawDays = Number(analyticsForm.getFieldValue("logRetentionDays") || 0);
         if (!Number.isFinite(rawDays) || rawDays <= 0) {
-            message.warning("请先设置大于 0 的日志保留天数（0 表示永久保留）");
+            message.warning(t("admin.messages.logsCleanupWarning"));
             return;
         }
         setCleaningLogs(true);
         try {
             const res = await adminApi.cleanupUsageLogs(rawDays);
-            message.success(`清理完成：保留最近 ${res.retentionDays} 天，共删除 ${res.deletedCount} 条过期调用日志`);
+            message.success(t("admin.messages.logsCleaned", { days: res.retentionDays, count: res.deletedCount }));
         } catch (error) {
-            message.error(error instanceof Error ? error.message : "清理过期日志失败");
+            message.error(error instanceof Error ? error.message : t("admin.messages.logsCleanupFailed"));
         } finally {
             setCleaningLogs(false);
         }
     };
 
     const announcementLevelMeta: Record<AnnouncementLevel, { label: string; color: string; dotColor: string }> = {
-        default: { label: "默认", color: "default", dotColor: "#6b7280" },
-        ongoing: { label: "进行中", color: "blue", dotColor: "#2563eb" },
-        success: { label: "成功", color: "green", dotColor: "#16a34a" },
-        warning: { label: "警告", color: "orange", dotColor: "#f97316" },
-        error: { label: "错误", color: "red", dotColor: "#ef4444" },
+        default: { label: t("userPanels.announcementLevels.default"), color: "default", dotColor: "#6b7280" },
+        ongoing: { label: t("userPanels.announcementLevels.ongoing"), color: "blue", dotColor: "#2563eb" },
+        success: { label: t("userPanels.announcementLevels.success"), color: "green", dotColor: "#16a34a" },
+        warning: { label: t("userPanels.announcementLevels.warning"), color: "orange", dotColor: "#f97316" },
+        error: { label: t("userPanels.announcementLevels.error"), color: "red", dotColor: "#ef4444" },
     };
 
     const renderLevelOption = (value: AnnouncementLevel) => {
@@ -1178,10 +1189,10 @@ export default function AdminPage() {
             });
             setNoticeUpdatedAt(res.notice.updatedAt);
             noticeForm.setFieldsValue(res.notice);
-            message.success("全局公告已保存");
+            message.success(t("admin.messages.noticeSaved"));
             void useNotificationStore.getState().fetchNotifications(true);
         } catch (error) {
-            message.error(error instanceof Error ? error.message : "保存全局公告失败");
+            message.error(error instanceof Error ? error.message : t("admin.messages.noticeSaveFailed"));
         } finally {
             setNoticeSaving(false);
         }
@@ -1200,10 +1211,10 @@ export default function AdminPage() {
             };
             if (editingAnnouncement) {
                 await adminApi.updateAnnouncement(editingAnnouncement.id, payload);
-                message.success("时间线通知已更新");
+                message.success(t("admin.messages.announcementUpdated"));
             } else {
                 await adminApi.createAnnouncement(payload);
-                message.success("时间线通知已发布");
+                message.success(t("admin.messages.announcementPublished"));
             }
             setAnnouncementModalOpen(false);
             setEditingAnnouncement(null);
@@ -1211,7 +1222,7 @@ export default function AdminPage() {
             void loadOverview(overviewDays);
             void useNotificationStore.getState().fetchNotifications(true);
         } catch (error) {
-            message.error(error instanceof Error ? error.message : "保存通知失败");
+            message.error(error instanceof Error ? error.message : t("admin.messages.announcementSaveFailed"));
         } finally {
             setAnnouncementSaving(false);
         }
@@ -1223,24 +1234,24 @@ export default function AdminPage() {
     ) => {
         try {
             await adminApi.updateAnnouncement(record.id, patch);
-            message.success("状态已更新");
+            message.success(t("admin.messages.announcementStatusUpdated"));
             void loadAnnouncements();
             void loadOverview(overviewDays);
             void useNotificationStore.getState().fetchNotifications(true);
         } catch (error) {
-            message.error(error instanceof Error ? error.message : "更新通知失败");
+            message.error(error instanceof Error ? error.message : t("admin.messages.announcementUpdateFailed"));
         }
     };
 
     const handleDeleteAnnouncement = async (id: string) => {
         try {
             await adminApi.deleteAnnouncement(id);
-            message.success("时间线通知已删除");
+            message.success(t("admin.messages.announcementDeleted"));
             void loadAnnouncements();
             void loadOverview(overviewDays);
             void useNotificationStore.getState().fetchNotifications(true);
         } catch (error) {
-            message.error(error instanceof Error ? error.message : "删除通知失败");
+            message.error(error instanceof Error ? error.message : t("admin.messages.announcementDeleteFailed"));
         }
     };
 
@@ -1252,7 +1263,7 @@ export default function AdminPage() {
             label: (
                 <span className="inline-flex items-center gap-1.5">
                     <LayoutDashboard className="size-4" />
-                    个人概览
+                    {t("admin.nav.userOverview")}
                 </span>
             ),
             children: <UserOverviewPanel onOpenWallet={() => switchTab("wallet")} />,
@@ -1262,7 +1273,7 @@ export default function AdminPage() {
             label: (
                 <span className="inline-flex items-center gap-1.5">
                     <BarChart3 className="size-4" />
-                    数据看板
+                    {t("admin.nav.dashboard")}
                 </span>
             ),
             children: <AnalyticsDashboardPanel scope="self" />,
@@ -1274,7 +1285,7 @@ export default function AdminPage() {
                       label: (
                           <span className="inline-flex items-center gap-1.5">
                               <ScrollText className="size-4" />
-                              使用日志
+                              {t("admin.nav.usageLogs")}
                           </span>
                       ),
                       children: <UsageLogsPanel defaultScope="self" />,
@@ -1286,7 +1297,7 @@ export default function AdminPage() {
             label: (
                 <span className="inline-flex items-center gap-1.5">
                     <Coins className="size-4" />
-                    积分钱包
+                    {t("admin.nav.wallet")}
                 </span>
             ),
             children: <MyWalletPanel />,
@@ -1296,7 +1307,7 @@ export default function AdminPage() {
             label: (
                 <span className="inline-flex items-center gap-1.5">
                     <UserCheck className="size-4" />
-                    个人信息与安全
+                    {t("admin.nav.profile")}
                 </span>
             ),
             children: <ProfileSecurityPanel />,
@@ -1306,7 +1317,7 @@ export default function AdminPage() {
             label: (
                 <span className="inline-flex items-center gap-1.5">
                     <FolderKanban className="size-4" />
-                    我的云端媒体
+                    {t("admin.nav.myMedia")}
                 </span>
             ),
             children: <MyMediaPanel />,
@@ -1319,7 +1330,7 @@ export default function AdminPage() {
                             label: (
                                 <span className="inline-flex items-center gap-1.5">
                                     <Shield className="size-4" />
-                                    系统概览
+                                    {t("admin.overviewTab.tabLabel")}
                                 </span>
                             ),
                             children: (
@@ -1328,11 +1339,14 @@ export default function AdminPage() {
                                         <Col xs={24} sm={12} md={6}>
                                             <Card loading={overviewLoading}>
                                                 <Statistic
-                                                    title="注册用户"
+                                                    title={t("admin.overviewTab.totalUsers")}
                                                     value={overview?.totalUsers ?? 0}
                                                     suffix={
                                                         <Typography.Text type="secondary" className="text-xs">
-                                                            {overview?.adminCount ?? 0} 管理员 / {overview?.disabledUsers ?? 0} 禁用
+                                                            {t("admin.overviewTab.usersSuffix", {
+                                                                admins: overview?.adminCount ?? 0,
+                                                                disabled: overview?.disabledUsers ?? 0,
+                                                            })}
                                                         </Typography.Text>
                                                     }
                                                 />
@@ -1340,25 +1354,25 @@ export default function AdminPage() {
                                         </Col>
                                         <Col xs={24} sm={12} md={6}>
                                             <Card loading={overviewLoading}>
-                                                <Tooltip title={`精确值：${formatExactCredits(overview?.totalConsumedCredits ?? 0)} 积分`}>
+                                                <Tooltip title={t("admin.overviewTab.exactCreditsTooltip", { value: formatExactCredits(overview?.totalConsumedCredits ?? 0) })}>
                                                     <div>
-                                                        <Statistic title="累计消耗积分" value={formatCompactCredits(overview?.totalConsumedCredits ?? 0)} />
+                                                        <Statistic title={t("admin.overviewTab.totalConsumed")} value={formatCompactCredits(overview?.totalConsumedCredits ?? 0)} />
                                                     </div>
                                                 </Tooltip>
                                             </Card>
                                         </Col>
                                         <Col xs={24} sm={12} md={6}>
                                             <Card loading={overviewLoading}>
-                                                <Tooltip title={`精确值：${formatExactCredits(overview?.todayConsumedCredits ?? 0)} 积分`}>
+                                                <Tooltip title={t("admin.overviewTab.exactCreditsTooltip", { value: formatExactCredits(overview?.todayConsumedCredits ?? 0) })}>
                                                     <div>
-                                                        <Statistic title="今日消耗积分" value={formatCompactCredits(overview?.todayConsumedCredits ?? 0)} />
+                                                        <Statistic title={t("admin.overviewTab.todayConsumed")} value={formatCompactCredits(overview?.todayConsumedCredits ?? 0)} />
                                                     </div>
                                                 </Tooltip>
                                             </Card>
                                         </Col>
                                         <Col xs={24} sm={12} md={6}>
                                             <Card loading={overviewLoading}>
-                                                <Statistic title="已占用存储空间" value={formatBytes(totalStorageBytes)} />
+                                                <Statistic title={t("admin.overviewTab.usedStorage")} value={formatBytes(totalStorageBytes)} />
                                             </Card>
                                         </Col>
                                     </Row>
@@ -1366,7 +1380,7 @@ export default function AdminPage() {
                                     <Row gutter={[16, 16]}>
                                         <Col xs={24} lg={15}>
                                             <ConsumptionTrendCard
-                                                title="全站积分消耗趋势"
+                                                title={t("admin.overviewTab.trendTitle")}
                                                 days={overviewDays}
                                                 onDaysChange={(days) => setOverviewDays(days as 7 | 14 | 30)}
                                                 dailyTrend={overview?.dailyTrend ?? []}
@@ -1382,7 +1396,7 @@ export default function AdminPage() {
                                                 loading={overviewLoading}
                                                 extra={
                                                     <Button type="link" size="small" onClick={() => switchTab("settings-announcements")}>
-                                                        管理公告
+                                                        {t("admin.overviewTab.manageAnnouncements")}
                                                     </Button>
                                                 }
                                             />
@@ -1392,19 +1406,19 @@ export default function AdminPage() {
                                     <Row gutter={[16, 16]}>
                                         <Col xs={24} sm={12}>
                                             <Card loading={overviewLoading}>
-                                                <Statistic title="云端画布 / 素材" value={`${overview?.canvasProjectCount ?? 0} / ${overview?.assetCount ?? 0}`} />
+                                                <Statistic title={t("admin.overviewTab.cloudCanvasAssets")} value={`${overview?.canvasProjectCount ?? 0} / ${overview?.assetCount ?? 0}`} />
                                             </Card>
                                         </Col>
                                         <Col xs={24} sm={12}>
                                             <Card loading={overviewLoading}>
-                                                <Statistic title="对象存储文件数" value={overview?.activeMediaCount ?? 0} />
+                                                <Statistic title={t("admin.overviewTab.objectMediaCount")} value={overview?.activeMediaCount ?? 0} />
                                             </Card>
                                         </Col>
                                     </Row>
 
                                     <Row gutter={[16, 16]}>
                                         <Col xs={24} md={12}>
-                                            <Card title="媒体类型占用分布" loading={overviewLoading}>
+                                            <Card title={t("admin.overviewTab.mediaByKindTitle")} loading={overviewLoading}>
                                                 <div className="flex flex-col gap-3">
                                                     {(overview?.mediaByKind ?? []).length ? (
                                                         overview!.mediaByKind.map((item) => {
@@ -1413,7 +1427,10 @@ export default function AdminPage() {
                                                                 <div key={item.kind} className="flex flex-col gap-1">
                                                                     <div className="flex items-center justify-between text-sm">
                                                                         <span>
-                                                                            {kindLabels[item.kind] || item.kind}（{item.count} 个）
+                                                                            {t("admin.overviewTab.kindItemCount", {
+                                                                                kind: getKindLabel(item.kind, t),
+                                                                                count: item.count,
+                                                                            })}
                                                                         </span>
                                                                         <Typography.Text type="secondary">{formatBytes(item.bytes)}</Typography.Text>
                                                                     </div>
@@ -1422,13 +1439,13 @@ export default function AdminPage() {
                                                             );
                                                         })
                                                     ) : (
-                                                        <Typography.Text type="secondary">暂无云端媒体文件</Typography.Text>
+                                                        <Typography.Text type="secondary">{t("admin.overviewTab.noCloudMedia")}</Typography.Text>
                                                     )}
                                                 </div>
                                             </Card>
                                         </Col>
                                         <Col xs={24} md={12}>
-                                            <Card title="用户存储占用排行（Top 5）" loading={overviewLoading}>
+                                            <Card title={t("admin.overviewTab.topStorageUsersTitle")} loading={overviewLoading}>
                                                 <div className="flex flex-col gap-3">
                                                     {(overview?.topStorageUsers ?? []).length ? (
                                                         overview!.topStorageUsers.map((item) => {
@@ -1438,7 +1455,11 @@ export default function AdminPage() {
                                                                     <div className="flex items-center justify-between text-sm">
                                                                         <span>
                                                                             {item.displayName || item.username}{" "}
-                                                                            <Tag color={item.role === "admin" ? "blue" : "default"}>{item.role === "admin" ? "管理员" : "用户"}</Tag>
+                                                                            <Tag color={item.role === "admin" ? "blue" : "default"}>
+                                                                                {item.role === "admin"
+                                                                                    ? t("admin.overviewTab.roleAdminTag")
+                                                                                    : t("admin.overviewTab.roleUserTag")}
+                                                                            </Tag>
                                                                         </span>
                                                                         <Typography.Text type="secondary">{formatBytes(item.storageUsedBytes)}</Typography.Text>
                                                                     </div>
@@ -1447,32 +1468,40 @@ export default function AdminPage() {
                                                             );
                                                         })
                                                     ) : (
-                                                        <Typography.Text type="secondary">暂无用户数据</Typography.Text>
+                                                        <Typography.Text type="secondary">{t("admin.overviewTab.noUsersData")}</Typography.Text>
                                                     )}
                                                 </div>
                                             </Card>
                                         </Col>
                                     </Row>
 
-                                    <Card title="当前运行状态">
+                                    <Card title={t("admin.overviewTab.runtimeStatusTitle")}>
                                         <Descriptions column={{ xs: 1, sm: 2 }} bordered size="small">
-                                            <Descriptions.Item label="当前管理员">{user.displayName || user.username}</Descriptions.Item>
-                                            <Descriptions.Item label="平台模型渠道">
+                                            <Descriptions.Item label={t("admin.overviewTab.currentAdminLabel")}>{user.displayName || user.username}</Descriptions.Item>
+                                            <Descriptions.Item label={t("admin.overviewTab.platformChannelsLabel")}>
                                                 <Tag color={channels.some((ch) => ch.enabled) ? "green" : "orange"}>
-                                                    已配置 {channels.length} 个（启用 {channels.filter((ch) => ch.enabled).length} 个）
+                                                    {t("admin.overviewTab.channelsSummaryTag", {
+                                                        total: channels.length,
+                                                        enabled: channels.filter((ch) => ch.enabled).length,
+                                                    })}
                                                 </Tag>
                                             </Descriptions.Item>
-                                            <Descriptions.Item label="对象存储状态">
+                                            <Descriptions.Item label={t("admin.overviewTab.objectStorageStatusLabel")}>
                                                 {overview?.storageConfigured ? (
                                                     <Tag color="green">
-                                                        已配置（{providerLabels[(overview.storageProvider as S3Provider) || "s3"]} / {overview.storageBucket}）
+                                                        {t("admin.overviewTab.storageConfiguredTag", {
+                                                            provider: getProviderLabel((overview.storageProvider as S3Provider) || "s3", t),
+                                                            bucket: overview.storageBucket,
+                                                        })}
                                                     </Tag>
                                                 ) : (
-                                                    <Tag color="orange">未配置，请前往「对象存储」页签设置</Tag>
+                                                    <Tag color="orange">{t("admin.overviewTab.storageNotConfiguredTag")}</Tag>
                                                 )}
                                             </Descriptions.Item>
-                                            <Descriptions.Item label="注册策略">
-                                                <Tag color={allowRegister ? "blue" : "default"}>{allowRegister ? "开放普通用户注册" : "已关闭新用户注册"}</Tag>
+                                            <Descriptions.Item label={t("admin.overviewTab.registerPolicyLabel")}>
+                                                <Tag color={allowRegister ? "blue" : "default"}>
+                                                    {allowRegister ? t("admin.overviewTab.registerOpenTag") : t("admin.overviewTab.registerClosedTag")}
+                                                </Tag>
                                             </Descriptions.Item>
                                         </Descriptions>
                                     </Card>
@@ -1484,7 +1513,7 @@ export default function AdminPage() {
                             label: (
                                 <span className="inline-flex items-center gap-1.5">
                                     <BarChart3 className="size-4" />
-                                    数据看板
+                                    {t("admin.nav.dashboard")}
                                 </span>
                             ),
                             children: <AnalyticsDashboardPanel scope="all" />,
@@ -1494,7 +1523,7 @@ export default function AdminPage() {
                             label: (
                                 <span className="inline-flex items-center gap-1.5">
                                     <ScrollText className="size-4" />
-                                    使用日志
+                                    {t("admin.nav.usageLogs")}
                                 </span>
                             ),
                             children: <UsageLogsPanel defaultScope={isAdminRoute ? "all" : "self"} />,
@@ -1504,16 +1533,16 @@ export default function AdminPage() {
                             label: (
                                 <span className="inline-flex items-center gap-1.5">
                                     <Cpu className="size-4" />
-                                    模型渠道
+                                    {t("admin.channelsTab.tabLabel")}
                                 </span>
                             ),
                             children: (
                                 <Card
-                                    title="平台模型渠道（仅管理员配置，前台用户只能选择已启用的模型）"
+                                    title={t("admin.channelsTab.cardTitle")}
                                     loading={channelsLoading}
                                     extra={
                                         <Button type="primary" icon={<Plus className="size-4" />} onClick={handleAddChannel} loading={channelsSaving}>
-                                            新增渠道
+                                            {t("admin.channelsTab.addChannel")}
                                         </Button>
                                     }
                                 >
@@ -1521,8 +1550,8 @@ export default function AdminPage() {
                                         type="info"
                                         showIcon
                                         className="mb-4"
-                                        message="渠道密钥仅保存在服务端"
-                                        description="前台普通用户不会看到您的 Base URL 与 API Key，所有 AI 生成请求均经服务端代理并校验身份后转发。"
+                                        message={t("admin.channelsTab.alertTitle")}
+                                        description={t("admin.channelsTab.alertDesc")}
                                     />
                                     <Table<AdminChannelItem>
                                         rowKey="id"
@@ -1532,39 +1561,39 @@ export default function AdminPage() {
                                         pagination={false}
                                         columns={[
                                             {
-                                                title: "渠道名称",
+                                                title: t("admin.channelsTab.colName"),
                                                 key: "name",
                                                 width: 260,
                                                 render: (_, record) => (
                                                     <div className="max-w-[240px]">
                                                         <div className="truncate font-medium">{record.name}</div>
                                                         <Typography.Text type="secondary" ellipsis={{ tooltip: record.baseUrl }} className="block text-xs">
-                                                            {record.baseUrl || "未配置 Base URL"}
+                                                            {record.baseUrl || t("admin.channelsTab.noBaseUrl")}
                                                         </Typography.Text>
                                                     </div>
                                                 ),
                                             },
                                             {
-                                                title: "协议",
+                                                title: t("admin.channelsTab.colFormat"),
                                                 dataIndex: "apiFormat",
                                                 width: 90,
                                                 render: (fmt: string) => <Tag>{fmt === "gemini" ? "Gemini" : "OpenAI"}</Tag>,
                                             },
                                             {
-                                                title: "密钥状态",
+                                                title: t("admin.channelsTab.colKeyStatus"),
                                                 key: "apiKey",
                                                 width: 140,
                                                 render: (_, record) =>
-                                                    record.hasApiKey ? <Tag color="green">{record.apiKeyPreview}</Tag> : <Tag color="red">未配置密钥</Tag>,
+                                                    record.hasApiKey ? <Tag color="green">{record.apiKeyPreview}</Tag> : <Tag color="red">{t("admin.channelsTab.noKey")}</Tag>,
                                             },
                                             {
-                                                title: "模型数",
+                                                title: t("admin.channelsTab.colModels"),
                                                 key: "models",
                                                 width: 85,
-                                                render: (_, record) => `${record.models.length} 个`,
+                                                render: (_, record) => t("admin.channelsTab.modelsCount", { count: record.models.length }),
                                             },
                                             {
-                                                title: "启用",
+                                                title: t("admin.channelsTab.colEnabled"),
                                                 dataIndex: "enabled",
                                                 width: 80,
                                                 render: (enabled: boolean, record) => (
@@ -1572,7 +1601,7 @@ export default function AdminPage() {
                                                 ),
                                             },
                                             {
-                                                title: "操作",
+                                                title: t("admin.channelsTab.colActions"),
                                                 key: "actions",
                                                 fixed: "right",
                                                 width: 100,
@@ -1581,14 +1610,14 @@ export default function AdminPage() {
                                                         items={[
                                                             {
                                                                 key: "edit",
-                                                                label: "编辑",
+                                                                label: t("common.edit"),
                                                                 onClick: () => handleEditChannel(record),
                                                             },
                                                             {
                                                                 key: "delete",
-                                                                label: "删除",
+                                                                label: t("common.delete"),
                                                                 danger: true,
-                                                                confirm: "确定删除该渠道吗？",
+                                                                confirm: t("admin.channelsTab.confirmDelete"),
                                                                 onClick: () => void handleDeleteChannel(record.id),
                                                             },
                                                         ]}
@@ -1605,12 +1634,12 @@ export default function AdminPage() {
                             label: (
                                 <span className="inline-flex items-center gap-1.5">
                                     <Users className="size-4" />
-                                    用户管理
+                                    {t("admin.usersTab.tabLabel")}
                                 </span>
                             ),
                             children: (
                                 <Card
-                                    title="账号列表与云端存储配额管理"
+                                    title={t("admin.usersTab.cardTitle")}
                                     extra={
                                         <Space wrap>
                                             <Select
@@ -1621,9 +1650,9 @@ export default function AdminPage() {
                                                     setUserRoleFilter(value);
                                                 }}
                                                 options={[
-                                                    { value: "", label: "全部角色" },
-                                                    { value: "admin", label: "管理员" },
-                                                    { value: "user", label: "普通用户" },
+                                                    { value: "", label: t("admin.usersTab.allRoles") },
+                                                    { value: "admin", label: t("admin.usersTab.roleAdmin") },
+                                                    { value: "user", label: t("admin.usersTab.roleUser") },
                                                 ]}
                                             />
                                             <Select
@@ -1634,9 +1663,9 @@ export default function AdminPage() {
                                                     setUserStatusFilter(value);
                                                 }}
                                                 options={[
-                                                    { value: "", label: "全部状态" },
-                                                    { value: "active", label: "正常" },
-                                                    { value: "disabled", label: "已禁用" },
+                                                    { value: "", label: t("admin.usersTab.allStatuses") },
+                                                    { value: "active", label: t("admin.usersTab.statusActive") },
+                                                    { value: "disabled", label: t("admin.usersTab.statusDisabled") },
                                                 ]}
                                             />
                                             <Select
@@ -1647,13 +1676,13 @@ export default function AdminPage() {
                                                     setUserSort(value);
                                                 }}
                                                 options={[
-                                                    { value: "created_desc", label: "按注册时间" },
-                                                    { value: "storage_desc", label: "按存储占用" },
+                                                    { value: "created_desc", label: t("admin.usersTab.sortCreated") },
+                                                    { value: "storage_desc", label: t("admin.usersTab.sortStorage") },
                                                 ]}
                                             />
                                             <Input.Search
                                                 allowClear
-                                                placeholder="搜索用户名、昵称或邮箱"
+                                                placeholder={t("admin.usersTab.searchPlaceholder")}
                                                 style={{ width: 220 }}
                                                 onSearch={(value) => {
                                                     setUsersPage(1);
@@ -1675,7 +1704,7 @@ export default function AdminPage() {
                                             total: usersTotal,
                                             showSizeChanger: true,
                                             pageSizeOptions: [10, 20, 30, 50, 100],
-                                            showTotal: (count) => `共 ${count} 条`,
+                                            showTotal: (count) => t("common.totalItems", { count }),
                                             onChange: (page, size) => {
                                                 if (size !== usersPageSize) {
                                                     setUsersPageSize(size);
@@ -1687,7 +1716,7 @@ export default function AdminPage() {
                                         }}
                                         columns={[
                                             {
-                                                title: "账号",
+                                                title: t("admin.usersTab.colAccount"),
                                                 key: "account",
                                                 width: 220,
                                                 render: (_, record) => (
@@ -1700,7 +1729,7 @@ export default function AdminPage() {
                                                             >
                                                                 {record.displayName || record.username}
                                                             </button>
-                                                            {record.id === user.id ? <Tag className="ml-2">当前</Tag> : null}
+                                                            {record.id === user.id ? <Tag className="ml-2">{t("admin.usersTab.currentTag")}</Tag> : null}
                                                         </div>
                                                         <Typography.Text type="secondary" ellipsis className="block text-xs">
                                                             @{record.username}
@@ -1710,35 +1739,43 @@ export default function AdminPage() {
                                                 ),
                                             },
                                             {
-                                                title: "角色",
+                                                title: t("admin.usersTab.colRole"),
                                                 dataIndex: "role",
                                                 width: 90,
-                                                render: (role: string) => <Tag color={role === "admin" ? "blue" : "default"}>{role === "admin" ? "管理员" : "普通用户"}</Tag>,
+                                                render: (role: string) => (
+                                                    <Tag color={role === "admin" ? "blue" : "default"}>
+                                                        {role === "admin" ? t("admin.usersTab.roleAdmin") : t("admin.usersTab.roleUser")}
+                                                    </Tag>
+                                                ),
                                             },
                                             {
-                                                title: "状态",
+                                                title: t("admin.usersTab.colStatus"),
                                                 dataIndex: "status",
                                                 width: 80,
-                                                render: (status: string) => <Tag color={status === "active" ? "green" : "red"}>{status === "active" ? "正常" : "已禁用"}</Tag>,
+                                                render: (status: string) => (
+                                                    <Tag color={status === "active" ? "green" : "red"}>
+                                                        {status === "active" ? t("admin.usersTab.statusActive") : t("admin.usersTab.statusDisabled")}
+                                                    </Tag>
+                                                ),
                                             },
                                             {
-                                                title: "积分余额",
+                                                title: t("admin.usersTab.colCredits"),
                                                 dataIndex: "creditBalance",
                                                 width: 105,
                                                 render: (balance?: number) => (
-                                                    <Tooltip title={`精确余额：${formatExactCredits(balance ?? 0)} 积分`}>
+                                                    <Tooltip title={t("admin.usersTab.exactBalanceTip", { value: formatExactCredits(balance ?? 0) })}>
                                                         <Tag color="gold">{formatCompactCredits(balance ?? 0)}</Tag>
                                                     </Tooltip>
                                                 ),
                                             },
                                             {
-                                                title: "画布 / 媒体",
+                                                title: t("admin.usersTab.colCanvasMedia"),
                                                 key: "counts",
                                                 width: 100,
                                                 render: (_, record) => `${record.projectCount ?? 0} / ${record.mediaCount ?? 0}`,
                                             },
                                             {
-                                                title: "云端存储配额",
+                                                title: t("admin.usersTab.colStorageQuota"),
                                                 key: "storageQuota",
                                                 width: 205,
                                                 render: (_, record) => {
@@ -1754,11 +1791,11 @@ export default function AdminPage() {
                                                                 </span>
                                                                 {expired ? (
                                                                     <Tag color="red" style={{ marginInlineEnd: 0 }}>
-                                                                        已过期
+                                                                        {t("admin.usersTab.expiredTag")}
                                                                     </Tag>
                                                                 ) : exceeded ? (
                                                                     <Tag color="red" style={{ marginInlineEnd: 0 }}>
-                                                                        {quota <= 0 ? "0MB" : "已满"}
+                                                                        {quota <= 0 ? "0MB" : t("admin.usersTab.fullTag")}
                                                                     </Tag>
                                                                 ) : null}
                                                             </div>
@@ -1770,16 +1807,20 @@ export default function AdminPage() {
                                                             />
                                                             <Typography.Text type="secondary" className="text-[11px]">
                                                                 {record.storageQuotaExpiresAt
-                                                                    ? `至 ${new Date(record.storageQuotaExpiresAt).toLocaleDateString("zh-CN")}`
-                                                                    : "永久有效"}
-                                                                {record.activeGrantCount ? ` · ${record.activeGrantCount} 个资源包` : ""}
+                                                                    ? t("admin.usersTab.untilDate", {
+                                                                          date: new Date(record.storageQuotaExpiresAt).toLocaleDateString(locale),
+                                                                      })
+                                                                    : t("admin.usersTab.permanent")}
+                                                                {record.activeGrantCount
+                                                                    ? t("admin.usersTab.activeGrantsSuffix", { count: record.activeGrantCount })
+                                                                    : ""}
                                                             </Typography.Text>
                                                         </div>
                                                     );
                                                 },
                                             },
                                             {
-                                                title: "操作",
+                                                title: t("admin.channelsTab.colActions"),
                                                 key: "actions",
                                                 fixed: "right",
                                                 width: 150,
@@ -1788,32 +1829,32 @@ export default function AdminPage() {
                                                         items={[
                                                             {
                                                                 key: "detail",
-                                                                label: "详情",
+                                                                label: t("admin.usersTab.actionDetail"),
                                                                 onClick: () => setDetailUserId(record.id),
                                                             },
                                                             {
                                                                 key: "quota",
-                                                                label: "配额",
+                                                                label: t("admin.usersTab.actionQuota"),
                                                                 onClick: () => openConfigStorageQuota(record),
                                                             },
                                                             {
                                                                 key: "credits",
-                                                                label: "积分",
+                                                                label: t("admin.usersTab.actionCredits"),
                                                                 onClick: () => openAdjustCredits(record),
                                                             },
                                                             {
                                                                 key: "role",
-                                                                label: record.role === "admin" ? "降级" : "提权",
+                                                                label: record.role === "admin" ? t("admin.usersTab.actionDemote") : t("admin.usersTab.actionPromote"),
                                                                 disabled: Boolean(record.isInitialAdmin && record.role === "admin"),
-                                                                confirm: record.role === "admin" ? "确定将其降为普通用户吗？" : "确定将其设为系统管理员吗？",
+                                                                confirm: record.role === "admin" ? t("admin.usersTab.confirmDemote") : t("admin.usersTab.confirmPromote"),
                                                                 onClick: () => void handleUpdateUser(record.id, { role: record.role === "admin" ? "user" : "admin" }),
                                                             },
                                                             {
                                                                 key: "status",
-                                                                label: record.status === "active" ? "禁用" : "启用",
+                                                                label: record.status === "active" ? t("admin.usersTab.actionDisable") : t("admin.usersTab.actionEnable"),
                                                                 danger: record.status === "active",
                                                                 disabled: record.id === user.id || Boolean(record.isInitialAdmin),
-                                                                confirm: record.status === "active" ? "确定禁用该账号吗？其登录会话将立即失效。" : "确定重新启用该账号吗？",
+                                                                confirm: record.status === "active" ? t("admin.usersTab.confirmDisable") : t("admin.usersTab.confirmEnable"),
                                                                 onClick: () => void handleUpdateUser(record.id, { status: record.status === "active" ? "disabled" : "active" }),
                                                             },
                                                         ]}
@@ -1830,7 +1871,7 @@ export default function AdminPage() {
                             label: (
                                 <span className="inline-flex items-center gap-1.5">
                                     <Gift className="size-4" />
-                                    兑换码管理
+                                    {t("admin.redeemTab.tabLabel")}
                                 </span>
                             ),
                             children: (
@@ -1841,13 +1882,13 @@ export default function AdminPage() {
                                             showIcon
                                             closable
                                             onClose={() => setGeneratedCodes([])}
-                                            message={`最新生成的 ${generatedCodes.length} 个兑换码`}
+                                            message={t("admin.redeemTab.generatedAlertTitle", { count: generatedCodes.length })}
                                             description={
                                                 <div className="mt-2 flex flex-col gap-2">
                                                     <Input.TextArea value={generatedCodes.join("\n")} readOnly autoSize={{ minRows: 2, maxRows: 6 }} />
                                                     <div>
-                                                        <Button size="small" icon={<Copy className="size-3.5" />} onClick={() => copyText(generatedCodes.join("\n"), "已复制全部兑换码")}>
-                                                            复制全部兑换码
+                                                        <Button size="small" icon={<Copy className="size-3.5" />} onClick={() => copyText(generatedCodes.join("\n"), t("admin.redeemTab.copiedAll"))}>
+                                                            {t("admin.redeemTab.copyAllBtn")}
                                                         </Button>
                                                     </div>
                                                 </div>
@@ -1856,7 +1897,7 @@ export default function AdminPage() {
                                     ) : null}
 
                                     <Card
-                                        title="兑换码管理（每个兑换码仅限 1 人兑换，已使用不可删除）"
+                                        title={t("admin.redeemTab.cardTitle")}
                                         extra={
                                             <Space wrap>
                                                 <Select
@@ -1868,14 +1909,14 @@ export default function AdminPage() {
                                                         setRedeemStatusFilter(value);
                                                     }}
                                                     options={[
-                                                        { value: "", label: "全部状态" },
-                                                        { value: "active", label: "启用中" },
-                                                        { value: "disabled", label: "已停用" },
+                                                        { value: "", label: t("admin.redeemTab.allStatuses") },
+                                                        { value: "active", label: t("admin.redeemTab.statusActive") },
+                                                        { value: "disabled", label: t("admin.redeemTab.statusDisabled") },
                                                     ]}
                                                 />
                                                 <Input.Search
                                                     allowClear
-                                                    placeholder="搜索兑换码或备注"
+                                                    placeholder={t("admin.redeemTab.searchPlaceholder")}
                                                     style={{ width: 200 }}
                                                     onSearch={(value) => {
                                                         setRedeemPage(1);
@@ -1901,7 +1942,7 @@ export default function AdminPage() {
                                                         setCreateRedeemOpen(true);
                                                     }}
                                                 >
-                                                    {redeemActiveKind === "storage" ? "生成存储兑换码" : "生成积分兑换码"}
+                                                    {redeemActiveKind === "storage" ? t("admin.redeemTab.createStorageBtn") : t("admin.redeemTab.createCreditsBtn")}
                                                 </Button>
                                             </Space>
                                         }
@@ -1914,8 +1955,8 @@ export default function AdminPage() {
                                                 setRedeemActiveKind(key as RedeemCodeKind);
                                             }}
                                             items={[
-                                                { key: "credits", label: "积分兑换码" },
-                                                { key: "storage", label: "云端存储兑换码" },
+                                                { key: "credits", label: t("admin.redeemTab.tabCredits") },
+                                                { key: "storage", label: t("admin.redeemTab.tabStorage") },
                                             ]}
                                         />
 
@@ -1925,35 +1966,35 @@ export default function AdminPage() {
                                                 style={{ borderColor: token.colorBorderSecondary, background: token.colorFillAlter }}
                                             >
                                                 <span>
-                                                    已选择 <strong>{selectedRedeemIds.length}</strong> 个兑换码
+                                                    {t("admin.redeemTab.selectedPrefix")} <strong>{selectedRedeemIds.length}</strong> {t("admin.redeemTab.selectedSuffix")}
                                                     {hasSelectedUsedRedeem ? (
                                                         <Typography.Text type="danger" className="ml-2">
-                                                            （包含已使用兑换码，不可批量删除）
+                                                            {t("admin.redeemTab.includesUsedWarning")}
                                                         </Typography.Text>
                                                     ) : null}
                                                 </span>
                                                 <Space>
                                                     <Button size="small" icon={<Copy className="size-3.5" />} onClick={handleBatchCopyRedeemCodes}>
-                                                        批量复制
+                                                        {t("admin.redeemTab.batchCopy")}
                                                     </Button>
-                                                    <Tooltip title={hasSelectedUsedRedeem ? "已使用过的兑换码不能删除，请取消勾选后再试" : undefined}>
+                                                    <Tooltip title={hasSelectedUsedRedeem ? t("admin.redeemTab.usedCannotDeleteTip") : undefined}>
                                                         {hasSelectedUsedRedeem ? (
                                                             <Button size="small" danger disabled icon={<Trash2 className="size-3.5" />}>
-                                                                批量删除
+                                                                {t("admin.redeemTab.batchDelete")}
                                                             </Button>
                                                         ) : (
                                                             <Popconfirm
-                                                                title={`确定删除选中的 ${selectedRedeemIds.length} 个未使用兑换码吗？`}
+                                                                title={t("admin.redeemTab.confirmBatchDelete", { count: selectedRedeemIds.length })}
                                                                 onConfirm={() => void handleBatchDeleteRedeemCodes()}
                                                             >
                                                                 <Button size="small" danger loading={batchDeletingRedeem} icon={<Trash2 className="size-3.5" />}>
-                                                                    批量删除
+                                                                    {t("admin.redeemTab.batchDelete")}
                                                                 </Button>
                                                             </Popconfirm>
                                                         )}
                                                     </Tooltip>
                                                     <Button size="small" type="text" onClick={() => setSelectedRedeemIds([])}>
-                                                        取消选择
+                                                        {t("admin.redeemTab.deselect")}
                                                     </Button>
                                                 </Space>
                                             </div>
@@ -1975,7 +2016,7 @@ export default function AdminPage() {
                                                 total: redeemTotal,
                                                 showSizeChanger: true,
                                                 pageSizeOptions: [10, 20, 30, 50, 100],
-                                                showTotal: (count) => `共 ${count} 条`,
+                                                showTotal: (count) => t("common.totalItems", { count }),
                                                 onChange: (page, size) => {
                                                     setSelectedRedeemIds([]);
                                                     if (size !== redeemPageSize) {
@@ -1988,7 +2029,7 @@ export default function AdminPage() {
                                             }}
                                             columns={[
                                                 {
-                                                    title: "兑换码",
+                                                    title: t("admin.redeemTab.colCode"),
                                                     dataIndex: "code",
                                                     width: 210,
                                                     render: (code: string) => (
@@ -1999,32 +2040,34 @@ export default function AdminPage() {
                                                     ),
                                                 },
                                                 {
-                                                    title: "兑换内容",
+                                                    title: t("admin.redeemTab.colReward"),
                                                     key: "reward",
                                                     width: 185,
                                                     render: (_, record) =>
                                                         record.kind === "storage" ? (
                                                             <Tag color="cyan">
                                                                 +{formatBytes(record.storageQuotaBytes)}
-                                                                {record.storageDurationDays ? ` · ${record.storageDurationDays} 天` : " · 永久"}
+                                                                {record.storageDurationDays
+                                                                    ? t("admin.redeemTab.rewardDays", { days: record.storageDurationDays })
+                                                                    : t("admin.redeemTab.rewardPermanent")}
                                                             </Tag>
                                                         ) : (
-                                                            <Tag color="gold">+{record.credits} 积分</Tag>
+                                                            <Tag color="gold">{t("admin.redeemTab.rewardCredits", { credits: record.credits })}</Tag>
                                                         ),
                                                 },
                                                 {
-                                                    title: "状态",
+                                                    title: t("admin.redeemTab.colState"),
                                                     key: "state",
                                                     width: 90,
                                                     render: (_, record) => {
-                                                        if (record.usedCount > 0 || record.usedCount >= record.maxUses) return <Tag color="orange">已使用</Tag>;
-                                                        if (record.status === "disabled") return <Tag color="default">已停用</Tag>;
-                                                        if (record.expiresAt && new Date(record.expiresAt).getTime() <= Date.now()) return <Tag color="red">已过期</Tag>;
-                                                        return <Tag color="green">可用</Tag>;
+                                                        if (record.usedCount > 0 || record.usedCount >= record.maxUses) return <Tag color="orange">{t("admin.redeemTab.stateUsed")}</Tag>;
+                                                        if (record.status === "disabled") return <Tag color="default">{t("admin.redeemTab.stateDisabled")}</Tag>;
+                                                        if (record.expiresAt && new Date(record.expiresAt).getTime() <= Date.now()) return <Tag color="red">{t("admin.redeemTab.stateExpired")}</Tag>;
+                                                        return <Tag color="green">{t("admin.redeemTab.stateAvailable")}</Tag>;
                                                     },
                                                 },
                                                 {
-                                                    title: "兑换人 / 兑换时间",
+                                                    title: t("admin.redeemTab.colRedemption"),
                                                     key: "redemption",
                                                     width: 250,
                                                     render: (_, record) => {
@@ -2033,27 +2076,27 @@ export default function AdminPage() {
                                                         return (
                                                             <div className="flex flex-col text-xs leading-5">
                                                                 <div className="flex items-center gap-1.5">
-                                                                    <span className="font-medium">{r.username || r.displayName || "未知用户"}</span>
+                                                                    <span className="font-medium">{r.username || r.displayName || t("admin.redeemTab.unknownUser")}</span>
                                                                     <Typography.Text type="secondary" code className="text-[11px]">
                                                                         {r.userId}
                                                                     </Typography.Text>
-                                                                    <Button size="small" type="text" icon={<Copy className="size-3" />} onClick={() => copyText(r.userId, "已复制用户 ID")} />
+                                                                    <Button size="small" type="text" icon={<Copy className="size-3" />} onClick={() => copyText(r.userId, t("admin.redeemTab.copiedUserId"))} />
                                                                 </div>
                                                                 <Typography.Text type="secondary" className="text-[11px]">
-                                                                    {new Date(r.redeemedAt).toLocaleString("zh-CN")}
+                                                                    {new Date(r.redeemedAt).toLocaleString(locale)}
                                                                 </Typography.Text>
                                                             </div>
                                                         );
                                                     },
                                                 },
                                                 {
-                                                    title: "过期时间",
+                                                    title: t("admin.redeemTab.colExpiresAt"),
                                                     dataIndex: "expiresAt",
                                                     width: 170,
-                                                    render: (v?: string | null) => (v ? new Date(v).toLocaleString("zh-CN") : "永不过期"),
+                                                    render: (v?: string | null) => (v ? new Date(v).toLocaleString(locale) : t("admin.redeemTab.neverExpires")),
                                                 },
                                                 {
-                                                    title: "备注",
+                                                    title: t("admin.redeemTab.colNote"),
                                                     dataIndex: "note",
                                                     width: 180,
                                                     render: (v: string) => (
@@ -2063,7 +2106,7 @@ export default function AdminPage() {
                                                     ),
                                                 },
                                                 {
-                                                    title: "操作",
+                                                    title: t("admin.channelsTab.colActions"),
                                                     key: "actions",
                                                     fixed: "right",
                                                     width: 100,
@@ -2072,16 +2115,16 @@ export default function AdminPage() {
                                                             items={[
                                                                 {
                                                                     key: "toggle",
-                                                                    label: record.status === "active" ? "停用" : "启用",
+                                                                    label: record.status === "active" ? t("admin.redeemTab.actionDisable") : t("admin.redeemTab.actionEnable"),
                                                                     disabled: record.usedCount > 0,
                                                                     onClick: () => void handleToggleRedeemStatus(record),
                                                                 },
                                                                 {
                                                                     key: "delete",
-                                                                    label: "删除",
+                                                                    label: t("common.delete"),
                                                                     danger: true,
                                                                     disabled: record.usedCount > 0,
-                                                                    confirm: "确定删除该兑换码吗？",
+                                                                    confirm: t("admin.redeemTab.confirmDelete"),
                                                                     onClick: () => void handleDeleteRedeemCode(record.id),
                                                                 },
                                                             ]}
@@ -2099,17 +2142,28 @@ export default function AdminPage() {
                             label: (
                                 <span className="inline-flex items-center gap-1.5">
                                     <Database className="size-4" />
-                                    媒体监控
+                                    {t("admin.mediaTab.tabLabel")}
                                 </span>
                             ),
                             children: (
                                 <Card
                                     title={
                                         mediaSubTab !== "media"
-                                            ? `云端业务数据监控（画布 ${mediaWorkspaceStats.canvasProjects} · 生图 ${mediaWorkspaceStats.imageLogs} · 视频 ${mediaWorkspaceStats.videoLogs}）`
+                                            ? t("admin.mediaTab.workspaceCardTitle", {
+                                                  canvas: mediaWorkspaceStats.canvasProjects,
+                                                  image: mediaWorkspaceStats.imageLogs,
+                                                  video: mediaWorkspaceStats.videoLogs,
+                                              })
                                             : mediaQuery || mediaKindFilter || mediaModuleFilter
-                                              ? `云端媒体文件监控（筛选命中 ${mediaTotal} 个，合计 ${formatBytes(mediaFilteredBytes ?? 0)} / 全站总计 ${formatBytes(totalStorageBytes)}）`
-                                              : `云端媒体文件监控（共 ${mediaTotal} 个，总计 ${formatBytes(mediaFilteredBytes ?? totalStorageBytes)}）`
+                                              ? t("admin.mediaTab.filteredMediaTitle", {
+                                                    total: mediaTotal,
+                                                    filtered: formatBytes(mediaFilteredBytes ?? 0),
+                                                    siteTotal: formatBytes(totalStorageBytes),
+                                                })
+                                              : t("admin.mediaTab.allMediaTitle", {
+                                                    total: mediaTotal,
+                                                    size: formatBytes(mediaFilteredBytes ?? totalStorageBytes),
+                                                })
                                     }
                                     extra={
                                         mediaSubTab === "media" ? (
@@ -2121,7 +2175,7 @@ export default function AdminPage() {
                                                         setMediaPage(1);
                                                         setMediaModuleFilter(value);
                                                     }}
-                                                    options={MEDIA_MODULE_OPTIONS}
+                                                    options={getMediaModuleOptions(t)}
                                                 />
                                                 <Select
                                                     value={mediaKindFilter}
@@ -2131,16 +2185,16 @@ export default function AdminPage() {
                                                         setMediaKindFilter(value);
                                                     }}
                                                     options={[
-                                                        { value: "", label: "全部类型" },
-                                                        { value: "image", label: "图片" },
-                                                        { value: "video", label: "视频" },
-                                                        { value: "audio", label: "音频" },
-                                                        { value: "file", label: "其他文件" },
+                                                        { value: "", label: t("admin.mediaTab.allKinds") },
+                                                        { value: "image", label: t("userPanels.mediaKinds.image") },
+                                                        { value: "video", label: t("userPanels.mediaKinds.video") },
+                                                        { value: "audio", label: t("userPanels.mediaKinds.audio") },
+                                                        { value: "file", label: t("userPanels.mediaKinds.file") },
                                                     ]}
                                                 />
                                                 <Input.Search
                                                     allowClear
-                                                    placeholder="搜索路径或用户名"
+                                                    placeholder={t("admin.mediaTab.searchMediaPlaceholder")}
                                                     style={{ width: 220 }}
                                                     onSearch={(value) => {
                                                         setMediaPage(1);
@@ -2148,14 +2202,14 @@ export default function AdminPage() {
                                                     }}
                                                 />
                                                 <Button icon={<RefreshCw className="size-4" />} loading={mediaLoading} onClick={() => void loadMedia()}>
-                                                    刷新
+                                                    {t("common.refresh")}
                                                 </Button>
                                             </Space>
                                         ) : (
                                             <Space wrap>
                                                 <Input.Search
                                                     allowClear
-                                                    placeholder="搜索标题、提示词或用户名"
+                                                    placeholder={t("admin.mediaTab.searchWorkspacePlaceholder")}
                                                     style={{ width: 220 }}
                                                     onSearch={(value) => {
                                                         setWorkspaceDataPage(1);
@@ -2163,7 +2217,7 @@ export default function AdminPage() {
                                                     }}
                                                 />
                                                 <Button icon={<RefreshCw className="size-4" />} loading={workspaceDataLoading} onClick={() => void loadWorkspaceData()}>
-                                                    刷新
+                                                    {t("common.refresh")}
                                                 </Button>
                                             </Space>
                                         )
@@ -2178,7 +2232,7 @@ export default function AdminPage() {
                                         items={[
                                             {
                                                 key: "media",
-                                                label: `云端媒体文件 (${mediaTotal})`,
+                                                label: t("admin.mediaTab.tabMedia", { count: mediaTotal }),
                                                 children: (
                                                     <Table<MediaItem>
                                                         rowKey="id"
@@ -2192,7 +2246,7 @@ export default function AdminPage() {
                                                             total: mediaTotal,
                                                             showSizeChanger: true,
                                                             pageSizeOptions: [10, 20, 30, 50, 100],
-                                                            showTotal: (count) => `共 ${count} 条`,
+                                                            showTotal: (count) => t("common.totalItems", { count }),
                                                             onChange: (page, size) => {
                                                                 if (size !== mediaPageSize) {
                                                                     setMediaPageSize(size);
@@ -2204,7 +2258,7 @@ export default function AdminPage() {
                                                         }}
                                                         columns={[
                                                             {
-                                                                title: "预览 / 对象路径",
+                                                                title: t("admin.mediaTab.colPreviewPath"),
                                                                 key: "preview",
                                                                 width: 300,
                                                                 render: (_, record) => (
@@ -2225,33 +2279,33 @@ export default function AdminPage() {
                                                                     </div>
                                                                 ),
                                                             },
-                                                            { title: "所属用户", dataIndex: "username", width: 120 },
+                                                            { title: t("admin.mediaTab.colOwner"), dataIndex: "username", width: 120 },
                                                             {
-                                                                title: "所属模块",
+                                                                title: t("admin.mediaTab.colModule"),
                                                                 key: "modules",
                                                                 width: 170,
                                                                 render: (_, record) => <MediaModuleTags modules={record.modules} />,
                                                             },
                                                             {
-                                                                title: "类型",
+                                                                title: t("admin.mediaTab.colKind"),
                                                                 dataIndex: "kind",
                                                                 width: 85,
-                                                                render: (kind: string) => <Tag>{kindLabels[kind] || kind}</Tag>,
+                                                                render: (kind: string) => <Tag>{getKindLabel(kind, t)}</Tag>,
                                                             },
                                                             {
-                                                                title: "大小",
+                                                                title: t("admin.mediaTab.colSize"),
                                                                 dataIndex: "bytes",
                                                                 width: 100,
                                                                 render: (bytes: number) => formatBytes(bytes),
                                                             },
                                                             {
-                                                                title: "上传时间",
+                                                                title: t("admin.mediaTab.colUploadedAt"),
                                                                 dataIndex: "createdAt",
                                                                 width: 170,
-                                                                render: (value: string) => new Date(value).toLocaleString("zh-CN"),
+                                                                render: (value: string) => new Date(value).toLocaleString(locale),
                                                             },
                                                             {
-                                                                title: "操作",
+                                                                title: t("admin.channelsTab.colActions"),
                                                                 key: "actions",
                                                                 fixed: "right",
                                                                 width: 100,
@@ -2262,16 +2316,16 @@ export default function AdminPage() {
                                                                                 ? [
                                                                                       {
                                                                                           key: "view",
-                                                                                          label: "查看",
+                                                                                          label: t("common.view"),
                                                                                           onClick: () => setPreviewMediaItem(record),
                                                                                       },
                                                                                   ]
                                                                                 : []),
                                                                             {
                                                                                 key: "delete",
-                                                                                label: "删除",
+                                                                                label: t("common.delete"),
                                                                                 danger: true,
-                                                                                confirm: "确定从对象存储中删除该文件并扣减用户已用容量吗？",
+                                                                                confirm: t("admin.mediaTab.confirmDeleteMedia"),
                                                                                 onClick: () => void handleDeleteMedia(record.id),
                                                                             },
                                                                         ]}
@@ -2284,9 +2338,9 @@ export default function AdminPage() {
                                             },
                                             ...(
                                                 [
-                                                    { key: "canvas", label: `无限画布 (${mediaWorkspaceStats.canvasProjects})` },
-                                                    { key: "image_workbench", label: `生图工作台 (${mediaWorkspaceStats.imageLogs})` },
-                                                    { key: "video_workbench", label: `视频工作台 (${mediaWorkspaceStats.videoLogs})` },
+                                                    { key: "canvas", label: t("admin.mediaTab.tabCanvas", { count: mediaWorkspaceStats.canvasProjects }) },
+                                                    { key: "image_workbench", label: t("admin.mediaTab.tabImageWorkbench", { count: mediaWorkspaceStats.imageLogs }) },
+                                                    { key: "video_workbench", label: t("admin.mediaTab.tabVideoWorkbench", { count: mediaWorkspaceStats.videoLogs }) },
                                                 ] as const
                                             ).map((tabCfg) => ({
                                                 key: tabCfg.key,
@@ -2304,7 +2358,7 @@ export default function AdminPage() {
                                                             total: workspaceDataTotal,
                                                             showSizeChanger: true,
                                                             pageSizeOptions: [10, 20, 30, 50, 100],
-                                                            showTotal: (count) => `共 ${count} 条`,
+                                                            showTotal: (count) => t("common.totalItems", { count }),
                                                             onChange: (page, size) => {
                                                                 if (size !== workspaceDataPageSize) {
                                                                     setWorkspaceDataPageSize(size);
@@ -2316,7 +2370,7 @@ export default function AdminPage() {
                                                         }}
                                                         columns={[
                                                             {
-                                                                title: tabCfg.key === "canvas" ? "画布名称" : "标题 / 提示词",
+                                                                title: tabCfg.key === "canvas" ? t("admin.mediaTab.colCanvasTitle") : t("admin.mediaTab.colPromptTitle"),
                                                                 key: "title",
                                                                 width: 280,
                                                                 render: (_, rec) => (
@@ -2325,20 +2379,20 @@ export default function AdminPage() {
                                                                     </div>
                                                                 ),
                                                             },
-                                                            { title: "所属用户", dataIndex: "username", width: 120 },
+                                                            { title: t("admin.mediaTab.colOwner"), dataIndex: "username", width: 120 },
                                                             tabCfg.key === "canvas"
-                                                                ? { title: "节点数", dataIndex: "nodeCount", width: 90 }
-                                                                : { title: "模型", dataIndex: "model", width: 170, ellipsis: true },
-                                                            { title: "关联媒体", dataIndex: "mediaCount", width: 95, render: (v: number) => `${v ?? 0} 个` },
+                                                                ? { title: t("admin.mediaTab.colNodes"), dataIndex: "nodeCount", width: 90 }
+                                                                : { title: t("admin.mediaTab.colModel"), dataIndex: "model", width: 170, ellipsis: true },
+                                                            { title: t("admin.mediaTab.colLinkedMedia"), dataIndex: "mediaCount", width: 95, render: (v: number) => t("admin.mediaTab.linkedMediaCount", { count: v ?? 0 }) },
                                                             {
-                                                                title: "数据大小",
+                                                                title: t("admin.mediaTab.colDataSize"),
                                                                 key: "mediaBytes",
                                                                 width: 150,
                                                                 render: (_, rec) => <WorkspaceSizeCell mediaBytes={rec.mediaBytes} dataBytes={rec.dataBytes} />,
                                                             },
-                                                            { title: "更新时间", dataIndex: "updatedAt", width: 170, render: (v: string) => new Date(v).toLocaleString("zh-CN") },
+                                                            { title: t("admin.mediaTab.colUpdatedAt"), dataIndex: "updatedAt", width: 170, render: (v: string) => new Date(v).toLocaleString(locale) },
                                                             {
-                                                                title: "操作",
+                                                                title: t("admin.channelsTab.colActions"),
                                                                 key: "actions",
                                                                 fixed: "right",
                                                                 width: 85,
@@ -2347,12 +2401,12 @@ export default function AdminPage() {
                                                                         items={[
                                                                             {
                                                                                 key: "delete",
-                                                                                label: "删除",
+                                                                                label: t("common.delete"),
                                                                                 danger: true,
-                                                                                confirm: "确定删除该云端记录并清理孤立媒体文件吗？",
+                                                                                confirm: t("admin.mediaTab.confirmDeleteWorkspace"),
                                                                                 onClick: () =>
                                                                                     void adminApi.deleteWorkspaceData(rec.kind, rec.id).then(() => {
-                                                                                        message.success("已删除云端记录");
+                                                                                        message.success(t("admin.messages.workspaceDeleted"));
                                                                                         const scope =
                                                                                             rec.kind === "canvas"
                                                                                                 ? "canvas"
@@ -2384,21 +2438,21 @@ export default function AdminPage() {
                             label: (
                                 <span className="inline-flex items-center gap-1.5">
                                     <HardDrive className="size-4" />
-                                    对象存储
+                                    {t("admin.storageTab.tabLabel")}
                                 </span>
                             ),
                             children: (
                                 <div className="flex flex-col gap-5">
                                     <Card
-                                        title="S3 兼容对象存储配置（R2 / 阿里云 OSS / 腾讯云 COS / MinIO）"
-                                        extra={storageConfigured ? <Tag color="green">已配置</Tag> : <Tag color="orange">待配置</Tag>}
+                                        title={t("admin.storageTab.cardTitle")}
+                                        extra={storageConfigured ? <Tag color="green">{t("admin.storageTab.configured")}</Tag> : <Tag color="orange">{t("admin.storageTab.pending")}</Tag>}
                                     >
                                         <Alert
                                             type="info"
                                             showIcon
                                             className="mb-4"
-                                            message="浏览器直传需要存储桶开启 CORS"
-                                            description="请在测试桶的跨域设置中允许当前站点来源使用 GET、PUT、HEAD 方法，并暴露 ETag 响应头。"
+                                            message={t("admin.storageTab.corsTitle")}
+                                            description={t("admin.storageTab.corsDesc")}
                                         />
                                         <Form
                                             form={storageForm}
@@ -2408,79 +2462,79 @@ export default function AdminPage() {
                                         >
                                             <Row gutter={16}>
                                                 <Col xs={24} md={8}>
-                                                    <Form.Item name="provider" label="服务商类型" rules={[{ required: true }]}>
+                                                    <Form.Item name="provider" label={t("admin.storageTab.providerLabel")} rules={[{ required: true }]}>
                                                         <Select
                                                             options={[
-                                                                { value: "r2", label: "Cloudflare R2" },
-                                                                { value: "oss", label: "阿里云 OSS（S3 兼容端点）" },
-                                                                { value: "cos", label: "腾讯云 COS（S3 兼容端点）" },
-                                                                { value: "s3", label: "通用 S3 / MinIO" },
+                                                                { value: "r2", label: t("admin.storageTab.providerR2") },
+                                                                { value: "oss", label: t("admin.storageTab.providerOss") },
+                                                                { value: "cos", label: t("admin.storageTab.providerCos") },
+                                                                { value: "s3", label: t("admin.storageTab.providerS3") },
                                                             ]}
                                                         />
                                                     </Form.Item>
                                                 </Col>
                                                 <Col xs={24} md={8}>
-                                                    <Form.Item name="bucket" label="Bucket 名称" rules={[{ required: true, message: "请输入 Bucket 名称" }]}>
+                                                    <Form.Item name="bucket" label={t("admin.storageTab.bucketLabel")} rules={[{ required: true, message: t("admin.storageTab.bucketReq") }]}>
                                                         <Input placeholder="my-canvas-bucket" />
                                                     </Form.Item>
                                                 </Col>
                                                 <Col xs={24} md={8}>
-                                                    <Form.Item name="region" label="Region（R2 填 auto）" rules={[{ required: true, message: "请输入 Region" }]}>
+                                                    <Form.Item name="region" label={t("admin.storageTab.regionLabel")} rules={[{ required: true, message: t("admin.storageTab.regionReq") }]}>
                                                         <Input placeholder="auto / cn-hangzhou / ap-guangzhou" />
                                                     </Form.Item>
                                                 </Col>
                                                 <Col xs={24} md={12}>
-                                                    <Form.Item name="endpoint" label="Endpoint 地址">
-                                                        <Input placeholder="https://<account_id>.r2.cloudflarestorage.com 或 OSS/COS 端点" />
+                                                    <Form.Item name="endpoint" label={t("admin.storageTab.endpointLabel")}>
+                                                        <Input placeholder={t("admin.storageTab.endpointPlaceholder")} />
                                                     </Form.Item>
                                                 </Col>
                                                 <Col xs={24} md={12}>
-                                                    <Form.Item name="publicBaseUrl" label="自定义公开访问域名（可选，留空则使用签名 URL）">
+                                                    <Form.Item name="publicBaseUrl" label={t("admin.storageTab.publicBaseUrlLabel")}>
                                                         <Input placeholder="https://cdn.example.com" />
                                                     </Form.Item>
                                                 </Col>
                                                 <Col xs={24} md={12}>
-                                                    <Form.Item name="accessKeyId" label="AccessKey ID" rules={[{ required: true, message: "请输入 AccessKey ID" }]}>
+                                                    <Form.Item name="accessKeyId" label={t("admin.storageTab.accessKeyLabel")} rules={[{ required: true, message: t("admin.storageTab.accessKeyReq") }]}>
                                                         <Input placeholder="AccessKey ID" />
                                                     </Form.Item>
                                                 </Col>
                                                 <Col xs={24} md={12}>
                                                     <Form.Item
                                                         name="secretAccessKey"
-                                                        label={`SecretAccessKey${storagePreview ? `（已保存：${storagePreview}，留空则保持不变）` : ""}`}
-                                                        rules={storageConfigured ? [] : [{ required: true, message: "请输入 SecretAccessKey" }]}
+                                                        label={`SecretAccessKey${storagePreview ? t("admin.storageTab.secretSavedSuffix", { preview: storagePreview }) : ""}`}
+                                                        rules={storageConfigured ? [] : [{ required: true, message: t("admin.storageTab.secretReq") }]}
                                                     >
-                                                        <Input.Password placeholder={storagePreview ? "留空表示沿用已保存密钥" : "输入 SecretAccessKey"} />
+                                                        <Input.Password placeholder={storagePreview ? t("admin.storageTab.secretKeepPlaceholder") : t("admin.storageTab.secretInputPlaceholder")} />
                                                     </Form.Item>
                                                 </Col>
                                                 <Col xs={24}>
-                                                    <Form.Item name="forcePathStyle" label="Path-Style 访问（MinIO 通常开启，OSS/COS/R2 通常关闭）" valuePropName="checked">
+                                                    <Form.Item name="forcePathStyle" label={t("admin.storageTab.forcePathStyleLabel")} valuePropName="checked">
                                                         <Switch />
                                                     </Form.Item>
                                                 </Col>
                                             </Row>
                                             <Space>
                                                 <Button onClick={handleTestStorage} loading={storageTesting}>
-                                                    测试连接（读写删探针）
+                                                    {t("admin.storageTab.testProbeBtn")}
                                                 </Button>
                                                 <Button type="primary" htmlType="submit" loading={storageSaving}>
-                                                    保存配置
+                                                    {t("admin.storageTab.saveConfigBtn")}
                                                 </Button>
                                             </Space>
                                         </Form>
                                     </Card>
 
                                     <Card
-                                        title="端到端直传测试"
+                                        title={t("admin.storageTab.directUploadTitle")}
                                         extra={
                                             <Upload showUploadList={false} customRequest={handleDirectUploadTest} disabled={!storageConfigured || uploadingTest}>
                                                 <Button type="primary" icon={<UploadCloud className="size-4" />} loading={uploadingTest} disabled={!storageConfigured}>
-                                                    上传测试文件
+                                                    {t("admin.storageTab.uploadTestBtn")}
                                                 </Button>
                                             </Upload>
                                         }
                                     >
-                                        <Typography.Text type="secondary">上传后可在「媒体监控」页签中查看记录、打开签名链接或删除释放空间。</Typography.Text>
+                                        <Typography.Text type="secondary">{t("admin.storageTab.directUploadHint")}</Typography.Text>
                                     </Card>
                                 </div>
                             ),
@@ -2490,7 +2544,7 @@ export default function AdminPage() {
                             label: (
                                 <span className="inline-flex items-center gap-1.5">
                                     <Sliders className="size-4" />
-                                    系统设置
+                                    {t("admin.settingsTab.tabLabel")}
                                 </span>
                             ),
                             children: [
@@ -2499,18 +2553,18 @@ export default function AdminPage() {
                                     label: (
                                         <span className="inline-flex items-center gap-1.5">
                                             <Shield className="size-3.5" />
-                                            注册与安全
+                                            {t("admin.settingsTab.auth.tab")}
                                         </span>
                                     ),
-                                    pageTitle: "系统设置 · 注册与安全",
+                                    pageTitle: t("admin.settingsTab.auth.pageTitle"),
                                     children: (
-                                        <Card title="注册与安全策略">
+                                        <Card title={t("admin.settingsTab.auth.cardTitle")}>
                                             <div className="flex flex-col gap-4">
                                                 <div className="flex items-center justify-between gap-4">
                                                     <div>
-                                                        <div className="font-medium">允许开放注册</div>
+                                                        <div className="font-medium">{t("admin.settingsTab.auth.allowRegister")}</div>
                                                         <Typography.Text type="secondary">
-                                                            关闭后仅现有管理员可登录，普通用户无法通过注册页自主创建账号（系统首个管理员不受此限制）
+                                                            {t("admin.settingsTab.auth.allowRegisterDesc")}
                                                         </Typography.Text>
                                                     </div>
                                                     <Switch
@@ -2521,9 +2575,9 @@ export default function AdminPage() {
                                                 </div>
                                                 <div className="flex items-center justify-between gap-4 border-t border-black/5 pt-4 dark:border-white/5">
                                                     <div>
-                                                        <div className="font-medium">注册时必须绑定并验证邮箱</div>
+                                                        <div className="font-medium">{t("admin.settingsTab.auth.requireEmail")}</div>
                                                         <Typography.Text type="secondary">
-                                                            开启后新用户注册必须填写邮箱并通过邮件验证码校验（需先在「邮件服务」中启用并完成配置；首个初始化管理员不受限制）
+                                                            {t("admin.settingsTab.auth.requireEmailDesc")}
                                                         </Typography.Text>
                                                     </div>
                                                     <Switch
@@ -2542,19 +2596,19 @@ export default function AdminPage() {
                                     label: (
                                         <span className="inline-flex items-center gap-1.5">
                                             <Mail className="size-3.5" />
-                                            邮件服务
+                                            {t("admin.settingsTab.mail.tab")}
                                         </span>
                                     ),
-                                    pageTitle: "系统设置 · 邮件服务",
+                                    pageTitle: t("admin.settingsTab.mail.pageTitle"),
                                     children: (
                                         <Card
                                             title={
                                                 <span className="inline-flex items-center gap-2">
                                                     <Mail className="size-4" />
-                                                    邮件服务配置（SMTP 与余额不足提醒）
+                                                    {t("admin.settingsTab.mail.cardTitle")}
                                                 </span>
                                             }
-                                            extra={<Tag color={mailReady ? "green" : "default"}>{mailReady ? "已启用" : "未启用"}</Tag>}
+                                            extra={<Tag color={mailReady ? "green" : "default"}>{mailReady ? t("admin.settingsTab.mail.ready") : t("admin.settingsTab.mail.notReady")}</Tag>}
                                         >
                                             <Form
                                                 form={mailForm}
@@ -2563,7 +2617,7 @@ export default function AdminPage() {
                                                     enabled: false,
                                                     port: 465,
                                                     secure: true,
-                                                    fromName: "无限画布",
+                                                    fromName: t("admin.settingsTab.mail.defaultFromName"),
                                                     lowBalanceAlertEnabled: true,
                                                     lowBalanceThreshold: 10,
                                                     lowBalanceCooldownHours: 24,
@@ -2572,64 +2626,64 @@ export default function AdminPage() {
                                             >
                                                 <Row gutter={16}>
                                                     <Col xs={24} md={12}>
-                                                        <Form.Item name="enabled" label="启用平台邮件服务" valuePropName="checked">
+                                                        <Form.Item name="enabled" label={t("admin.settingsTab.mail.enabled")} valuePropName="checked">
                                                             <Switch />
                                                         </Form.Item>
                                                     </Col>
                                                     <Col xs={24} md={12}>
-                                                        <Form.Item name="secure" label="使用 SSL/TLS 加密连接（465 端口通常开启，587 通常关闭）" valuePropName="checked">
+                                                        <Form.Item name="secure" label={t("admin.settingsTab.mail.secure")} valuePropName="checked">
                                                             <Switch />
                                                         </Form.Item>
                                                     </Col>
                                                     <Col xs={24} md={12}>
-                                                        <Form.Item name="host" label="SMTP 服务器地址">
-                                                            <Input placeholder="如 smtp.qq.com 或 smtp.gmail.com" />
+                                                        <Form.Item name="host" label={t("admin.settingsTab.mail.host")}>
+                                                            <Input placeholder={t("admin.settingsTab.mail.hostPlaceholder")} />
                                                         </Form.Item>
                                                     </Col>
                                                     <Col xs={24} md={12}>
-                                                        <Form.Item name="port" label="SMTP 端口">
+                                                        <Form.Item name="port" label={t("admin.settingsTab.mail.port")}>
                                                             <InputNumber min={1} max={65535} className="w-full" placeholder="465" />
                                                         </Form.Item>
                                                     </Col>
                                                     <Col xs={24} md={12}>
-                                                        <Form.Item name="username" label="SMTP 登录账号">
-                                                            <Input placeholder="通常与发件人邮箱一致" />
+                                                        <Form.Item name="username" label={t("admin.settingsTab.mail.username")}>
+                                                            <Input placeholder={t("admin.settingsTab.mail.usernamePlaceholder")} />
                                                         </Form.Item>
                                                     </Col>
                                                     <Col xs={24} md={12}>
                                                         <Form.Item
                                                             name="password"
-                                                            label={`SMTP 密码 / 授权码${mailPasswordPreview ? `（已保存：${mailPasswordPreview}，留空则保持不变）` : ""}`}
+                                                            label={`${t("admin.settingsTab.mail.passwordPrefix")}${mailPasswordPreview ? t("admin.settingsTab.mail.passwordSavedSuffix", { preview: mailPasswordPreview }) : ""}`}
                                                         >
-                                                            <Input.Password placeholder={mailPasswordPreview ? "留空表示沿用已保存密码" : "输入 SMTP 密码或授权码"} />
+                                                            <Input.Password placeholder={mailPasswordPreview ? t("admin.settingsTab.mail.passwordKeepPlaceholder") : t("admin.settingsTab.mail.passwordInputPlaceholder")} />
                                                         </Form.Item>
                                                     </Col>
                                                     <Col xs={24} md={12}>
-                                                        <Form.Item name="fromName" label="发件人显示名称">
-                                                            <Input placeholder="无限画布" />
+                                                        <Form.Item name="fromName" label={t("admin.settingsTab.mail.fromName")}>
+                                                            <Input placeholder={t("admin.settingsTab.mail.defaultFromName")} />
                                                         </Form.Item>
                                                     </Col>
                                                     <Col xs={24} md={12}>
                                                         <Form.Item
                                                             name="fromAddress"
-                                                            label="发件人邮箱地址"
-                                                            rules={[{ type: "email", message: "请输入有效的发件人邮箱地址" }]}
+                                                            label={t("admin.settingsTab.mail.fromAddress")}
+                                                            rules={[{ type: "email", message: t("admin.settingsTab.mail.fromAddressInvalid") }]}
                                                         >
                                                             <Input placeholder="noreply@example.com" />
                                                         </Form.Item>
                                                     </Col>
                                                     <Col xs={24} md={8}>
-                                                        <Form.Item name="lowBalanceAlertEnabled" label="全局默认开启余额不足邮件提醒" valuePropName="checked">
+                                                        <Form.Item name="lowBalanceAlertEnabled" label={t("admin.settingsTab.mail.lowBalanceEnabled")} valuePropName="checked">
                                                             <Switch />
                                                         </Form.Item>
                                                     </Col>
                                                     <Col xs={24} md={8}>
-                                                        <Form.Item name="lowBalanceThreshold" label="默认低余额提醒阈值（积分）">
+                                                        <Form.Item name="lowBalanceThreshold" label={t("admin.settingsTab.mail.lowBalanceThreshold")}>
                                                             <InputNumber min={0} max={1000000} precision={2} className="w-full" />
                                                         </Form.Item>
                                                     </Col>
                                                     <Col xs={24} md={8}>
-                                                        <Form.Item name="lowBalanceCooldownHours" label="同用户提醒最小冷却间隔（小时）">
+                                                        <Form.Item name="lowBalanceCooldownHours" label={t("admin.settingsTab.mail.lowBalanceCooldown")}>
                                                             <InputNumber min={1} max={720} className="w-full" />
                                                         </Form.Item>
                                                     </Col>
@@ -2639,15 +2693,15 @@ export default function AdminPage() {
                                                         <Input
                                                             value={testMailTo}
                                                             onChange={(e) => setTestMailTo(e.target.value)}
-                                                            placeholder="输入测试收件邮箱"
+                                                            placeholder={t("admin.settingsTab.mail.testToPlaceholder")}
                                                             style={{ width: 240 }}
                                                         />
                                                         <Button icon={<Send className="size-4" />} onClick={() => void handleTestMailSettings()} loading={mailTesting}>
-                                                            发送测试邮件
+                                                            {t("admin.settingsTab.mail.sendTestBtn")}
                                                         </Button>
                                                     </Space>
                                                     <Button type="primary" htmlType="submit" loading={mailSaving}>
-                                                        保存邮件配置
+                                                        {t("admin.settingsTab.mail.saveBtn")}
                                                     </Button>
                                                 </div>
                                             </Form>
@@ -2659,12 +2713,12 @@ export default function AdminPage() {
                                     label: (
                                         <span className="inline-flex items-center gap-1.5">
                                             <Wifi className="size-3.5" />
-                                            WebDAV 同步
+                                            {t("admin.settingsTab.webdav.tab")}
                                         </span>
                                     ),
-                                    pageTitle: "系统设置 · WebDAV 同步",
+                                    pageTitle: t("admin.settingsTab.webdav.pageTitle"),
                                     children: (
-                                        <Card title="平台 WebDAV 服务配置（统一管理与按用户分配）">
+                                        <Card title={t("admin.settingsTab.webdav.cardTitle")}>
                                             <Form
                                                 form={webdavForm}
                                                 layout="vertical"
@@ -2673,45 +2727,45 @@ export default function AdminPage() {
                                             >
                                                 <Row gutter={16}>
                                                     <Col xs={24} md={12}>
-                                                        <Form.Item name="enabled" label="启用平台 WebDAV 服务" valuePropName="checked">
+                                                        <Form.Item name="enabled" label={t("admin.settingsTab.webdav.enabled")} valuePropName="checked">
                                                             <Switch />
                                                         </Form.Item>
                                                     </Col>
                                                     <Col xs={24} md={12}>
-                                                        <Form.Item name="autoAssignNewUsers" label="新用户注册时自动分配专属子目录" valuePropName="checked">
+                                                        <Form.Item name="autoAssignNewUsers" label={t("admin.settingsTab.webdav.autoAssign")} valuePropName="checked">
                                                             <Switch />
                                                         </Form.Item>
                                                     </Col>
                                                     <Col xs={24} md={12}>
-                                                        <Form.Item name="url" label="WebDAV 服务地址">
+                                                        <Form.Item name="url" label={t("admin.settingsTab.webdav.url")}>
                                                             <Input placeholder="https://nas.example.com/webdav" />
                                                         </Form.Item>
                                                     </Col>
                                                     <Col xs={24} md={12}>
-                                                        <Form.Item name="baseDirectory" label="默认根目录">
+                                                        <Form.Item name="baseDirectory" label={t("admin.settingsTab.webdav.baseDir")}>
                                                             <Input placeholder="infinite-canvas" />
                                                         </Form.Item>
                                                     </Col>
                                                     <Col xs={24} md={12}>
-                                                        <Form.Item name="username" label="默认用户名">
-                                                            <Input placeholder="WebDAV 用户名" />
+                                                        <Form.Item name="username" label={t("admin.settingsTab.webdav.username")}>
+                                                            <Input placeholder={t("admin.settingsTab.webdav.usernamePlaceholder")} />
                                                         </Form.Item>
                                                     </Col>
                                                     <Col xs={24} md={12}>
                                                         <Form.Item
                                                             name="password"
-                                                            label={`默认密码${webdavPasswordPreview ? `（已保存：${webdavPasswordPreview}，留空则保持不变）` : ""}`}
+                                                            label={`${t("admin.settingsTab.webdav.passwordPrefix")}${webdavPasswordPreview ? t("admin.settingsTab.webdav.passwordSavedSuffix", { preview: webdavPasswordPreview }) : ""}`}
                                                         >
-                                                            <Input.Password placeholder={webdavPasswordPreview ? "留空表示沿用已保存密码" : "输入 WebDAV 密码"} />
+                                                            <Input.Password placeholder={webdavPasswordPreview ? t("admin.settingsTab.webdav.passwordKeepPlaceholder") : t("admin.settingsTab.webdav.passwordInputPlaceholder")} />
                                                         </Form.Item>
                                                     </Col>
                                                 </Row>
                                                 <Space>
                                                     <Button icon={<Wifi className="size-4" />} onClick={() => void handleTestPlatformWebdav()} loading={webdavTesting}>
-                                                        测试连接
+                                                        {t("admin.settingsTab.webdav.testBtn")}
                                                     </Button>
                                                     <Button type="primary" htmlType="submit" loading={webdavSaving}>
-                                                        保存 WebDAV 配置
+                                                        {t("admin.settingsTab.webdav.saveBtn")}
                                                     </Button>
                                                 </Space>
                                             </Form>
@@ -2723,31 +2777,31 @@ export default function AdminPage() {
                                     label: (
                                         <span className="inline-flex items-center gap-1.5">
                                             <HardDrive className="size-3.5" />
-                                            存储到期清理
+                                            {t("admin.settingsTab.storageExpiry.tab")}
                                         </span>
                                     ),
-                                    pageTitle: "系统设置 · 存储到期清理",
+                                    pageTitle: t("admin.settingsTab.storageExpiry.pageTitle"),
                                     children: (
                                         <Card
                                             title={
                                                 <span className="inline-flex items-center gap-2">
                                                     <HardDrive className="size-4" />
-                                                    云存储到期提醒与宽限期清理策略
+                                                    {t("admin.settingsTab.storageExpiry.cardTitle")}
                                                 </span>
                                             }
-                                            extra={<Tag color={storageExpiryEnabled ? "green" : "default"}>{storageExpiryEnabled ? "自动巡检已开启" : "自动巡检未开启"}</Tag>}
+                                            extra={<Tag color={storageExpiryEnabled ? "green" : "default"}>{storageExpiryEnabled ? t("admin.settingsTab.storageExpiry.sweepOn") : t("admin.settingsTab.storageExpiry.sweepOff")}</Tag>}
                                         >
                                             <Alert
                                                 type="info"
                                                 showIcon
                                                 className="mb-4"
-                                                title="云存储到期处理流程说明"
+                                                title={t("admin.settingsTab.storageExpiry.flowTitle")}
                                                 description={
                                                     <div className="space-y-1 text-xs leading-6">
-                                                        <div>1. 到期前预警：在配额或限时存储包到期前「预警天数」内发送一次提醒邮件（设为 0 则关闭预提醒，未绑定邮箱账号仅跳过发信）。</div>
-                                                        <div>2. 到期宽限通知：配额到期且已用空间超出剩余有效配额时，进入宽限期并发送宽限通知邮件。</div>
-                                                        <div>3. 逾期与超额清理：超过宽限期仍未续期，或开启「清理无到期时间的纯超额账号」且已用空间超过当前有效配额时，按上传时间从旧到新清理超出部分云端媒体；若仍超额（如有效配额归零），可按策略清理该用户的云端画布、工作台记录与个人资产。</div>
-                                                        <div>4. 后台定时器每小时自动执行一次巡检，单轮最多处理 50 位账号；邮件服务未启用时仍可执行清理，预警发信将在邮件恢复后自动重试。</div>
+                                                        <div>{t("admin.settingsTab.storageExpiry.flowStep1")}</div>
+                                                        <div>{t("admin.settingsTab.storageExpiry.flowStep2")}</div>
+                                                        <div>{t("admin.settingsTab.storageExpiry.flowStep3")}</div>
+                                                        <div>{t("admin.settingsTab.storageExpiry.flowStep4")}</div>
                                                     </div>
                                                 }
                                             />
@@ -2766,32 +2820,32 @@ export default function AdminPage() {
                                             >
                                                 <Row gutter={16}>
                                                     <Col xs={24} md={6}>
-                                                        <Form.Item name="enabled" label="启用每小时自动到期巡检与清理" valuePropName="checked">
+                                                        <Form.Item name="enabled" label={t("admin.settingsTab.storageExpiry.enabledLabel")} valuePropName="checked">
                                                             <Switch />
                                                         </Form.Item>
                                                     </Col>
                                                     <Col xs={24} md={6}>
-                                                        <Form.Item name="exemptAdmins" label="豁免管理员账号" valuePropName="checked">
+                                                        <Form.Item name="exemptAdmins" label={t("admin.settingsTab.storageExpiry.exemptAdminsLabel")} valuePropName="checked">
                                                             <Switch />
                                                         </Form.Item>
                                                     </Col>
                                                     <Col xs={24} md={6}>
-                                                        <Form.Item name="cleanupOverQuotaWithoutExpiry" label="清理无到期时间的纯超额账号" valuePropName="checked">
+                                                        <Form.Item name="cleanupOverQuotaWithoutExpiry" label={t("admin.settingsTab.storageExpiry.cleanupOverQuotaLabel")} valuePropName="checked">
                                                             <Switch />
                                                         </Form.Item>
                                                     </Col>
                                                     <Col xs={24} md={6}>
-                                                        <Form.Item name="cleanupWorkspaceData" label="文件清理后仍超额时清理画布/记录/资产" valuePropName="checked">
+                                                        <Form.Item name="cleanupWorkspaceData" label={t("admin.settingsTab.storageExpiry.cleanupWorkspaceLabel")} valuePropName="checked">
                                                             <Switch />
                                                         </Form.Item>
                                                     </Col>
                                                     <Col xs={24} md={12}>
-                                                        <Form.Item name="preExpiryWarnDays" label="到期前邮件预警天数（0~30，0 为关闭预提醒）">
+                                                        <Form.Item name="preExpiryWarnDays" label={t("admin.settingsTab.storageExpiry.warnDaysLabel")}>
                                                             <InputNumber min={0} max={30} precision={0} className="w-full" />
                                                         </Form.Item>
                                                     </Col>
                                                     <Col xs={24} md={12}>
-                                                        <Form.Item name="gracePeriodDays" label="到期后保留宽限天数（1~365，默认 7 天）">
+                                                        <Form.Item name="gracePeriodDays" label={t("admin.settingsTab.storageExpiry.graceDaysLabel")}>
                                                             <InputNumber min={1} max={365} precision={0} className="w-full" />
                                                         </Form.Item>
                                                     </Col>
@@ -2799,7 +2853,7 @@ export default function AdminPage() {
                                                 <div className="flex flex-wrap items-center justify-between gap-3">
                                                     <Space wrap>
                                                         <Button type="primary" htmlType="submit" loading={storageExpirySaving}>
-                                                            保存清理策略
+                                                            {t("admin.settingsTab.storageExpiry.savePolicyBtn")}
                                                         </Button>
                                                         <Button
                                                             icon={<RefreshCw className="size-4" />}
@@ -2807,13 +2861,13 @@ export default function AdminPage() {
                                                             loading={storageExpiryPreviewing}
                                                             disabled={storageExpiryRunning}
                                                         >
-                                                            预览受影响账号
+                                                            {t("admin.settingsTab.storageExpiry.previewBtn")}
                                                         </Button>
                                                         <Popconfirm
-                                                            title="确认立即执行一次存储到期巡检？"
-                                                            description="将按上方策略向符合条件的用户发送提醒邮件，并对超过宽限期的账号执行实际清理。"
-                                                            okText="立即执行"
-                                                            cancelText="取消"
+                                                            title={t("admin.settingsTab.storageExpiry.confirmRunTitle")}
+                                                            description={t("admin.settingsTab.storageExpiry.confirmRunDesc")}
+                                                            okText={t("admin.settingsTab.storageExpiry.confirmRunOk")}
+                                                            cancelText={t("common.cancel")}
                                                             onConfirm={() => void handleRunStorageExpirySweep(false)}
                                                         >
                                                             <Button
@@ -2822,11 +2876,11 @@ export default function AdminPage() {
                                                                 loading={storageExpiryRunning}
                                                                 disabled={storageExpiryPreviewing}
                                                             >
-                                                                立即执行一次巡检
+                                                                {t("admin.settingsTab.storageExpiry.runNowBtn")}
                                                             </Button>
                                                         </Popconfirm>
                                                     </Space>
-                                                    {!mailReady ? <Typography.Text type="warning">提示：当前平台邮件服务未启用，发信将跳过或失败。</Typography.Text> : null}
+                                                    {!mailReady ? <Typography.Text type="warning">{t("admin.settingsTab.storageExpiry.mailNotReadyTip")}</Typography.Text> : null}
                                                 </div>
                                             </Form>
 
@@ -2835,33 +2889,33 @@ export default function AdminPage() {
                                                     <div className="flex flex-wrap items-center justify-between gap-2">
                                                         <Space wrap>
                                                             <Tag color={storageExpiryResult.dryRun ? "blue" : "green"}>
-                                                                {storageExpiryResult.dryRun ? "演练预览结果（未修改数据）" : "实际执行结果"}
+                                                                {storageExpiryResult.dryRun ? t("admin.settingsTab.storageExpiry.dryRunTag") : t("admin.settingsTab.storageExpiry.liveRunTag")}
                                                             </Tag>
-                                                            <Tag>活跃有占用：{storageExpiryResult.scannedUsers} 人</Tag>
-                                                            <Tag>待处理：{storageExpiryResult.eligibleUsers} 人</Tag>
-                                                            <Tag color="gold">预提醒：{storageExpiryResult.preExpiryWarned}</Tag>
-                                                            <Tag color="orange">宽限通知：{storageExpiryResult.expiredNoticed}</Tag>
-                                                            <Tag color="red">已清理/待清理：{storageExpiryResult.cleanedUsers}</Tag>
-                                                            <Tag color="purple">释放空间：{formatBytes(storageExpiryResult.freedBytesTotal)}</Tag>
-                                                            {storageExpiryResult.failedCount > 0 ? <Tag color="error">异常：{storageExpiryResult.failedCount}</Tag> : null}
+                                                            <Tag>{t("admin.settingsTab.storageExpiry.scannedUsers", { count: storageExpiryResult.scannedUsers })}</Tag>
+                                                            <Tag>{t("admin.settingsTab.storageExpiry.eligibleUsers", { count: storageExpiryResult.eligibleUsers })}</Tag>
+                                                            <Tag color="gold">{t("admin.settingsTab.storageExpiry.warnedCount", { count: storageExpiryResult.preExpiryWarned })}</Tag>
+                                                            <Tag color="orange">{t("admin.settingsTab.storageExpiry.noticedCount", { count: storageExpiryResult.expiredNoticed })}</Tag>
+                                                            <Tag color="red">{t("admin.settingsTab.storageExpiry.cleanedCount", { count: storageExpiryResult.cleanedUsers })}</Tag>
+                                                            <Tag color="purple">{t("admin.settingsTab.storageExpiry.freedBytes", { size: formatBytes(storageExpiryResult.freedBytesTotal) })}</Tag>
+                                                            {storageExpiryResult.failedCount > 0 ? <Tag color="error">{t("admin.settingsTab.storageExpiry.failedCount", { count: storageExpiryResult.failedCount })}</Tag> : null}
                                                         </Space>
                                                         <Typography.Text type="secondary" className="text-xs">
-                                                            执行时间：{dayjs(storageExpiryResult.executedAt).format("YYYY-MM-DD HH:mm:ss")}
+                                                            {t("admin.settingsTab.storageExpiry.executedAt", { time: dayjs(storageExpiryResult.executedAt).format("YYYY-MM-DD HH:mm:ss") })}
                                                         </Typography.Text>
                                                     </div>
                                                     {storageExpiryResult.truncated ? (
-                                                        <Alert type="warning" showIcon title="本轮命中账号超过单次上限（50 人），剩余账号将在下一轮继续处理。" />
+                                                        <Alert type="warning" showIcon title={t("admin.settingsTab.storageExpiry.truncatedAlert")} />
                                                     ) : null}
                                                     <Table<StorageExpirySweepItem>
                                                         className={ADMIN_TABLE_CLASS}
                                                         rowKey={(row) => `${row.userId}-${row.action}`}
                                                         dataSource={storageExpiryResult.items}
-                                                        pagination={{ defaultPageSize: 10, showSizeChanger: true, pageSizeOptions: [10, 20, 30, 50, 100], showTotal: (count) => `共 ${count} 条` }}
+                                                        pagination={{ defaultPageSize: 10, showSizeChanger: true, pageSizeOptions: [10, 20, 30, 50, 100], showTotal: (count) => t("common.totalItems", { count }) }}
                                                         scroll={{ x: 960 }}
-                                                        locale={{ emptyText: "当前没有需要预警、宽限通知或清理的超额/过期账号" }}
+                                                        locale={{ emptyText: t("admin.settingsTab.storageExpiry.emptyText") }}
                                                         columns={[
                                                             {
-                                                                title: "用户",
+                                                                title: t("admin.settingsTab.storageExpiry.colUser"),
                                                                 width: 180,
                                                                 render: (_, row) => (
                                                                     <div>
@@ -2873,63 +2927,70 @@ export default function AdminPage() {
                                                                 ),
                                                             },
                                                             {
-                                                                title: "邮箱",
+                                                                title: t("admin.settingsTab.storageExpiry.colEmail"),
                                                                 width: 190,
-                                                                render: (_, row) => row.email || <Typography.Text type="secondary">未绑定邮箱</Typography.Text>,
+                                                                render: (_, row) => row.email || <Typography.Text type="secondary">{t("admin.settingsTab.storageExpiry.unboundEmail")}</Typography.Text>,
                                                             },
                                                             {
-                                                                title: "处理动作",
+                                                                title: t("admin.settingsTab.storageExpiry.colAction"),
                                                                 width: 120,
                                                                 render: (_, row) => {
-                                                                    if (row.action === "pre_expiry_warn") return <Tag color="gold">到期前预警</Tag>;
-                                                                    if (row.action === "expired_notice") return <Tag color="orange">宽限期通知</Tag>;
+                                                                    if (row.action === "pre_expiry_warn") return <Tag color="gold">{t("admin.settingsTab.storageExpiry.actionPreWarn")}</Tag>;
+                                                                    if (row.action === "expired_notice") return <Tag color="orange">{t("admin.settingsTab.storageExpiry.actionExpiredNotice")}</Tag>;
                                                                     if (row.action === "over_quota_cleaned") {
-                                                                        return <Tag color="volcano">{storageExpiryResult.dryRun ? "待超额清理" : "已超额清理"}</Tag>;
+                                                                        return <Tag color="volcano">{storageExpiryResult.dryRun ? t("admin.settingsTab.storageExpiry.actionOverQuotaPending") : t("admin.settingsTab.storageExpiry.actionOverQuotaDone")}</Tag>;
                                                                     }
-                                                                    return <Tag color="red">{storageExpiryResult.dryRun ? "待逾期清理" : "已逾期清理"}</Tag>;
+                                                                    return <Tag color="red">{storageExpiryResult.dryRun ? t("admin.settingsTab.storageExpiry.actionExpiredPending") : t("admin.settingsTab.storageExpiry.actionExpiredDone")}</Tag>;
                                                                 },
                                                             },
                                                             {
-                                                                title: "配额到期 / 宽限截止",
+                                                                title: t("admin.settingsTab.storageExpiry.colExpiryGrace"),
                                                                 width: 210,
                                                                 render: (_, row) =>
                                                                     row.expiresAt ? (
                                                                         <div className="text-xs leading-5">
-                                                                            <div>到期：{dayjs(row.expiresAt).format("YYYY-MM-DD HH:mm")}</div>
+                                                                            <div>{t("admin.settingsTab.storageExpiry.expiresLine", { time: dayjs(row.expiresAt).format("YYYY-MM-DD HH:mm") })}</div>
                                                                             {row.graceEndsAt ? (
                                                                                 <Typography.Text type="secondary">
-                                                                                    宽限截止：{dayjs(row.graceEndsAt).format("YYYY-MM-DD HH:mm")}
+                                                                                    {t("admin.settingsTab.storageExpiry.graceLine", { time: dayjs(row.graceEndsAt).format("YYYY-MM-DD HH:mm") })}
                                                                                 </Typography.Text>
                                                                             ) : null}
                                                                         </div>
                                                                     ) : (
                                                                         <Typography.Text type="secondary" className="text-xs">
-                                                                            永久有效（当前已超额）
+                                                                            {t("admin.settingsTab.storageExpiry.permanentOverQuota")}
                                                                         </Typography.Text>
                                                                     ),
                                                             },
                                                             {
-                                                                title: "已用 / 有效配额",
+                                                                title: t("admin.settingsTab.storageExpiry.colUsedQuota"),
                                                                 width: 160,
                                                                 render: (_, row) => (
                                                                     <div className="text-xs leading-5">
-                                                                        <div>已用：{formatBytes(row.usedBytes)}</div>
-                                                                        <Typography.Text type="secondary">有效：{formatBytes(row.quotaBytes)}</Typography.Text>
+                                                                        <div>{t("admin.settingsTab.storageExpiry.usedLine", { size: formatBytes(row.usedBytes) })}</div>
+                                                                        <Typography.Text type="secondary">{t("admin.settingsTab.storageExpiry.quotaLine", { size: formatBytes(row.quotaBytes) })}</Typography.Text>
                                                                     </div>
                                                                 ),
                                                             },
                                                             {
-                                                                title: "预计 / 实际清理",
+                                                                title: t("admin.settingsTab.storageExpiry.colCleanup"),
                                                                 width: 190,
                                                                 render: (_, row) =>
                                                                     row.action === "cleaned" || row.action === "over_quota_cleaned" ? (
                                                                         <div className="text-xs leading-5">
                                                                             <div>
-                                                                                媒体 {row.deletedMediaCount} 个（{formatBytes(row.freedBytes)}）
+                                                                                {t("admin.settingsTab.storageExpiry.cleanupMedia", {
+                                                                                    count: row.deletedMediaCount,
+                                                                                    size: formatBytes(row.freedBytes),
+                                                                                })}
                                                                             </div>
                                                                             {row.deletedCanvasCount || row.deletedWorkbenchCount || row.deletedAssetCount ? (
                                                                                 <Typography.Text type="secondary">
-                                                                                    画布 {row.deletedCanvasCount} / 记录 {row.deletedWorkbenchCount} / 资产 {row.deletedAssetCount}
+                                                                                    {t("admin.settingsTab.storageExpiry.cleanupWorkspace", {
+                                                                                        canvas: row.deletedCanvasCount,
+                                                                                        workbench: row.deletedWorkbenchCount,
+                                                                                        assets: row.deletedAssetCount,
+                                                                                    })}
                                                                                 </Typography.Text>
                                                                             ) : null}
                                                                         </div>
@@ -2938,7 +2999,7 @@ export default function AdminPage() {
                                                                     ),
                                                             },
                                                             {
-                                                                title: "邮件 / 状态",
+                                                                title: t("admin.settingsTab.storageExpiry.colEmailStatus"),
                                                                 width: 160,
                                                                 render: (_, row) =>
                                                                     row.error ? (
@@ -2947,12 +3008,12 @@ export default function AdminPage() {
                                                                         </Typography.Text>
                                                                     ) : storageExpiryResult.dryRun ? (
                                                                         <Typography.Text type="secondary" className="text-xs">
-                                                                            预览待执行
+                                                                            {t("admin.settingsTab.storageExpiry.previewPending")}
                                                                         </Typography.Text>
                                                                     ) : row.emailSent ? (
-                                                                        <Tag color="green">已发邮件</Tag>
+                                                                        <Tag color="green">{t("admin.settingsTab.storageExpiry.emailSent")}</Tag>
                                                                     ) : (
-                                                                        <Tag>跳过发信</Tag>
+                                                                        <Tag>{t("admin.settingsTab.storageExpiry.emailSkipped")}</Tag>
                                                                     ),
                                                             },
                                                         ]}
@@ -2967,18 +3028,18 @@ export default function AdminPage() {
                                     label: (
                                         <span className="inline-flex items-center gap-1.5">
                                             <Megaphone className="size-3.5" />
-                                            公告管理
+                                            {t("admin.settingsTab.announcements.tab")}
                                         </span>
                                     ),
-                                    pageTitle: "系统设置 · 公告管理",
+                                    pageTitle: t("admin.settingsTab.announcements.pageTitle"),
                                     children: (
                                         <div className="flex flex-col gap-5">
                                             <Card
-                                                title="全局公告（顶部铃铛「通知」页签）"
+                                                title={t("admin.settingsTab.announcements.globalCardTitle")}
                                                 extra={
                                                     noticeUpdatedAt ? (
                                                         <Typography.Text type="secondary" className="text-xs">
-                                                            最近更新：{new Date(noticeUpdatedAt).toLocaleString("zh-CN")}
+                                                            {t("admin.settingsTab.announcements.lastUpdated", { time: new Date(noticeUpdatedAt).toLocaleString(locale) })}
                                                         </Typography.Text>
                                                     ) : null
                                                 }
@@ -2987,8 +3048,8 @@ export default function AdminPage() {
                                                     type="info"
                                                     showIcon
                                                     className="mb-4"
-                                                    message="全局公告用于置顶展示重要平台通知（支持 Markdown）"
-                                                    description="开启且内容更新保存后，前端页面会主动弹出系统公告弹窗提醒用户，用户确认已读后不再重复自动弹出，但仍可随时点击顶部铃铛查看。"
+                                                    message={t("admin.settingsTab.announcements.globalAlertTitle")}
+                                                    description={t("admin.settingsTab.announcements.globalAlertDesc")}
                                                 />
                                                 <Form
                                                     form={noticeForm}
@@ -2996,31 +3057,31 @@ export default function AdminPage() {
                                                     initialValues={{ enabled: false, title: "", content: "" }}
                                                     onFinish={handleSaveGlobalNotice}
                                                 >
-                                                    <Form.Item name="enabled" label="启用全局公告" valuePropName="checked">
+                                                    <Form.Item name="enabled" label={t("admin.settingsTab.announcements.globalEnabled")} valuePropName="checked">
                                                         <Switch />
                                                     </Form.Item>
-                                                    <Form.Item name="title" label="公告标题（可选）">
-                                                        <Input placeholder="例如：重要系统通知 / 接口维护公告" maxLength={120} />
+                                                    <Form.Item name="title" label={t("admin.settingsTab.announcements.globalTitle")}>
+                                                        <Input placeholder={t("admin.settingsTab.announcements.globalTitlePlaceholder")} maxLength={120} />
                                                     </Form.Item>
-                                                    <Form.Item name="content" label="公告内容（支持 Markdown）">
+                                                    <Form.Item name="content" label={t("admin.settingsTab.announcements.globalContent")}>
                                                         <Input.TextArea
                                                             rows={6}
                                                             maxLength={10000}
                                                             showCount
-                                                            placeholder="输入全局公告内容，支持 # 标题、**加粗**、列表、链接等 Markdown 语法..."
+                                                            placeholder={t("admin.settingsTab.announcements.globalContentPlaceholder")}
                                                         />
                                                     </Form.Item>
                                                     <Button type="primary" htmlType="submit" loading={noticeSaving}>
-                                                        保存全局公告
+                                                        {t("admin.settingsTab.announcements.saveGlobalBtn")}
                                                     </Button>
                                                 </Form>
                                             </Card>
 
                                             <Card
-                                                title="时间线通知（顶部铃铛「时间线」页签）"
+                                                title={t("admin.settingsTab.announcements.timelineCardTitle")}
                                                 extra={
                                                     <Button type="primary" icon={<Plus className="size-4" />} onClick={handleOpenCreateAnnouncement}>
-                                                        发布时间线通知
+                                                        {t("admin.settingsTab.announcements.createBtn")}
                                                     </Button>
                                                 }
                                             >
@@ -3030,10 +3091,10 @@ export default function AdminPage() {
                                                     scroll={ADMIN_TABLE_SCROLL}
                                                     loading={announcementsLoading}
                                                     dataSource={announcements}
-                                                    pagination={{ defaultPageSize: 10, showSizeChanger: true, pageSizeOptions: [10, 20, 30, 50, 100], showTotal: (count) => `共 ${count} 条` }}
+                                                    pagination={{ defaultPageSize: 10, showSizeChanger: true, pageSizeOptions: [10, 20, 30, 50, 100], showTotal: (count) => t("common.totalItems", { count }) }}
                                                     columns={[
                                                         {
-                                                            title: "通知内容",
+                                                            title: t("admin.settingsTab.announcements.colContent"),
                                                             key: "title",
                                                             width: 320,
                                                             render: (_, record) => (
@@ -3041,7 +3102,7 @@ export default function AdminPage() {
                                                                     <div className="flex items-center gap-1.5">
                                                                         {record.isPinned ? (
                                                                             <Tag color="gold" style={{ marginInlineEnd: 0 }}>
-                                                                                置顶
+                                                                                {t("admin.settingsTab.announcements.pinnedTag")}
                                                                             </Tag>
                                                                         ) : null}
                                                                         <span className="truncate font-medium">{record.title}</span>
@@ -3053,7 +3114,7 @@ export default function AdminPage() {
                                                             ),
                                                         },
                                                         {
-                                                            title: "状态",
+                                                            title: t("admin.settingsTab.announcements.colStatus"),
                                                             dataIndex: "level",
                                                             width: 120,
                                                             render: (level: AnnouncementLevel, record) => (
@@ -3067,7 +3128,7 @@ export default function AdminPage() {
                                                             ),
                                                         },
                                                         {
-                                                            title: "置顶",
+                                                            title: t("admin.settingsTab.announcements.colPin"),
                                                             dataIndex: "isPinned",
                                                             width: 80,
                                                             render: (checked: boolean, record) => (
@@ -3079,7 +3140,7 @@ export default function AdminPage() {
                                                             ),
                                                         },
                                                         {
-                                                            title: "展示状态",
+                                                            title: t("admin.settingsTab.announcements.colPublished"),
                                                             dataIndex: "isPublished",
                                                             width: 90,
                                                             render: (checked: boolean, record) => (
@@ -3091,13 +3152,13 @@ export default function AdminPage() {
                                                             ),
                                                         },
                                                         {
-                                                            title: "发布时间",
+                                                            title: t("admin.settingsTab.announcements.colPublishedAt"),
                                                             dataIndex: "createdAt",
                                                             width: 170,
-                                                            render: (value: string) => new Date(value).toLocaleString("zh-CN"),
+                                                            render: (value: string) => new Date(value).toLocaleString(locale),
                                                         },
                                                         {
-                                                            title: "操作",
+                                                            title: t("admin.channelsTab.colActions"),
                                                             key: "actions",
                                                             fixed: "right",
                                                             width: 100,
@@ -3106,14 +3167,14 @@ export default function AdminPage() {
                                                                     items={[
                                                                         {
                                                                             key: "edit",
-                                                                            label: "编辑",
+                                                                            label: t("common.edit"),
                                                                             onClick: () => handleOpenEditAnnouncement(record),
                                                                         },
                                                                         {
                                                                             key: "delete",
-                                                                            label: "删除",
+                                                                            label: t("common.delete"),
                                                                             danger: true,
-                                                                            confirm: "确定删除这条通知吗？",
+                                                                            confirm: t("admin.settingsTab.announcements.confirmDelete"),
                                                                             onClick: () => void handleDeleteAnnouncement(record.id),
                                                                         },
                                                                     ]}
@@ -3131,18 +3192,18 @@ export default function AdminPage() {
                                     label: (
                                         <span className="inline-flex items-center gap-1.5">
                                             <BarChart3 className="size-3.5" />
-                                            数据与日志
+                                            {t("admin.settingsTab.analytics.tab")}
                                         </span>
                                     ),
-                                    pageTitle: "系统设置 · 数据采样与日志保留",
+                                    pageTitle: t("admin.settingsTab.analytics.pageTitle"),
                                     children: (
-                                        <Card title="数据看板采样周期与使用日志保留策略">
+                                        <Card title={t("admin.settingsTab.analytics.cardTitle")}>
                                             <Alert
                                                 type="info"
                                                 showIcon
                                                 className="mb-4"
-                                                message="采样缓存与日志保留说明"
-                                                description="适当增大采样周期可避免高频访问看板反复聚合数据库；设置使用日志保留天数后，后台每 6 小时自动清理超出天数的 AI 调用日志（严格永久保留充值与管理员调账流水，不影响用户积分余额）。"
+                                                message={t("admin.settingsTab.analytics.alertTitle")}
+                                                description={t("admin.settingsTab.analytics.alertDesc")}
                                             />
                                             <Form
                                                 form={analyticsForm}
@@ -3154,8 +3215,8 @@ export default function AdminPage() {
                                                     <Col xs={24} md={12}>
                                                         <Form.Item
                                                             name="sampleIntervalMinutes"
-                                                            label="数据看板采样间隔（分钟，1 ~ 1440）"
-                                                            rules={[{ required: true, message: "请输入采样间隔" }]}
+                                                            label={t("admin.settingsTab.analytics.sampleIntervalLabel")}
+                                                            rules={[{ required: true, message: t("admin.settingsTab.analytics.sampleIntervalReq") }]}
                                                         >
                                                             <InputNumber min={1} max={1440} precision={0} className="w-full" />
                                                         </Form.Item>
@@ -3166,7 +3227,7 @@ export default function AdminPage() {
                                                                     size="small"
                                                                     onClick={() => analyticsForm.setFieldValue("sampleIntervalMinutes", mins)}
                                                                 >
-                                                                    {mins} 分钟
+                                                                    {t("admin.settingsTab.analytics.minuteOption", { mins })}
                                                                 </Button>
                                                             ))}
                                                         </div>
@@ -3174,19 +3235,19 @@ export default function AdminPage() {
                                                     <Col xs={24} md={12}>
                                                         <Form.Item
                                                             name="logRetentionDays"
-                                                            label="AI 使用日志保留天数（0 表示永久保留，最大 3650 天）"
-                                                            rules={[{ required: true, message: "请输入保留天数" }]}
+                                                            label={t("admin.settingsTab.analytics.logRetentionLabel")}
+                                                            rules={[{ required: true, message: t("admin.settingsTab.analytics.logRetentionReq") }]}
                                                         >
                                                             <InputNumber min={0} max={3650} precision={0} className="w-full" />
                                                         </Form.Item>
                                                         <div className="mb-4 flex flex-wrap gap-1.5">
                                                             {[
-                                                                { label: "永久保留", days: 0 },
-                                                                { label: "7 天", days: 7 },
-                                                                { label: "30 天", days: 30 },
-                                                                { label: "90 天", days: 90 },
-                                                                { label: "180 天", days: 180 },
-                                                                { label: "365 天", days: 365 },
+                                                                { label: t("admin.settingsTab.analytics.retentionPermanent"), days: 0 },
+                                                                { label: t("admin.settingsTab.analytics.retentionDays", { days: 7 }), days: 7 },
+                                                                { label: t("admin.settingsTab.analytics.retentionDays", { days: 30 }), days: 30 },
+                                                                { label: t("admin.settingsTab.analytics.retentionDays", { days: 90 }), days: 90 },
+                                                                { label: t("admin.settingsTab.analytics.retentionDays", { days: 180 }), days: 180 },
+                                                                { label: t("admin.settingsTab.analytics.retentionDays", { days: 365 }), days: 365 },
                                                             ].map((item) => (
                                                                 <Button
                                                                     key={item.days}
@@ -3201,15 +3262,15 @@ export default function AdminPage() {
                                                 </Row>
                                                 <Space wrap>
                                                     <Button type="primary" htmlType="submit" loading={analyticsSaving}>
-                                                        保存配置
+                                                        {t("admin.storageTab.saveConfigBtn")}
                                                     </Button>
                                                     <Popconfirm
-                                                        title="确定立即清理过期 AI 调用日志吗？"
-                                                        description="仅删除超出保留天数的调用记录，充值与管理员调账流水将永久保留。"
+                                                        title={t("admin.settingsTab.analytics.confirmCleanupTitle")}
+                                                        description={t("admin.settingsTab.analytics.confirmCleanupDesc")}
                                                         onConfirm={() => void handleCleanupExpiredLogs()}
                                                     >
                                                         <Button danger loading={cleaningLogs}>
-                                                            立即清理过期日志
+                                                            {t("admin.settingsTab.analytics.cleanupBtn")}
                                                         </Button>
                                                     </Popconfirm>
                                                 </Space>
@@ -3257,24 +3318,24 @@ export default function AdminPage() {
             ? [
                   {
                       type: "group",
-                      label: "平台管理",
+                      label: t("admin.nav.platformAdmin"),
                       children: adminTabs.map(toMenuItem),
                   },
                   {
                       type: "group",
-                      label: "个人中心",
+                      label: t("admin.nav.personalCenter"),
                       children: personalTabs.map(toMenuItem),
                   },
               ]
             : [
                   {
                       type: "group",
-                      label: "个人中心",
+                      label: t("admin.nav.personalCenter"),
                       children: personalTabs.map(toMenuItem),
                   },
                   {
                       type: "group",
-                      label: "平台管理",
+                      label: t("admin.nav.platformAdmin"),
                       children: adminTabs.map(toMenuItem),
                   },
               ]
@@ -3300,10 +3361,10 @@ export default function AdminPage() {
                 >
                     <div className="mb-3 px-2 pt-1">
                         <Typography.Title level={5} style={{ margin: 0 }}>
-                            {isAdmin && isAdminRoute ? "管理后台" : "个人后台"}
+                            {isAdmin && isAdminRoute ? t("admin.nav.adminTitle") : t("admin.nav.personalTitle")}
                         </Typography.Title>
                         <Typography.Text type="secondary" className="text-xs">
-                            {isAdmin && isAdminRoute ? "平台管理与个人工作台" : "个人概览、钱包与媒体"}
+                            {isAdmin && isAdminRoute ? t("admin.nav.adminSub") : t("admin.nav.personalSub")}
                         </Typography.Text>
                     </div>
                     <Menu
@@ -3320,7 +3381,7 @@ export default function AdminPage() {
                         style={{ borderColor: token.colorBorderSecondary }}
                     >
                         <Typography.Text type="secondary" className="text-xs">
-                            当前版本
+                            {t("admin.nav.currentVersion")}
                         </Typography.Text>
                         <VersionReleaseModal />
                     </div>
@@ -3337,7 +3398,7 @@ export default function AdminPage() {
                         <div className="flex items-center gap-3">
                             <div className="lg:hidden">
                                 <Button icon={<MenuIcon className="size-4" />} onClick={() => setMobileMenuOpen(true)}>
-                                    菜单
+                                    {t("admin.nav.menuBtn")}
                                 </Button>
                             </div>
                             <Typography.Title level={4} style={{ margin: 0 }}>
@@ -3346,7 +3407,7 @@ export default function AdminPage() {
                         </div>
                         {isAdmin && isAdminRoute ? (
                             <Button icon={<RefreshCw className="size-4" />} loading={overviewLoading} onClick={() => void loadOverview(overviewDays)}>
-                                刷新数据
+                                {t("admin.nav.refreshData")}
                             </Button>
                         ) : null}
                     </div>
@@ -3359,13 +3420,13 @@ export default function AdminPage() {
                 open={mobileMenuOpen}
                 placement="left"
                 width={260}
-                title={isAdmin && isAdminRoute ? "管理后台菜单" : "个人后台菜单"}
+                title={isAdmin && isAdminRoute ? t("admin.nav.adminDrawerTitle") : t("admin.nav.personalDrawerTitle")}
                 onClose={() => setMobileMenuOpen(false)}
                 styles={{ body: { padding: 12 } }}
                 footer={
                     <div className="flex items-center justify-between text-xs">
                         <Typography.Text type="secondary" className="text-xs">
-                            当前版本
+                            {t("admin.nav.currentVersion")}
                         </Typography.Text>
                         <VersionReleaseModal />
                     </div>
@@ -3400,44 +3461,44 @@ export default function AdminPage() {
 
             <Modal
                 open={Boolean(assigningUser)}
-                title={assigningUser ? `为 ${assigningUser.displayName || assigningUser.username} 分配 WebDAV` : "分配 WebDAV"}
+                title={assigningUser ? t("admin.modals.webdav.titleWithUser", { name: assigningUser.displayName || assigningUser.username }) : t("admin.modals.webdav.titleFallback")}
                 onCancel={() => setAssigningUser(null)}
                 onOk={() => userWebdavForm.submit()}
                 confirmLoading={userWebdavSaving}
             >
                 <Form form={userWebdavForm} layout="vertical" onFinish={handleSaveUserWebdav}>
-                    <Form.Item name="enabled" label="开通 WebDAV 同步权限" valuePropName="checked">
+                    <Form.Item name="enabled" label={t("admin.modals.webdav.enabled")} valuePropName="checked">
                         <Switch />
                     </Form.Item>
-                    <Form.Item name="directory" label="分配同步目录（留空则使用平台默认根目录）">
+                    <Form.Item name="directory" label={t("admin.modals.webdav.directory")}>
                         <Input placeholder="infinite-canvas/alice" />
                     </Form.Item>
-                    <Form.Item name="url" label="独立 WebDAV 地址（可选，留空继承平台默认配置）">
-                        <Input placeholder="留空继承平台 WebDAV 地址" />
+                    <Form.Item name="url" label={t("admin.modals.webdav.url")}>
+                        <Input placeholder={t("admin.modals.webdav.urlPlaceholder")} />
                     </Form.Item>
-                    <Form.Item name="username" label="独立用户名（可选，留空继承平台默认用户名）">
-                        <Input placeholder="留空继承平台默认用户名" />
+                    <Form.Item name="username" label={t("admin.modals.webdav.username")}>
+                        <Input placeholder={t("admin.modals.webdav.usernamePlaceholder")} />
                     </Form.Item>
-                    <Form.Item name="password" label="独立密码（可选，留空继承或保留已保存密码）">
-                        <Input.Password placeholder="留空继承平台默认密码" />
+                    <Form.Item name="password" label={t("admin.modals.webdav.password")}>
+                        <Input.Password placeholder={t("admin.modals.webdav.passwordPlaceholder")} />
                     </Form.Item>
                     <Row gutter={12}>
                         <Col span={12}>
                             <Form.Item
                                 name="quotaMb"
-                                label={`可用空间上限（MB，当前已用 ${formatBytes(assigningUser?.webdavConfig?.usedBytes ?? 0)}）`}
+                                label={t("admin.modals.webdav.quotaMb", { used: formatBytes(assigningUser?.webdavConfig?.usedBytes ?? 0) })}
                             >
-                                <InputNumber min={0} step={100} className="w-full" placeholder="留空或 0 不限制" />
+                                <InputNumber min={0} step={100} className="w-full" placeholder={t("admin.modals.webdav.quotaPlaceholder")} />
                             </Form.Item>
                         </Col>
                         <Col span={12}>
-                            <Form.Item name="expiresAt" label="有效期限（留空永久有效）">
-                                <DatePicker showTime className="w-full" placeholder="选择过期时间" />
+                            <Form.Item name="expiresAt" label={t("admin.modals.webdav.expiresAt")}>
+                                <DatePicker showTime className="w-full" placeholder={t("admin.modals.webdav.expiresPlaceholder")} />
                             </Form.Item>
                         </Col>
                     </Row>
                     {assigningUser?.webdavConfig?.usedBytes ? (
-                        <Form.Item name="resetUsedBytes" label="重置已用空间统计为 0" valuePropName="checked">
+                        <Form.Item name="resetUsedBytes" label={t("admin.modals.webdav.resetUsedBytes")} valuePropName="checked">
                             <Switch />
                         </Form.Item>
                     ) : null}
@@ -3449,8 +3510,8 @@ export default function AdminPage() {
                 zIndex={1020}
                 title={
                     storageQuotaUser
-                        ? `配置 ${storageQuotaUser.displayName || storageQuotaUser.username} 的云端存储配额`
-                        : "配置云端存储配额"
+                        ? t("admin.modals.quota.titleWithUser", { name: storageQuotaUser.displayName || storageQuotaUser.username })
+                        : t("admin.modals.quota.titleFallback")
                 }
                 width={620}
                 onCancel={() => setStorageQuotaUser(null)}
@@ -3462,15 +3523,21 @@ export default function AdminPage() {
                         type="info"
                         showIcon
                         className="mb-4"
-                        message={`已用 ${formatBytes(storageQuotaUser?.storageUsedBytes ?? 0)} / 当前有效总配额 ${formatBytes(storageQuotaUser?.storageQuotaBytes ?? 0)}`}
-                        description={`总配额 = 管理员基础配额（${formatBytes(storageQuotaUser?.baseStorageQuotaBytes ?? storageQuotaUser?.storageQuotaBytes ?? 0)}）+ 有效独立存储资源包（${formatBytes(storageQuotaUser?.storageGrantsQuotaBytes ?? 0)}）。资源包到期后将自动扣减并回落到剩余有效配额。`}
+                        message={t("admin.modals.quota.alertTitle", {
+                            used: formatBytes(storageQuotaUser?.storageUsedBytes ?? 0),
+                            total: formatBytes(storageQuotaUser?.storageQuotaBytes ?? 0),
+                        })}
+                        description={t("admin.modals.quota.alertDesc", {
+                            base: formatBytes(storageQuotaUser?.baseStorageQuotaBytes ?? storageQuotaUser?.storageQuotaBytes ?? 0),
+                            grants: formatBytes(storageQuotaUser?.storageGrantsQuotaBytes ?? 0),
+                        })}
                     />
                     <Form.Item
                         name="quotaMb"
-                        label="管理员基础配额上限（MB，设为 0 则仅依赖存储资源包）"
-                        rules={[{ required: true, message: "请输入配额大小（MB）" }]}
+                        label={t("admin.modals.quota.baseQuotaLabel")}
+                        rules={[{ required: true, message: t("admin.modals.quota.baseQuotaReq") }]}
                     >
-                        <InputNumber min={0} step={100} className="w-full" placeholder="例如：500（表示 500 MB）" />
+                        <InputNumber min={0} step={100} className="w-full" placeholder={t("admin.modals.quota.baseQuotaPlaceholder")} />
                     </Form.Item>
                     <div className="mb-4 flex flex-wrap gap-2">
                         {[0, 100, 500, 1024, 5120, 10240].map((mb) => (
@@ -3479,10 +3546,10 @@ export default function AdminPage() {
                             </Button>
                         ))}
                     </div>
-                    <Form.Item name="expiresAt" label="基础配额有效期限（可选，不填写则不限制时间）">
-                        <DatePicker showTime allowClear className="w-full" placeholder="不填写表示永久有效" />
+                    <Form.Item name="expiresAt" label={t("admin.modals.quota.expiresLabel")}>
+                        <DatePicker showTime allowClear className="w-full" placeholder={t("admin.modals.quota.expiresPlaceholder")} />
                     </Form.Item>
-                    <Form.Item name="recalculateUsedBytes" label="根据当前云端有效媒体重新核算已用空间" valuePropName="checked">
+                    <Form.Item name="recalculateUsedBytes" label={t("admin.modals.quota.recalculateLabel")} valuePropName="checked">
                         <Switch />
                     </Form.Item>
                 </Form>
@@ -3490,15 +3557,15 @@ export default function AdminPage() {
                 <div className="mt-2 border-t pt-3" style={{ borderColor: token.colorBorderSecondary }}>
                     <div className="mb-2 flex items-center justify-between">
                         <Typography.Text strong className="text-xs">
-                            独立存储资源包记录（{storageQuotaGrants.length}）
+                            {t("admin.modals.quota.grantsTitle", { count: storageQuotaGrants.length })}
                         </Typography.Text>
                         <Typography.Text type="secondary" className="text-xs">
-                            每个资源包独立计算过期时间
+                            {t("admin.modals.quota.grantsHint")}
                         </Typography.Text>
                     </div>
                     {storageQuotaGrantsLoading ? (
                         <Typography.Text type="secondary" className="text-xs">
-                            正在加载资源包记录...
+                            {t("admin.modals.quota.grantsLoading")}
                         </Typography.Text>
                     ) : storageQuotaGrants.length ? (
                         <div className="flex max-h-48 flex-col gap-2 overflow-y-auto pr-1">
@@ -3513,15 +3580,15 @@ export default function AdminPage() {
                                             <span className="font-medium">+{formatBytes(grant.quotaBytes)}</span>
                                             {grant.status === "revoked" ? (
                                                 <Tag color="default" style={{ marginInlineEnd: 0 }}>
-                                                    已停用
+                                                    {t("admin.modals.quota.grantRevoked")}
                                                 </Tag>
                                             ) : grant.isExpired ? (
                                                 <Tag color="red" style={{ marginInlineEnd: 0 }}>
-                                                    已过期
+                                                    {t("admin.modals.quota.grantExpired")}
                                                 </Tag>
                                             ) : (
                                                 <Tag color="green" style={{ marginInlineEnd: 0 }}>
-                                                    生效中
+                                                    {t("admin.modals.quota.grantActive")}
                                                 </Tag>
                                             )}
                                             {grant.refId ? (
@@ -3532,9 +3599,9 @@ export default function AdminPage() {
                                         </div>
                                         <Typography.Text type="secondary" className="mt-0.5 block text-[11px]">
                                             {grant.expiresAt
-                                                ? `到期：${new Date(grant.expiresAt).toLocaleString("zh-CN")}`
-                                                : "永久有效"}
-                                            {grant.durationDays ? `（${grant.durationDays} 天）` : ""}
+                                                ? t("admin.modals.quota.grantExpiresAt", { time: new Date(grant.expiresAt).toLocaleString(locale) })
+                                                : t("admin.modals.quota.grantPermanent")}
+                                            {grant.durationDays ? t("admin.modals.quota.grantDurationDays", { days: grant.durationDays }) : ""}
                                             {grant.note ? ` · ${grant.note}` : ""}
                                         </Typography.Text>
                                     </div>
@@ -3545,14 +3612,14 @@ export default function AdminPage() {
                                         loading={updatingGrantId === grant.id}
                                         onClick={() => void handleToggleStorageGrant(grant)}
                                     >
-                                        {grant.status === "active" ? "停用" : "恢复"}
+                                        {grant.status === "active" ? t("admin.modals.quota.grantRevokeBtn") : t("admin.modals.quota.grantRestoreBtn")}
                                     </Button>
                                 </div>
                             ))}
                         </div>
                     ) : (
                         <Typography.Text type="secondary" className="text-xs">
-                            暂无存储资源包兑换记录
+                            {t("admin.modals.quota.grantsEmpty")}
                         </Typography.Text>
                     )}
                 </div>
@@ -3561,19 +3628,26 @@ export default function AdminPage() {
             <Modal
                 open={Boolean(creditUser)}
                 zIndex={1020}
-                title={creditUser ? `调整 ${creditUser.displayName || creditUser.username} 的积分（当前：${creditUser.creditBalance ?? 0}）` : "调整积分"}
+                title={
+                    creditUser
+                        ? t("admin.modals.credit.titleWithUser", {
+                              name: creditUser.displayName || creditUser.username,
+                              balance: creditUser.creditBalance ?? 0,
+                          })
+                        : t("admin.modals.credit.titleFallback")
+                }
                 onCancel={() => setCreditUser(null)}
                 onOk={() => userCreditForm.submit()}
-                okText={creditModeWatch === "clear" ? "确认清零" : "确定"}
+                okText={creditModeWatch === "clear" ? t("admin.modals.credit.confirmClear") : t("common.confirm")}
                 okButtonProps={{ danger: creditModeWatch === "clear" }}
                 confirmLoading={userCreditSaving}
             >
                 <Form form={userCreditForm} layout="vertical" onFinish={handleAdjustUserCredits}>
-                    <Form.Item name="mode" label="操作类型" rules={[{ required: true }]}>
+                    <Form.Item name="mode" label={t("admin.modals.credit.modeLabel")} rules={[{ required: true }]}>
                         <Radio.Group>
-                            <Radio.Button value="add">增加积分（充值 / 赠送）</Radio.Button>
-                            <Radio.Button value="deduct">扣减积分</Radio.Button>
-                            <Radio.Button value="clear">清零积分</Radio.Button>
+                            <Radio.Button value="add">{t("admin.modals.credit.modeAdd")}</Radio.Button>
+                            <Radio.Button value="deduct">{t("admin.modals.credit.modeDeduct")}</Radio.Button>
+                            <Radio.Button value="clear">{t("admin.modals.credit.modeClear")}</Radio.Button>
                         </Radio.Group>
                     </Form.Item>
                     {creditModeWatch === "clear" ? (
@@ -3581,33 +3655,33 @@ export default function AdminPage() {
                             type="warning"
                             showIcon
                             className="mb-4"
-                            message={`将把该用户当前积分余额（${creditUser?.creditBalance ?? 0}）直接清零为 0`}
-                            description="清零操作会原子写入积分流水记录，方便后续审计追踪。"
+                            message={t("admin.modals.credit.clearAlertTitle", { balance: creditUser?.creditBalance ?? 0 })}
+                            description={t("admin.modals.credit.clearAlertDesc")}
                         />
                     ) : (
                         <Form.Item
                             name="amount"
-                            label="积分数量"
-                            rules={[{ required: true, message: "请输入积分数量" }]}
+                            label={t("admin.modals.credit.amountLabel")}
+                            rules={[{ required: true, message: t("admin.modals.credit.amountReq") }]}
                         >
                             <InputNumber className="w-full" min={0.0001} step={10} />
                         </Form.Item>
                     )}
-                    <Form.Item name="note" label="备注说明（可选）">
-                        <Input placeholder={creditModeWatch === "clear" ? "例如：违规清零 / 测试账号重置" : "例如：管理员充值 / 活动赠送 / 异常补扣"} />
+                    <Form.Item name="note" label={t("admin.modals.credit.noteLabel")}>
+                        <Input placeholder={creditModeWatch === "clear" ? t("admin.modals.credit.clearNotePlaceholder") : t("admin.modals.credit.adjustNotePlaceholder")} />
                     </Form.Item>
                 </Form>
             </Modal>
 
             <Modal
                 open={createRedeemOpen}
-                title="批量生成兑换码"
+                title={t("admin.modals.redeem.title")}
                 onCancel={() => setCreateRedeemOpen(false)}
                 onOk={() => createRedeemForm.submit()}
                 confirmLoading={creatingRedeem}
             >
                 <Form form={createRedeemForm} layout="vertical" onFinish={handleCreateRedeemCodes}>
-                    <Form.Item name="kind" label="兑换码类型" rules={[{ required: true }]}>
+                    <Form.Item name="kind" label={t("admin.modals.redeem.kindLabel")} rules={[{ required: true }]}>
                         <Radio.Group
                             optionType="button"
                             buttonStyle="solid"
@@ -3619,26 +3693,26 @@ export default function AdminPage() {
                                 }
                             }}
                             options={[
-                                { label: "积分兑换码", value: "credits" },
-                                { label: "云端存储兑换码", value: "storage" },
+                                { label: t("admin.modals.redeem.kindCredits"), value: "credits" },
+                                { label: t("admin.modals.redeem.kindStorage"), value: "storage" },
                             ]}
                         />
                     </Form.Item>
                     <Row gutter={12}>
                         <Col span={12}>
-                            <Form.Item name="count" label="生成数量（1 ~ 100）" rules={[{ required: true, message: "请输入数量" }]}>
+                            <Form.Item name="count" label={t("admin.modals.redeem.countLabel")} rules={[{ required: true, message: t("admin.modals.redeem.countReq") }]}>
                                 <InputNumber className="w-full" min={1} max={100} />
                             </Form.Item>
                         </Col>
                         {redeemKindWatch === "credits" ? (
                             <Col span={12}>
-                                <Form.Item name="credits" label="单个面值（积分）" rules={[{ required: true, message: "请输入积分面值" }]}>
+                                <Form.Item name="credits" label={t("admin.modals.redeem.creditsLabel")} rules={[{ required: true, message: t("admin.modals.redeem.creditsReq") }]}>
                                     <InputNumber className="w-full" min={0.01} step={10} />
                                 </Form.Item>
                             </Col>
                         ) : (
                             <Col span={12}>
-                                <Form.Item name="storageQuotaMb" label="存储容量（MB）" rules={[{ required: true, message: "请输入存储容量（MB）" }]}>
+                                <Form.Item name="storageQuotaMb" label={t("admin.modals.redeem.storageQuotaLabel")} rules={[{ required: true, message: t("admin.modals.redeem.storageQuotaReq") }]}>
                                     <InputNumber className="w-full" min={1} step={100} />
                                 </Form.Item>
                             </Col>
@@ -3653,43 +3727,43 @@ export default function AdminPage() {
                                     </Button>
                                 ))}
                             </div>
-                            <Form.Item name="storageDurationDays" label="资源包有效天数（留空表示永久有效，到期后自动回落）">
-                                <InputNumber className="w-full" min={1} max={36500} placeholder="例如：30（留空为永久）" />
+                            <Form.Item name="storageDurationDays" label={t("admin.modals.redeem.durationLabel")}>
+                                <InputNumber className="w-full" min={1} max={36500} placeholder={t("admin.modals.redeem.durationPlaceholder")} />
                             </Form.Item>
                             <div className="mb-4 flex flex-wrap gap-1.5">
                                 {[7, 30, 90, 365].map((d) => (
                                     <Button key={d} size="small" onClick={() => createRedeemForm.setFieldValue("storageDurationDays", d)}>
-                                        {d} 天
+                                        {t("admin.modals.redeem.durationDaysOption", { days: d })}
                                     </Button>
                                 ))}
                                 <Button size="small" onClick={() => createRedeemForm.setFieldValue("storageDurationDays", null)}>
-                                    永久
+                                    {t("admin.modals.redeem.durationPermanent")}
                                 </Button>
                             </div>
                         </>
                     ) : null}
                     <Row gutter={12}>
                         <Col span={12}>
-                            <Form.Item name="prefix" label="兑换码前缀">
+                            <Form.Item name="prefix" label={t("admin.modals.redeem.prefixLabel")}>
                                 <Input placeholder={redeemKindWatch === "storage" ? "ST" : "IC"} maxLength={16} />
                             </Form.Item>
                         </Col>
                         <Col span={12}>
-                            <Form.Item label="兑换限制">
-                                <Input value="每个码仅限 1 人兑换" disabled />
+                            <Form.Item label={t("admin.modals.redeem.limitLabel")}>
+                                <Input value={t("admin.modals.redeem.limitValue")} disabled />
                             </Form.Item>
                         </Col>
                     </Row>
                     {redeemCountWatch === 1 ? (
-                        <Form.Item name="customCode" label="自定义兑换码（可选，留空自动随机生成）">
-                            <Input placeholder={redeemKindWatch === "storage" ? "例如：ST-2026-2GB" : "例如：VIP-2026-GIFT"} maxLength={64} />
+                        <Form.Item name="customCode" label={t("admin.modals.redeem.customCodeLabel")}>
+                            <Input placeholder={redeemKindWatch === "storage" ? t("admin.modals.redeem.customCodeStoragePh") : t("admin.modals.redeem.customCodeCreditsPh")} maxLength={64} />
                         </Form.Item>
                     ) : null}
-                    <Form.Item name="expiresAt" label="兑换码本身过期时间（可选，留空永不过期）">
-                        <DatePicker showTime className="w-full" placeholder="选择过期时间" />
+                    <Form.Item name="expiresAt" label={t("admin.modals.redeem.expiresLabel")}>
+                        <DatePicker showTime className="w-full" placeholder={t("admin.modals.redeem.expiresPlaceholder")} />
                     </Form.Item>
-                    <Form.Item name="note" label="备注（可选）">
-                        <Input placeholder="例如：内测用户礼包 / 活动兑换码" maxLength={200} />
+                    <Form.Item name="note" label={t("admin.modals.redeem.noteLabel")}>
+                        <Input placeholder={t("admin.modals.redeem.notePlaceholder")} maxLength={200} />
                     </Form.Item>
                 </Form>
             </Modal>
@@ -3706,7 +3780,7 @@ export default function AdminPage() {
 
             <Modal
                 open={Boolean(previewMediaItem)}
-                title="媒体原文件预览"
+                title={t("userPanels.myMedia.previewModalTitle")}
                 onCancel={() => setPreviewMediaItem(null)}
                 footer={
                     <Space>
@@ -3719,16 +3793,16 @@ export default function AdminPage() {
                                     void storageApi
                                         .downloadFile(previewMediaItem)
                                         .catch((error) => {
-                                            message.error(error instanceof Error ? error.message : "下载失败");
+                                            message.error(error instanceof Error ? error.message : t("userPanels.ledgerDetail.downloadFailed"));
                                         })
                                         .finally(() => setDownloadingPreviewMedia(false));
                                 }}
                             >
-                                下载原文件
+                                {t("common.downloadOriginal")}
                             </Button>
                         ) : null}
                         <Button type="primary" onClick={() => setPreviewMediaItem(null)}>
-                            关闭
+                            {t("common.close")}
                         </Button>
                     </Space>
                 }
@@ -3748,7 +3822,7 @@ export default function AdminPage() {
                         </div>
                     ) : (
                         <a href={previewMediaItem.url} target="_blank" rel="noreferrer">
-                            打开文件链接
+                            {t("common.openFileLink")}
                         </a>
                     )
                 ) : null}
@@ -3756,7 +3830,7 @@ export default function AdminPage() {
 
             <Modal
                 open={announcementModalOpen}
-                title={editingAnnouncement ? "编辑时间线通知" : "发布时间线通知"}
+                title={editingAnnouncement ? t("admin.settingsTab.announcements.modalEditTitle") : t("admin.settingsTab.announcements.modalCreateTitle")}
                 onCancel={() => {
                     setAnnouncementModalOpen(false);
                     setEditingAnnouncement(null);
@@ -3765,32 +3839,32 @@ export default function AdminPage() {
                 confirmLoading={announcementSaving}
             >
                 <Form form={announcementForm} layout="vertical" onFinish={handleSaveAnnouncement}>
-                    <Form.Item name="title" label="通知标题" rules={[{ required: true, message: "请输入通知标题" }]}>
-                        <Input placeholder="例如：模型计费调整 / 维护通知" maxLength={120} />
+                    <Form.Item name="title" label={t("admin.settingsTab.announcements.titleLabel")} rules={[{ required: true, message: t("admin.settingsTab.announcements.titleReq") }]}>
+                        <Input placeholder={t("admin.settingsTab.announcements.titlePlaceholder")} maxLength={120} />
                     </Form.Item>
                     <Row gutter={12}>
                         <Col span={12}>
-                            <Form.Item name="level" label="状态" rules={[{ required: true }]}>
+                            <Form.Item name="level" label={t("admin.settingsTab.announcements.levelLabel")} rules={[{ required: true }]}>
                                 <Select options={announcementLevelOptions} />
                             </Form.Item>
                         </Col>
                         <Col span={12}>
-                            <Form.Item name="createdAt" label="发布时间">
-                                <DatePicker showTime allowClear className="w-full" placeholder="留空默认当前时间" />
+                            <Form.Item name="createdAt" label={t("admin.settingsTab.announcements.createdAtLabel")}>
+                                <DatePicker showTime allowClear className="w-full" placeholder={t("admin.settingsTab.announcements.createdAtPlaceholder")} />
                             </Form.Item>
                         </Col>
                     </Row>
-                    <Form.Item name="content" label="通知正文" rules={[{ required: true, message: "请输入通知内容" }]}>
-                        <Input.TextArea rows={5} placeholder="输入要向全体用户展示的公告详情..." maxLength={4000} showCount />
+                    <Form.Item name="content" label={t("admin.settingsTab.announcements.contentLabel")} rules={[{ required: true, message: t("admin.settingsTab.announcements.contentReq") }]}>
+                        <Input.TextArea rows={5} placeholder={t("admin.settingsTab.announcements.contentPlaceholder")} maxLength={4000} showCount />
                     </Form.Item>
                     <Row gutter={16}>
                         <Col span={12}>
-                            <Form.Item name="isPinned" label="置顶展示" valuePropName="checked">
+                            <Form.Item name="isPinned" label={t("admin.settingsTab.announcements.isPinnedLabel")} valuePropName="checked">
                                 <Switch />
                             </Form.Item>
                         </Col>
                         <Col span={12}>
-                            <Form.Item name="isPublished" label="立即发布展示" valuePropName="checked">
+                            <Form.Item name="isPublished" label={t("admin.settingsTab.announcements.isPublishedLabel")} valuePropName="checked">
                                 <Switch />
                             </Form.Item>
                         </Col>

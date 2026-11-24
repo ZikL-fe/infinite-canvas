@@ -416,7 +416,7 @@ function compactLogText(value: string) {
 function logSignature(value: string) {
     return value
         .replace(/[a-z]:\\[^\r\n]*?skill\.md/gi, "<SKILL.md>")
-        .replace(/file:\/\/\/[^\s"']+/gi, "<路径>")
+        .replace(/file:\/\/\/[^\s"']+/gi, "<path>")
         .replace(/[0-9a-f]{8}-[0-9a-f-]{27,}/gi, "<ID>");
 }
 

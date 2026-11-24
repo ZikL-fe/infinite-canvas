@@ -1,6 +1,7 @@
 /** 云端媒体读写桥接：负责对象存储直传/读取/清理，并将 AI 生成素材自动归档至已授权的 WebDAV。 */
 import { message as antdMessage } from "antd";
 
+import i18n from "@/i18n";
 import { authApi, storageApi } from "@/services/api/server";
 import { useConfigStore } from "@/stores/use-config-store";
 import { useUserStore } from "@/stores/use-user-store";
@@ -71,10 +72,10 @@ export function notifyCloudStorageQuotaExceeded() {
     if (now - lastQuotaWarningAt < 3500) return;
     lastQuotaWarningAt = now;
     if (isUserCloudQuotaExpired()) {
-        antdMessage.warning("您的云端存储配额已过期，已暂停云端上传（内容仍保存在本地），请联系管理员续期或扩容");
+        antdMessage.warning(i18n.t("cloud.quotaExpiredWarning"));
         return;
     }
-    antdMessage.warning("云端存储配额不足，已暂停云端上传（内容仍保存在本地），请清理云端媒体或联系管理员扩容");
+    antdMessage.warning(i18n.t("cloud.quotaExceededWarning"));
 }
 
 export function setCloudSyncHydrated(value: boolean) {

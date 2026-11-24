@@ -179,7 +179,7 @@ export default function AssetsPage() {
     const downloadImage = async (asset: Asset) => {
         if ((asset.kind !== "image" && asset.kind !== "video") || downloadingId) return;
         setDownloadingId(asset.id);
-        const hide = message.loading("正在下载资源…", 0);
+        const hide = message.loading(t("assets.downloadingResource"), 0);
         try {
             const blob = await readAssetMediaBlob(asset);
             if (!blob) {
@@ -203,11 +203,11 @@ export default function AssetsPage() {
         }
         if (exportingAssets) return;
         setExportingAssets(true);
-        const hide = message.loading("正在打包导出资产…", 0);
+        const hide = message.loading(t("assets.exportingPackage"), 0);
         try {
             await exportAssets(validAssets, t("assets.packageName"));
         } catch {
-            message.error("导出失败，请重试");
+            message.error(t("assets.exportFailed"));
         } finally {
             hide();
             setExportingAssets(false);
@@ -274,7 +274,7 @@ export default function AssetsPage() {
             message.success(t("assets.deleted"));
             setDeletingAsset(null);
         } catch (error) {
-            message.error(error instanceof Error ? error.message : "删除失败，请重试");
+            message.error(error instanceof Error ? error.message : t("common.deleteFailed"));
         } finally {
             setDeleting(false);
         }
@@ -296,7 +296,7 @@ export default function AssetsPage() {
                                         <>
                                             <span className="inline-flex items-center gap-1.5 font-medium text-stone-700 dark:text-stone-200">
                                                 <HardDrive className="size-3.5" />
-                                                云端存储配额：{formatStoragePair(user.storageUsedBytes, user.storageQuotaBytes)}
+                                                {t("assets.cloudQuotaLabel", { pair: formatStoragePair(user.storageUsedBytes, user.storageQuotaBytes) })}
                                             </span>
                                             <div className="w-24">
                                                 <Progress
@@ -316,7 +316,7 @@ export default function AssetsPage() {
                                                     className="m-0 cursor-pointer"
                                                     onClick={() => navigate(user.role === "admin" ? "/admin?tab=my-media" : "/console?tab=my-media")}
                                                 >
-                                                    配额已过期，去兑换扩容
+                                                    {t("assets.quotaExpiredAction")}
                                                 </Tag>
                                             ) : exceeded ? (
                                                 <Tag
@@ -324,7 +324,7 @@ export default function AssetsPage() {
                                                     className="m-0 cursor-pointer"
                                                     onClick={() => navigate(user.role === "admin" ? "/admin?tab=my-media" : "/console?tab=my-media")}
                                                 >
-                                                    配额不足，去兑换扩容
+                                                    {t("assets.quotaExceededAction")}
                                                 </Tag>
                                             ) : null}
                                             <Button
@@ -333,7 +333,7 @@ export default function AssetsPage() {
                                                 className="!h-auto !p-0 text-xs"
                                                 onClick={() => navigate(user.role === "admin" ? "/admin?tab=my-media" : "/console?tab=my-media")}
                                             >
-                                                管理云端媒体
+                                                {t("assets.manageCloudMedia")}
                                             </Button>
                                         </>
                                     );
@@ -383,7 +383,7 @@ export default function AssetsPage() {
                             </div>
                             <div className="flex flex-wrap items-center gap-3">
                                 <Button size="small" icon={<CheckSquare className="size-3.5" />} disabled={!visibleAssets.length} onClick={toggleSelectAllPage}>
-                                    {allPageSelected ? "取消全选" : "全选本页"}
+                                    {allPageSelected ? t("common.deselectAll") : t("common.selectAllPage")}
                                 </Button>
                                 {selectedIds.length > 0 ? (
                                     <Button
@@ -393,7 +393,7 @@ export default function AssetsPage() {
                                         loading={batchDownloading}
                                         onClick={() => void handleBatchDownload()}
                                     >
-                                        打包下载 ({selectedIds.length})
+                                        {t("common.batchDownloadCount", { count: selectedIds.length })}
                                     </Button>
                                 ) : null}
                                 <button
@@ -402,7 +402,7 @@ export default function AssetsPage() {
                                     className="cursor-pointer text-sm font-medium text-stone-700 underline-offset-4 hover:underline focus-visible:outline-none focus-visible:underline disabled:cursor-not-allowed disabled:opacity-50 dark:text-stone-300"
                                     onClick={() => void exportAllAssets()}
                                 >
-                                    {exportingAssets ? "导出中..." : t("assets.export")}
+                                    {exportingAssets ? t("common.exporting") : t("assets.export")}
                                 </button>
                                 <button
                                     type="button"
@@ -410,7 +410,7 @@ export default function AssetsPage() {
                                     className="cursor-pointer text-sm font-medium text-stone-700 underline-offset-4 hover:underline focus-visible:outline-none focus-visible:underline disabled:cursor-not-allowed disabled:opacity-50 dark:text-stone-300"
                                     onClick={() => assetInputRef.current?.click()}
                                 >
-                                    {importingAssets ? "导入中..." : t("assets.import")}
+                                    {importingAssets ? t("common.importing") : t("assets.import")}
                                 </button>
                                 <button
                                     type="button"
@@ -453,7 +453,7 @@ export default function AssetsPage() {
                             current={page}
                             pageSize={pageSize}
                             total={filteredAssets.length}
-                            showTotal={(count) => `共 ${count} 条`}
+                            showTotal={(count) => t("common.totalItems", { count })}
                             showSizeChanger
                             pageSizeOptions={[10, 20, 30, 50, 100]}
                             onChange={(nextPage, nextPageSize) => {
@@ -494,7 +494,7 @@ export default function AssetsPage() {
                             <Space.Compact className="w-full">
                                 <Input placeholder={t("assets.fields.coverPlaceholder")} />
                                 <Button icon={<Upload className="size-3.5" />} loading={uploadingCover} onClick={() => coverInputRef.current?.click()}>
-                                    {uploadingCover ? "上传中..." : t("common.upload")}
+                                    {uploadingCover ? t("common.uploadingEllipsis") : t("common.upload")}
                                 </Button>
                             </Space.Compact>
                         </Form.Item>
@@ -517,11 +517,11 @@ export default function AssetsPage() {
                             <Form.Item label={t("assets.fields.imageContent")} required>
                                 <div className="rounded-lg border border-dashed border-stone-300 p-4 dark:border-stone-700">
                                     <Button icon={<Upload className="size-4" />} loading={uploadingImage} onClick={() => imageInputRef.current?.click()}>
-                                        {uploadingImage ? "上传中..." : t("assets.selectImageFile")}
+                                        {uploadingImage ? t("common.uploadingEllipsis") : t("assets.selectImageFile")}
                                     </Button>
                                     {uploadingImage ? (
                                         <Typography.Text type="secondary" className="ml-3 text-xs">
-                                            正在处理并上传图片，请稍候...
+                                            {t("assets.uploadingImageHint")}
                                         </Typography.Text>
                                     ) : imageDraft ? (
                                         <Typography.Text type="secondary" className="ml-3 text-xs">

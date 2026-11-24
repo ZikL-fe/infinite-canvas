@@ -2,6 +2,7 @@
 import { useEffect, useState } from "react";
 import { Alert, App, Button, Card, Form, Input, Modal, Space, Tabs, Tag, Typography } from "antd";
 import { Lock, Mail, ShieldCheck, User } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { useNavigate, useSearchParams } from "react-router-dom";
 
 import { useEmailCodeSender } from "@/hooks/use-email-code-sender";
@@ -10,6 +11,7 @@ import { useUserStore } from "@/stores/use-user-store";
 
 export default function AuthPage() {
     const { message } = App.useApp();
+    const { t } = useTranslation();
     const navigate = useNavigate();
     const [searchParams] = useSearchParams();
     const user = useUserStore((state) => state.user);
@@ -55,10 +57,10 @@ export default function AuthPage() {
         try {
             const session = await authApi.login(values);
             setSession(session);
-            message.success("登录成功");
+            message.success(t("auth.loginSuccess"));
             handleSuccessRedirect(session.user.role);
         } catch (error) {
-            message.error(error instanceof Error ? error.message : "登录失败");
+            message.error(error instanceof Error ? error.message : t("auth.loginFailed"));
         } finally {
             setSubmitting(false);
         }
@@ -69,7 +71,7 @@ export default function AuthPage() {
             const { email } = await registerForm.validateFields(["email"]);
             const cleanEmail = (email || "").trim();
             if (!cleanEmail) {
-                message.warning("请先填写邮箱地址");
+                message.warning(t("auth.emailRequiredFirst"));
                 return;
             }
             await registerCodeSender.sendCode(() => authApi.sendRegisterCode(cleanEmail));
@@ -95,10 +97,10 @@ export default function AuthPage() {
                 requireEmailOnRegister: bootstrapStatus?.requireEmailOnRegister ?? false,
                 emailEnabled: bootstrapStatus?.emailEnabled ?? false,
             });
-            message.success(session.user.role === "admin" ? "注册成功，已初始化为系统管理员" : "注册成功");
+            message.success(session.user.role === "admin" ? t("auth.registerSuccessAdmin") : t("auth.registerSuccess"));
             handleSuccessRedirect(session.user.role);
         } catch (error) {
-            message.error(error instanceof Error ? error.message : "注册失败");
+            message.error(error instanceof Error ? error.message : t("auth.registerFailed"));
         } finally {
             setSubmitting(false);
         }
@@ -121,13 +123,13 @@ export default function AuthPage() {
                 code: values.code.trim(),
                 newPassword: values.newPassword,
             });
-            message.success("密码已重置，请使用新密码登录");
+            message.success(t("auth.resetSuccess"));
             loginForm.setFieldsValue({ account: values.email.trim(), password: "" });
             setResetOpen(false);
             resetForm.resetFields();
             resetCodeSender.resetCooldown();
         } catch (error) {
-            message.error(error instanceof Error ? error.message : "重置密码失败");
+            message.error(error instanceof Error ? error.message : t("auth.resetFailed"));
         } finally {
             setResetting(false);
         }
@@ -139,16 +141,16 @@ export default function AuthPage() {
                 <Card className="w-full max-w-md">
                     <div className="flex flex-col items-center gap-4 text-center">
                         <Typography.Title level={4} style={{ margin: 0 }}>
-                            已登录：{user.displayName || user.username}
+                            {t("auth.loggedInTitle", { name: user.displayName || user.username })}
                         </Typography.Title>
-                        <Tag color={user.role === "admin" ? "blue" : "default"}>{user.role === "admin" ? "系统管理员" : "普通用户"}</Tag>
+                        <Tag color={user.role === "admin" ? "blue" : "default"}>{user.role === "admin" ? t("auth.roleAdmin") : t("auth.roleUser")}</Tag>
                         <div className="flex gap-3">
                             {user.role === "admin" ? (
                                 <Button type="primary" onClick={() => navigate("/admin")}>
-                                    进入管理后台
+                                    {t("auth.enterAdmin")}
                                 </Button>
                             ) : null}
-                            <Button onClick={() => navigate("/")}>返回首页</Button>
+                            <Button onClick={() => navigate("/")}>{t("auth.backHome")}</Button>
                         </div>
                     </div>
                 </Card>
@@ -168,13 +170,13 @@ export default function AuthPage() {
                 <div className="mb-4 flex items-center justify-between">
                     <div>
                         <Typography.Title level={4} style={{ margin: 0 }}>
-                            账号登录与注册
+                            {t("auth.title")}
                         </Typography.Title>
-                        <Typography.Text type="secondary">登录后可使用云端对象存储与多用户管理</Typography.Text>
+                        <Typography.Text type="secondary">{t("auth.subtitle")}</Typography.Text>
                     </div>
                     {isBootstrap ? (
                         <Tag color="gold" icon={<ShieldCheck className="mr-1 inline size-3.5" />}>
-                            待初始化
+                            {t("auth.uninitialized")}
                         </Tag>
                     ) : null}
                 </div>
@@ -184,8 +186,8 @@ export default function AuthPage() {
                         type="info"
                         showIcon
                         className="mb-4"
-                        message="系统尚未初始化"
-                        description="当前注册的第一个账号将自动成为系统管理员，后续用户将默认注册为普通用户。"
+                        message={t("auth.bootstrapAlertTitle")}
+                        description={t("auth.bootstrapAlertDescription")}
                     />
                 ) : null}
 
@@ -195,53 +197,53 @@ export default function AuthPage() {
                     items={[
                         {
                             key: "login",
-                            label: "登录",
+                            label: t("auth.loginTab"),
                             children: (
                                 <Form form={loginForm} layout="vertical" onFinish={handleLogin} autoComplete="on">
-                                    <Form.Item name="account" label="用户名或邮箱" rules={[{ required: true, message: "请输入用户名或邮箱" }]}>
-                                        <Input prefix={<User className="size-4 opacity-50" />} placeholder="请输入用户名或邮箱" />
+                                    <Form.Item name="account" label={t("auth.accountLabel")} rules={[{ required: true, message: t("auth.accountPlaceholder") }]}>
+                                        <Input prefix={<User className="size-4 opacity-50" />} placeholder={t("auth.accountPlaceholder")} />
                                     </Form.Item>
-                                    <Form.Item name="password" label="密码" rules={[{ required: true, message: "请输入密码" }]}>
-                                        <Input.Password prefix={<Lock className="size-4 opacity-50" />} placeholder="请输入密码" />
+                                    <Form.Item name="password" label={t("auth.passwordLabel")} rules={[{ required: true, message: t("auth.passwordPlaceholder") }]}>
+                                        <Input.Password prefix={<Lock className="size-4 opacity-50" />} placeholder={t("auth.passwordPlaceholder")} />
                                     </Form.Item>
                                     <div className="mb-3 flex justify-end">
                                         <Button type="link" size="small" className="px-0" onClick={() => setResetOpen(true)}>
-                                            忘记密码？通过邮箱重置
+                                            {t("auth.forgotPassword")}
                                         </Button>
                                     </div>
                                     <Button type="primary" htmlType="submit" block loading={submitting}>
-                                        登录
+                                        {t("auth.loginButton")}
                                     </Button>
                                 </Form>
                             ),
                         },
                         {
                             key: "register",
-                            label: isBootstrap ? "创建管理员账号" : "注册",
+                            label: isBootstrap ? t("auth.createAdminTab") : t("auth.registerTab"),
                             children: registerClosed ? (
-                                <Alert type="warning" showIcon message="管理员已关闭新用户注册" description="如需账号，请联系系统管理员开通。" />
+                                <Alert type="warning" showIcon message={t("auth.registerClosedTitle")} description={t("auth.registerClosedDescription")} />
                             ) : (
                                 <Form form={registerForm} layout="vertical" onFinish={handleRegister}>
                                     <Form.Item
                                         name="username"
-                                        label="用户名"
+                                        label={t("auth.usernameLabel")}
                                         rules={[
-                                            { required: true, message: "请输入用户名" },
-                                            { min: 3, max: 32, message: "用户名长度为 3 到 32 个字符" },
-                                            { pattern: /^[a-zA-Z0-9_-]+$/, message: "仅支持字母、数字、下划线和连字符" },
+                                            { required: true, message: t("auth.usernameRequired") },
+                                            { min: 3, max: 32, message: t("auth.usernameLength") },
+                                            { pattern: /^[a-zA-Z0-9_-]+$/, message: t("auth.usernamePattern") },
                                         ]}
                                     >
-                                        <Input prefix={<User className="size-4 opacity-50" />} placeholder="如 admin 或 alice" />
+                                        <Input prefix={<User className="size-4 opacity-50" />} placeholder={t("auth.usernamePlaceholder")} />
                                     </Form.Item>
-                                    <Form.Item name="displayName" label="显示名称（可选）">
-                                        <Input placeholder="默认与用户名一致" />
+                                    <Form.Item name="displayName" label={t("auth.displayNameLabel")}>
+                                        <Input placeholder={t("auth.displayNamePlaceholder")} />
                                     </Form.Item>
                                     <Form.Item
                                         name="email"
-                                        label={requireEmailOnRegister ? "绑定邮箱" : "邮箱（可选）"}
+                                        label={requireEmailOnRegister ? t("auth.emailRequiredLabel") : t("auth.emailOptionalLabel")}
                                         rules={[
-                                            ...(requireEmailOnRegister ? [{ required: true, message: "请输入绑定邮箱" }] : []),
-                                            { type: "email" as const, message: "邮箱格式不正确" },
+                                            ...(requireEmailOnRegister ? [{ required: true, message: t("auth.emailRequired") }] : []),
+                                            { type: "email" as const, message: t("auth.emailInvalid") },
                                         ]}
                                     >
                                         <Input prefix={<Mail className="size-4 opacity-50" />} placeholder="example@domain.com" />
@@ -249,49 +251,49 @@ export default function AuthPage() {
                                     {showRegisterCodeInput ? (
                                         <Form.Item
                                             name="emailCode"
-                                            label="邮箱验证码"
-                                            rules={[{ required: true, message: "请输入邮箱验证码" }]}
+                                            label={t("auth.emailCodeLabel")}
+                                            rules={[{ required: true, message: t("auth.emailCodeRequired") }]}
                                         >
                                             <Space.Compact className="w-full">
-                                                <Input placeholder="输入 6 位验证码" maxLength={8} />
+                                                <Input placeholder={t("auth.emailCodePlaceholder")} maxLength={8} />
                                                 <Button
                                                     loading={registerCodeSender.sending}
                                                     disabled={registerCodeSender.cooldown > 0}
                                                     onClick={() => void handleSendRegisterCode()}
                                                 >
-                                                    {registerCodeSender.cooldown > 0 ? `${registerCodeSender.cooldown}s 后重试` : "获取验证码"}
+                                                    {registerCodeSender.cooldown > 0 ? t("auth.retryAfter", { seconds: registerCodeSender.cooldown }) : t("auth.getCode")}
                                                 </Button>
                                             </Space.Compact>
                                         </Form.Item>
                                     ) : null}
                                     <Form.Item
                                         name="password"
-                                        label="密码"
+                                        label={t("auth.passwordLabel")}
                                         rules={[
-                                            { required: true, message: "请输入密码" },
-                                            { min: 6, message: "密码至少 6 位" },
+                                            { required: true, message: t("auth.passwordPlaceholder") },
+                                            { min: 6, message: t("auth.passwordMin") },
                                         ]}
                                     >
-                                        <Input.Password prefix={<Lock className="size-4 opacity-50" />} placeholder="至少 6 位" />
+                                        <Input.Password prefix={<Lock className="size-4 opacity-50" />} placeholder={t("auth.passwordMinPlaceholder")} />
                                     </Form.Item>
                                     <Form.Item
                                         name="confirmPassword"
-                                        label="确认密码"
+                                        label={t("auth.confirmPasswordLabel")}
                                         dependencies={["password"]}
                                         rules={[
-                                            { required: true, message: "请再次输入密码" },
+                                            { required: true, message: t("auth.confirmPasswordRequired") },
                                             ({ getFieldValue }) => ({
                                                 validator(_, value) {
                                                     if (!value || getFieldValue("password") === value) return Promise.resolve();
-                                                    return Promise.reject(new Error("两次输入的密码不一致"));
+                                                    return Promise.reject(new Error(t("auth.passwordMismatch")));
                                                 },
                                             }),
                                         ]}
                                     >
-                                        <Input.Password prefix={<Lock className="size-4 opacity-50" />} placeholder="再次输入密码" />
+                                        <Input.Password prefix={<Lock className="size-4 opacity-50" />} placeholder={t("auth.confirmPasswordPlaceholder")} />
                                     </Form.Item>
                                     <Button type="primary" htmlType="submit" block loading={submitting}>
-                                        {isBootstrap ? "注册并初始化为管理员" : "注册账号"}
+                                        {isBootstrap ? t("auth.registerAdminButton") : t("auth.registerButton")}
                                     </Button>
                                 </Form>
                             ),
@@ -301,7 +303,7 @@ export default function AuthPage() {
             </Card>
 
             <Modal
-                title="通过邮箱重置密码"
+                title={t("auth.resetModalTitle")}
                 open={resetOpen}
                 onCancel={() => setResetOpen(false)}
                 footer={null}
@@ -311,65 +313,65 @@ export default function AuthPage() {
                     <Alert
                         type="warning"
                         showIcon
-                        message="邮件服务暂未启用"
-                        description="管理员尚未启用平台邮件发信服务，无法自助通过邮箱重置密码，请联系管理员协助处理。"
+                        message={t("auth.mailDisabledTitle")}
+                        description={t("auth.mailDisabledDescription")}
                     />
                 ) : (
                     <Form form={resetForm} layout="vertical" onFinish={handleResetPassword}>
                         <Form.Item
                             name="email"
-                            label="绑定邮箱"
+                            label={t("auth.emailRequiredLabel")}
                             rules={[
-                                { required: true, message: "请输入账号绑定的邮箱" },
-                                { type: "email", message: "邮箱格式不正确" },
+                                { required: true, message: t("auth.boundEmailRequired") },
+                                { type: "email", message: t("auth.emailInvalid") },
                             ]}
                         >
-                            <Input prefix={<Mail className="size-4 opacity-50" />} placeholder="输入绑定的邮箱地址" />
+                            <Input prefix={<Mail className="size-4 opacity-50" />} placeholder={t("auth.boundEmailPlaceholder")} />
                         </Form.Item>
                         <Form.Item
                             name="code"
-                            label="邮箱验证码"
-                            rules={[{ required: true, message: "请输入邮箱验证码" }]}
+                            label={t("auth.emailCodeLabel")}
+                            rules={[{ required: true, message: t("auth.emailCodeRequired") }]}
                         >
                             <Space.Compact className="w-full">
-                                <Input placeholder="输入 6 位验证码" maxLength={8} />
+                                <Input placeholder={t("auth.emailCodePlaceholder")} maxLength={8} />
                                 <Button
                                     loading={resetCodeSender.sending}
                                     disabled={resetCodeSender.cooldown > 0}
                                     onClick={() => void handleSendResetCode()}
                                 >
-                                    {resetCodeSender.cooldown > 0 ? `${resetCodeSender.cooldown}s 后重试` : "发送验证码"}
+                                    {resetCodeSender.cooldown > 0 ? t("auth.retryAfter", { seconds: resetCodeSender.cooldown }) : t("auth.sendCode")}
                                 </Button>
                             </Space.Compact>
                         </Form.Item>
                         <Form.Item
                             name="newPassword"
-                            label="新密码"
+                            label={t("auth.newPasswordLabel")}
                             rules={[
-                                { required: true, message: "请输入新密码" },
-                                { min: 6, message: "密码至少 6 位" },
+                                { required: true, message: t("auth.newPasswordRequired") },
+                                { min: 6, message: t("auth.passwordMin") },
                             ]}
                         >
-                            <Input.Password prefix={<Lock className="size-4 opacity-50" />} placeholder="至少 6 位字符" />
+                            <Input.Password prefix={<Lock className="size-4 opacity-50" />} placeholder={t("auth.newPasswordPlaceholder")} />
                         </Form.Item>
                         <Form.Item
                             name="confirmPassword"
-                            label="确认新密码"
+                            label={t("auth.confirmNewPasswordLabel")}
                             dependencies={["newPassword"]}
                             rules={[
-                                { required: true, message: "请再次输入新密码" },
+                                { required: true, message: t("auth.confirmNewPasswordRequired") },
                                 ({ getFieldValue }) => ({
                                     validator(_, value) {
                                         if (!value || getFieldValue("newPassword") === value) return Promise.resolve();
-                                        return Promise.reject(new Error("两次输入的密码不一致"));
+                                        return Promise.reject(new Error(t("auth.passwordMismatch")));
                                     },
                                 }),
                             ]}
                         >
-                            <Input.Password prefix={<Lock className="size-4 opacity-50" />} placeholder="再次输入新密码" />
+                            <Input.Password prefix={<Lock className="size-4 opacity-50" />} placeholder={t("auth.confirmNewPasswordPlaceholder")} />
                         </Form.Item>
                         <Button type="primary" htmlType="submit" block loading={resetting}>
-                            确认重置密码
+                            {t("auth.confirmResetButton")}
                         </Button>
                     </Form>
                 )}

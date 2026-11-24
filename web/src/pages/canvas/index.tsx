@@ -33,7 +33,7 @@ export default function CanvasPage() {
     const handleExportSelected = async () => {
         if (exporting) return;
         setExporting(true);
-        const hide = message.loading("正在导出选中画布…", 0);
+        const hide = message.loading(t("canvas.exportingSelected"), 0);
         try {
             await exportCanvasProjects(projects.filter((project) => selectedIds.includes(project.id)), `${t("canvas.title")}-${selectedIds.length}`);
         } finally {
