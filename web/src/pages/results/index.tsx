@@ -146,22 +146,6 @@ export default function ResultsPage() {
         }
     };
 
-    const allPageSelected = Boolean(items.length) && items.every((item) => selectedIds.includes(item.id));
-    const toggleSelectAllPage = () => {
-        setSelectedIds(allPageSelected ? [] : items.map((item) => item.id));
-    };
-
-    const handleBatchDownload = async () => {
-        const targets = items.filter((item) => selectedIds.includes(item.id));
-        await downloadZip({
-            entries: targets.map((item) => ({
-                filename: mediaDownloadFilename(item),
-                loadBlob: () => storageApi.downloadBlob(item.id),
-            })),
-            zipFilename: `results-${Date.now()}.zip`,
-        });
-    };
-
     const handleDownload = async (item: MediaItem) => {
         setLoadingOriginalId(item.id);
         try {

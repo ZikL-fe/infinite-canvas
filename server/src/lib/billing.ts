@@ -176,6 +176,39 @@ export async function adjustWalletCredits(params: AdjustCreditsParams) {
   return result;
 }
 
+/** 原子将用户积分清零为 0，并在余额非 0 时写入一条管理员调整流水。 */
+export async function clearWalletCredits(params: {
+  userId: string;
+  reason: string;
+  meta?: Record<string, unknown>;
+}) {
+  return db.transaction(async (tx) => {
+    await tx.insert(creditWallets).values({ userId: params.userId, balance: 0 }).onConflictDoNothing();
+    const rows = await tx.execute(
+      sql`SELECT balance FROM credit_wallets WHERE user_id = ${params.userId} FOR UPDATE`,
+    );
+    const current = roundCredits(Number((rows[0] as { balance?: number } | undefined)?.balance ?? 0));
+    if (current === 0) {
+      return { ok: true as const, balance: 0, delta: 0 };
+    }
+    const delta = roundCredits(-current);
+    await tx
+      .update(creditWallets)
+      .set({ balance: 0, updatedAt: new Date() })
+      .where(eq(creditWallets.userId, params.userId));
+    await tx.insert(creditLedger).values({
+      id: nanoid(),
+      userId: params.userId,
+      delta,
+      balanceAfter: 0,
+      reason: params.reason,
+      refId: null,
+      meta: params.meta ?? {},
+    });
+    return { ok: true as const, balance: 0, delta };
+  });
+}
+
 /** 回写指定账本记录的元数据字段（用于预扣后补充请求耗时与任务最终状态）。 */
 export async function patchLedgerMeta(ledgerId: string, patch: Record<string, unknown>) {
   if (!ledgerId) return;

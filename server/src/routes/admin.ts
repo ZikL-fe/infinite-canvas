@@ -6,8 +6,8 @@ import { Hono } from "hono";
 import { nanoid } from "nanoid";
 import { z } from "zod";
 
-import { announcements, canvasProjects, creditWallets, db, mediaObjects, redeemCodes, redeemRecords, userAssets, userSessions, userStorageGrants, users, workbenchLogs } from "../db/index.ts";
-import { adjustWalletCredits, queryConsumptionMetrics, queryCreditLedger, roundCredits } from "../lib/billing.ts";
+import { announcements, canvasProjects, creditLedger, creditWallets, db, mediaObjects, redeemCodes, redeemRecords, userAssets, userSessions, userStorageGrants, users, workbenchLogs } from "../db/index.ts";
+import { adjustWalletCredits, clearWalletCredits, getWalletBalance, queryConsumptionMetrics, queryCreditLedger, roundCredits } from "../lib/billing.ts";
 import { maskSecret } from "../lib/crypto.ts";
 import {
   cleanupOrphanedUserMedia,
@@ -101,10 +101,16 @@ const channelModelSchema = z.object({
   pricing: modelPricingSchema,
 });
 
-const adjustCreditsSchema = z.object({
-  delta: z.number().refine((v) => Number.isFinite(v) && v !== 0, "调整积分不能为 0"),
-  note: z.string().trim().max(200).optional(),
-});
+const adjustCreditsSchema = z
+  .object({
+    delta: z.number().optional(),
+    clear: z.boolean().optional(),
+    note: z.string().trim().max(200).optional(),
+  })
+  .refine(
+    (data) => data.clear === true || (typeof data.delta === "number" && Number.isFinite(data.delta) && data.delta !== 0),
+    "调整积分不能为 0",
+  );
 
 const createRedeemCodesSchema = z
   .object({
@@ -460,6 +466,143 @@ adminRoutes.get("/users", async (c) => {
   });
 });
 
+adminRoutes.get("/users/:id/detail", async (c) => {
+  const targetId = c.req.param("id");
+  const days = Number(c.req.query("days") || 7);
+  const target = await db.query.users.findFirst({
+    where: eq(users.id, targetId),
+    columns: {
+      id: true,
+      username: true,
+      email: true,
+      emailVerifiedAt: true,
+      displayName: true,
+      avatarUrl: true,
+      role: true,
+      status: true,
+      storageUsedBytes: true,
+      storageQuotaBytes: true,
+      storageQuotaExpiresAt: true,
+      storagePreExpiryWarnedFor: true,
+      storageExpiredWarnedFor: true,
+      storageCleanedAt: true,
+      lowBalanceAlertEnabled: true,
+      lowBalanceThreshold: true,
+      lastLoginAt: true,
+      createdAt: true,
+      updatedAt: true,
+    },
+  });
+  if (!target) {
+    return c.json({ error: "用户不存在" }, 404);
+  }
+
+  const [
+    creditBalance,
+    consumption,
+    quotaSummary,
+    grantRows,
+    [mediaRow],
+    [canvasRow],
+    [assetRow],
+    [imageLogRow],
+    [videoLogRow],
+    [rechargeRow],
+    recentLedger,
+    sessionRows,
+  ] = await Promise.all([
+    getWalletBalance(targetId),
+    queryConsumptionMetrics(days, targetId),
+    getUserStorageQuotaSummary(target),
+    db.query.userStorageGrants.findMany({
+      where: eq(userStorageGrants.userId, targetId),
+      orderBy: [desc(userStorageGrants.createdAt)],
+    }),
+    db
+      .select({ count: count() })
+      .from(mediaObjects)
+      .where(and(eq(mediaObjects.userId, targetId), eq(mediaObjects.status, "active"))),
+    db
+      .select({ count: count() })
+      .from(canvasProjects)
+      .where(and(eq(canvasProjects.userId, targetId), isNull(canvasProjects.deletedAt))),
+    db
+      .select({ count: count() })
+      .from(userAssets)
+      .where(and(eq(userAssets.userId, targetId), isNull(userAssets.deletedAt))),
+    db
+      .select({ count: count() })
+      .from(workbenchLogs)
+      .where(and(eq(workbenchLogs.userId, targetId), eq(workbenchLogs.kind, "image"), isNull(workbenchLogs.deletedAt))),
+    db
+      .select({ count: count() })
+      .from(workbenchLogs)
+      .where(and(eq(workbenchLogs.userId, targetId), eq(workbenchLogs.kind, "video"), isNull(workbenchLogs.deletedAt))),
+    db
+      .select({
+        total: sql<number>`COALESCE(SUM(CASE WHEN ${creditLedger.delta} > 0 THEN ${creditLedger.delta} ELSE 0 END), 0)::double precision`,
+      })
+      .from(creditLedger)
+      .where(and(eq(creditLedger.userId, targetId), inArray(creditLedger.reason, ["redeem_code", "admin_adjust", "plan_grant"]))),
+    queryCreditLedger({ userId: targetId, page: 1, pageSize: 10 }),
+    db.query.userSessions.findMany({
+      where: eq(userSessions.userId, targetId),
+      orderBy: [desc(userSessions.createdAt)],
+      limit: 10,
+      columns: {
+        id: true,
+        userAgent: true,
+        ipAddress: true,
+        expiresAt: true,
+        revokedAt: true,
+        createdAt: true,
+      },
+    }),
+  ]);
+
+  const now = new Date();
+  return c.json({
+    user: {
+      ...target,
+      creditBalance,
+      storageQuotaBytes: quotaSummary.storageQuotaBytes,
+      storageQuotaExpiresAt: quotaSummary.storageQuotaExpiresAt ? quotaSummary.storageQuotaExpiresAt.toISOString() : null,
+      baseStorageQuotaBytes: quotaSummary.baseStorageQuotaBytes,
+      baseStorageQuotaExpiresAt: quotaSummary.baseStorageQuotaExpiresAt ? quotaSummary.baseStorageQuotaExpiresAt.toISOString() : null,
+      storageGrantsQuotaBytes: quotaSummary.storageGrantsQuotaBytes,
+      activeGrantCount: quotaSummary.activeGrantCount,
+      emailVerifiedAt: target.emailVerifiedAt ? target.emailVerifiedAt.toISOString() : null,
+      storagePreExpiryWarnedFor: target.storagePreExpiryWarnedFor ? target.storagePreExpiryWarnedFor.toISOString() : null,
+      storageExpiredWarnedFor: target.storageExpiredWarnedFor ? target.storageExpiredWarnedFor.toISOString() : null,
+      storageCleanedAt: target.storageCleanedAt ? target.storageCleanedAt.toISOString() : null,
+      lastLoginAt: target.lastLoginAt ? target.lastLoginAt.toISOString() : null,
+      createdAt: target.createdAt.toISOString(),
+      updatedAt: target.updatedAt.toISOString(),
+    },
+    stats: {
+      totalRechargedCredits: roundCredits(Number(rechargeRow?.total ?? 0)),
+      activeMediaCount: Number(mediaRow?.count ?? 0),
+      canvasProjectCount: Number(canvasRow?.count ?? 0),
+      assetCount: Number(assetRow?.count ?? 0),
+      imageLogCount: Number(imageLogRow?.count ?? 0),
+      videoLogCount: Number(videoLogRow?.count ?? 0),
+      activeSessionCount: sessionRows.filter((s) => !s.revokedAt && s.expiresAt.getTime() > now.getTime()).length,
+    },
+    consumption,
+    grants: grantRows.map((grant) => serializeStorageGrant(grant, now)),
+    recentLogs: recentLedger.items,
+    sessions: sessionRows.map((s) => ({
+      id: s.id,
+      userAgent: s.userAgent,
+      ipAddress: s.ipAddress,
+      expiresAt: s.expiresAt.toISOString(),
+      revokedAt: s.revokedAt ? s.revokedAt.toISOString() : null,
+      createdAt: s.createdAt.toISOString(),
+      active: !s.revokedAt && s.expiresAt.getTime() > now.getTime(),
+    })),
+  });
+});
+
 adminRoutes.post("/users/:id/credits", zValidator("json", adjustCreditsSchema), async (c) => {
   const targetId = c.req.param("id");
   const body = c.req.valid("json");
@@ -467,9 +610,17 @@ adminRoutes.post("/users/:id/credits", zValidator("json", adjustCreditsSchema), 
   if (!target) {
     return c.json({ error: "用户不存在" }, 404);
   }
+  if (body.clear) {
+    const result = await clearWalletCredits({
+      userId: targetId,
+      reason: "admin_adjust",
+      meta: { adminId: c.get("user").id, note: body.note || "管理员清零积分", action: "clear" },
+    });
+    return c.json({ ok: true, balance: result.balance });
+  }
   const result = await adjustWalletCredits({
     userId: targetId,
-    delta: body.delta,
+    delta: body.delta!,
     reason: "admin_adjust",
     allowNegative: true,
     meta: { adminId: c.get("user").id, note: body.note || "" },

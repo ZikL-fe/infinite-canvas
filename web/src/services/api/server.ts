@@ -187,6 +187,47 @@ export type AdminUserItem = LocalUser & {
     createdAt: string;
 };
 
+export type AdminUserDetailResponse = {
+    user: AdminUserItem & {
+        emailVerifiedAt?: string | null;
+        storagePreExpiryWarnedFor?: string | null;
+        storageExpiredWarnedFor?: string | null;
+        storageCleanedAt?: string | null;
+        lowBalanceAlertEnabled?: boolean | null;
+        lowBalanceThreshold?: number | null;
+        updatedAt: string;
+    };
+    stats: {
+        totalRechargedCredits: number;
+        activeMediaCount: number;
+        canvasProjectCount: number;
+        assetCount: number;
+        imageLogCount: number;
+        videoLogCount: number;
+        activeSessionCount: number;
+    };
+    consumption: {
+        days: number;
+        totalConsumedCredits: number;
+        todayConsumedCredits: number;
+        rangeConsumedCredits: number;
+        rangeCalls: number;
+        dailyTrend: DailyTrendItem[];
+        topModels: TopModelUsageItem[];
+    };
+    grants: StorageGrantItem[];
+    recentLogs: CreditLedgerItem[];
+    sessions: Array<{
+        id: string;
+        userAgent: string;
+        ipAddress: string;
+        expiresAt: string;
+        revokedAt: string | null;
+        createdAt: string;
+        active: boolean;
+    }>;
+};
+
 export type CreditLedgerItem = {
     id: string;
     userId: string;
@@ -815,9 +856,11 @@ export const adminApi = {
         const suffix = query.size ? `?${query.toString()}` : "";
         return requestServer<{ items: AdminUserItem[]; total: number; page: number; pageSize: number }>(`/admin/users${suffix}`);
     },
+    getUserDetail: (id: string, days = 7) =>
+        requestServer<AdminUserDetailResponse>(`/admin/users/${encodeURIComponent(id)}/detail?days=${days}`),
     updateUser: (id: string, payload: { role?: UserRole; status?: UserStatus }) =>
         requestServer<{ user: AdminUserItem }>(`/admin/users/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(payload) }),
-    adjustUserCredits: (id: string, payload: { delta: number; note?: string }) =>
+    adjustUserCredits: (id: string, payload: { delta?: number; clear?: boolean; note?: string }) =>
         requestServer<{ ok: boolean; balance: number }>(`/admin/users/${encodeURIComponent(id)}/credits`, { method: "POST", body: JSON.stringify(payload) }),
     updateUserStorageQuota: (id: string, payload: { storageQuotaBytes: number; storageQuotaExpiresAt?: string | null; recalculateUsedBytes?: boolean }) =>
         requestServer<{

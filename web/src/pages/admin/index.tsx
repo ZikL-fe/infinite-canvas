@@ -8,6 +8,7 @@ import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 
 import { ChannelEditorDrawer } from "@/components/layout/channel-editor-drawer";
 import { ADMIN_TABLE_CLASS, ADMIN_TABLE_SCROLL, TableRowActions } from "@/pages/admin/components/table-row-actions";
+import { UserDetailDrawer } from "@/pages/admin/components/user-detail-drawer";
 import { AnnouncementsCard, ConsumptionTrendCard, MEDIA_MODULE_OPTIONS, MediaModuleTags, MyMediaPanel, MyWalletPanel, ProfileSecurityPanel, UsageLogsPanel, UserOverviewPanel, WorkspaceSizeCell } from "@/pages/admin/user-panels";
 import { useCopyText } from "@/hooks/use-copy-text";
 import {
@@ -77,8 +78,8 @@ type UserWebdavForm = {
 };
 
 type UserCreditForm = {
-    mode: "add" | "deduct";
-    amount: number;
+    mode: "add" | "deduct" | "clear";
+    amount?: number;
     note: string;
 };
 
@@ -182,6 +183,7 @@ export default function AdminPage() {
     const [userWebdavSaving, setUserWebdavSaving] = useState(false);
     const [creditUser, setCreditUser] = useState<AdminUserItem | null>(null);
     const [userCreditForm] = Form.useForm<UserCreditForm>();
+    const creditModeWatch = Form.useWatch("mode", userCreditForm) || "add";
     const [userCreditSaving, setUserCreditSaving] = useState(false);
     const [storageQuotaUser, setStorageQuotaUser] = useState<AdminUserItem | null>(null);
     const [userStorageQuotaForm] = Form.useForm<UserStorageQuotaForm>();
@@ -189,6 +191,8 @@ export default function AdminPage() {
     const [storageQuotaGrants, setStorageQuotaGrants] = useState<StorageGrantItem[]>([]);
     const [storageQuotaGrantsLoading, setStorageQuotaGrantsLoading] = useState(false);
     const [updatingGrantId, setUpdatingGrantId] = useState<string | null>(null);
+    const [detailUserId, setDetailUserId] = useState<string | null>(null);
+    const [detailRefreshKey, setDetailRefreshKey] = useState(0);
 
     const [storageForm] = Form.useForm<S3StorageConfigForm>();
     const [storagePreview, setStoragePreview] = useState("");
@@ -734,6 +738,7 @@ export default function AdminPage() {
             message.success(nextStatus === "revoked" ? "已停用该存储资源包" : "已恢复该存储资源包");
             await loadUserStorageGrants(storageQuotaUser.id);
             void loadUsers();
+            setDetailRefreshKey((v) => v + 1);
             if (storageQuotaUser.id === user.id) {
                 const refreshed = await adminApi.getUserStorageGrants(storageQuotaUser.id);
                 useUserStore.getState().setUser({
@@ -771,6 +776,7 @@ export default function AdminPage() {
             }
             setStorageQuotaUser(null);
             void loadUsers();
+            setDetailRefreshKey((v) => v + 1);
             void loadOverview();
         } catch (error) {
             message.error(error instanceof Error ? error.message : "更新云端存储配额失败");
@@ -781,19 +787,23 @@ export default function AdminPage() {
 
     const handleAdjustUserCredits = async (values: UserCreditForm) => {
         if (!creditUser) return;
+        const isClear = values.mode === "clear";
         const delta = values.mode === "deduct" ? -Math.abs(Number(values.amount)) : Math.abs(Number(values.amount));
         setUserCreditSaving(true);
         try {
-            const res = await adminApi.adjustUserCredits(creditUser.id, {
-                delta,
-                note: values.note?.trim() || "",
-            });
-            message.success(`积分已调整，当前余额：${res.balance}`);
+            const res = await adminApi.adjustUserCredits(
+                creditUser.id,
+                isClear
+                    ? { clear: true, note: values.note?.trim() || "管理员清零积分" }
+                    : { delta, note: values.note?.trim() || "" },
+            );
+            message.success(isClear ? "用户积分已清零" : `积分已调整，当前余额：${res.balance}`);
             if (creditUser.id === user.id) {
                 useUserStore.getState().setUser({ ...user, creditBalance: res.balance });
             }
             setCreditUser(null);
             void loadUsers();
+            setDetailRefreshKey((v) => v + 1);
         } catch (error) {
             message.error(error instanceof Error ? error.message : "调整积分失败");
         } finally {
@@ -1643,7 +1653,13 @@ export default function AdminPage() {
                                                 render: (_, record) => (
                                                     <div className="max-w-[200px]">
                                                         <div className="truncate font-medium">
-                                                            {record.displayName || record.username}
+                                                            <button
+                                                                type="button"
+                                                                className="cursor-pointer border-0 bg-transparent p-0 text-left font-medium hover:underline"
+                                                                onClick={() => setDetailUserId(record.id)}
+                                                            >
+                                                                {record.displayName || record.username}
+                                                            </button>
                                                             {record.id === user.id ? <Tag className="ml-2">当前</Tag> : null}
                                                         </div>
                                                         <Typography.Text type="secondary" ellipsis className="block text-xs">
@@ -1726,6 +1742,11 @@ export default function AdminPage() {
                                                 render: (_, record) => (
                                                     <TableRowActions
                                                         items={[
+                                                            {
+                                                                key: "detail",
+                                                                label: "详情",
+                                                                onClick: () => setDetailUserId(record.id),
+                                                            },
                                                             {
                                                                 key: "quota",
                                                                 label: "配额",
@@ -3103,6 +3124,7 @@ export default function AdminPage() {
 
             <Modal
                 open={Boolean(storageQuotaUser)}
+                zIndex={1020}
                 title={
                     storageQuotaUser
                         ? `配置 ${storageQuotaUser.displayName || storageQuotaUser.username} 的云端存储配额`
@@ -3216,9 +3238,12 @@ export default function AdminPage() {
 
             <Modal
                 open={Boolean(creditUser)}
+                zIndex={1020}
                 title={creditUser ? `调整 ${creditUser.displayName || creditUser.username} 的积分（当前：${creditUser.creditBalance ?? 0}）` : "调整积分"}
                 onCancel={() => setCreditUser(null)}
                 onOk={() => userCreditForm.submit()}
+                okText={creditModeWatch === "clear" ? "确认清零" : "确定"}
+                okButtonProps={{ danger: creditModeWatch === "clear" }}
                 confirmLoading={userCreditSaving}
             >
                 <Form form={userCreditForm} layout="vertical" onFinish={handleAdjustUserCredits}>
@@ -3226,17 +3251,28 @@ export default function AdminPage() {
                         <Radio.Group>
                             <Radio.Button value="add">增加积分（充值 / 赠送）</Radio.Button>
                             <Radio.Button value="deduct">扣减积分</Radio.Button>
+                            <Radio.Button value="clear">清零积分</Radio.Button>
                         </Radio.Group>
                     </Form.Item>
-                    <Form.Item
-                        name="amount"
-                        label="积分数量"
-                        rules={[{ required: true, message: "请输入积分数量" }]}
-                    >
-                        <InputNumber className="w-full" min={0.0001} step={10} />
-                    </Form.Item>
+                    {creditModeWatch === "clear" ? (
+                        <Alert
+                            type="warning"
+                            showIcon
+                            className="mb-4"
+                            message={`将把该用户当前积分余额（${creditUser?.creditBalance ?? 0}）直接清零为 0`}
+                            description="清零操作会原子写入积分流水记录，方便后续审计追踪。"
+                        />
+                    ) : (
+                        <Form.Item
+                            name="amount"
+                            label="积分数量"
+                            rules={[{ required: true, message: "请输入积分数量" }]}
+                        >
+                            <InputNumber className="w-full" min={0.0001} step={10} />
+                        </Form.Item>
+                    )}
                     <Form.Item name="note" label="备注说明（可选）">
-                        <Input placeholder="例如：管理员充值 / 活动赠送 / 异常补扣" />
+                        <Input placeholder={creditModeWatch === "clear" ? "例如：违规清零 / 测试账号重置" : "例如：管理员充值 / 活动赠送 / 异常补扣"} />
                     </Form.Item>
                 </Form>
             </Modal>
@@ -3335,6 +3371,16 @@ export default function AdminPage() {
                     </Form.Item>
                 </Form>
             </Modal>
+
+            <UserDetailDrawer
+                userId={detailUserId}
+                refreshKey={detailRefreshKey}
+                currentUserId={user.id}
+                onClose={() => setDetailUserId(null)}
+                onOpenCredits={(target) => openAdjustCredits(target)}
+                onOpenQuota={(target) => openConfigStorageQuota(target)}
+                onUpdateUser={handleUpdateUser}
+            />
 
             <Modal
                 open={Boolean(previewMediaItem)}

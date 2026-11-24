@@ -1162,17 +1162,6 @@ function LedgerDetailModal({
             setDownloadingId(null);
         }
     };
-
-    const handleBatchDownloadMedia = async () => {
-        const targets = items.filter((item) => selectedMediaIds.includes(item.id));
-        await downloadZip({
-            entries: targets.map((item) => ({
-                filename: mediaDownloadFilename(item),
-                loadBlob: () => storageApi.downloadBlob(item.id),
-            })),
-            zipFilename: `cloud-media-${Date.now()}.zip`,
-        });
-    };
     const reasonInfo = item ? ledgerReasonMeta[item.reason] : undefined;
     const modelName = typeof item?.meta?.model === "string" && item.meta.model ? item.meta.model : "";
     const hasTokens = typeof item?.meta?.inputTokens === "number" || typeof item?.meta?.outputTokens === "number";
