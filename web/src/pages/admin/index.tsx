@@ -1,9 +1,9 @@
 /** 后台管理与个人后台入口页：采用左侧导航菜单与全宽内容区，管理员支持平台全局管控与个人中心切换。 */
 import { useCallback, useEffect, useState, type ReactNode } from "react";
-import { Alert, App, Button, Card, Col, DatePicker, Descriptions, Drawer, Form, Image, Input, InputNumber, Menu, Modal, Progress, Radio, Result, Row, Select, Space, Statistic, Switch, Table, Tabs, Tag, Typography, Upload, theme as antdTheme } from "antd";
+import { Alert, App, Button, Card, Col, DatePicker, Descriptions, Drawer, Form, Image, Input, InputNumber, Menu, Modal, Popconfirm, Progress, Radio, Result, Row, Select, Space, Statistic, Switch, Table, Tabs, Tag, Tooltip, Typography, Upload, theme as antdTheme } from "antd";
 import type { MenuProps, UploadProps } from "antd";
 import dayjs, { type Dayjs } from "dayjs";
-import { AudioLines, Copy, Coins, Cpu, Database, Download, FileIcon, FolderKanban, Gift, HardDrive, ImageIcon, LayoutDashboard, Megaphone, Menu as MenuIcon, Plus, RefreshCw, ScrollText, Shield, Sliders, UploadCloud, UserCheck, Users, Video, Wifi } from "lucide-react";
+import { AudioLines, Copy, Coins, Cpu, Database, Download, FileIcon, FolderKanban, Gift, HardDrive, ImageIcon, LayoutDashboard, Megaphone, Menu as MenuIcon, Plus, RefreshCw, ScrollText, Shield, Sliders, Trash2, UploadCloud, UserCheck, Users, Video, Wifi } from "lucide-react";
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 
 import { ChannelEditorDrawer } from "@/components/layout/channel-editor-drawer";
@@ -90,7 +90,6 @@ type CreateRedeemForm = {
     credits: number;
     storageQuotaMb: number;
     storageDurationDays: number | null;
-    maxUses: number;
     prefix: string;
     customCode: string;
     expiresAt: Dayjs | null;
@@ -218,7 +217,9 @@ export default function AdminPage() {
     const [redeemPage, setRedeemPage] = useState(1);
     const [redeemQuery, setRedeemQuery] = useState("");
     const [redeemStatusFilter, setRedeemStatusFilter] = useState("");
-    const [redeemKindFilter, setRedeemKindFilter] = useState<RedeemCodeKind | "">("");
+    const [redeemActiveKind, setRedeemActiveKind] = useState<RedeemCodeKind>("credits");
+    const [selectedRedeemIds, setSelectedRedeemIds] = useState<string[]>([]);
+    const [batchDeletingRedeem, setBatchDeletingRedeem] = useState(false);
     const [redeemLoading, setRedeemLoading] = useState(false);
     const [createRedeemOpen, setCreateRedeemOpen] = useState(false);
     const [createRedeemForm] = Form.useForm<CreateRedeemForm>();
@@ -351,7 +352,7 @@ export default function AdminPage() {
     }, [message, webdavForm]);
 
     const loadRedeemCodes = useCallback(
-        async (page = redeemPage, q = redeemQuery, status = redeemStatusFilter, kind = redeemKindFilter) => {
+        async (page = redeemPage, q = redeemQuery, status = redeemStatusFilter, kind = redeemActiveKind) => {
             setRedeemLoading(true);
             try {
                 const res = await adminApi.listRedeemCodes({ page, pageSize: 15, q, status, kind });
@@ -363,7 +364,7 @@ export default function AdminPage() {
                 setRedeemLoading(false);
             }
         },
-        [message, redeemKindFilter, redeemPage, redeemQuery, redeemStatusFilter],
+        [message, redeemActiveKind, redeemPage, redeemQuery, redeemStatusFilter],
     );
 
     const loadAnnouncements = useCallback(async () => {
@@ -424,8 +425,8 @@ export default function AdminPage() {
 
     useEffect(() => {
         if (!isAdmin || activeTab !== "redeem-codes") return;
-        void loadRedeemCodes(redeemPage, redeemQuery, redeemStatusFilter, redeemKindFilter);
-    }, [activeTab, isAdmin, loadRedeemCodes, redeemKindFilter, redeemPage, redeemQuery, redeemStatusFilter]);
+        void loadRedeemCodes(redeemPage, redeemQuery, redeemStatusFilter, redeemActiveKind);
+    }, [activeTab, isAdmin, loadRedeemCodes, redeemActiveKind, redeemPage, redeemQuery, redeemStatusFilter]);
 
     useEffect(() => {
         if (!isAdmin || activeTab !== "announcements") return;
@@ -733,7 +734,7 @@ export default function AdminPage() {
     const handleCreateRedeemCodes = async (values: CreateRedeemForm) => {
         setCreatingRedeem(true);
         try {
-            const kind = values.kind || "credits";
+            const kind = values.kind || redeemActiveKind;
             const res = await adminApi.createRedeemCodes({
                 kind,
                 count: Number(values.count || 1),
@@ -746,7 +747,7 @@ export default function AdminPage() {
                                   ? Math.round(values.storageDurationDays)
                                   : null,
                       }),
-                maxUses: Number(values.maxUses || 1),
+                maxUses: 1,
                 prefix: values.prefix?.trim() || (kind === "storage" ? "ST" : "IC"),
                 customCode: values.count === 1 ? values.customCode?.trim() : undefined,
                 expiresAt: values.expiresAt ? values.expiresAt.toISOString() : null,
@@ -756,11 +757,43 @@ export default function AdminPage() {
             setCreateRedeemOpen(false);
             createRedeemForm.resetFields();
             message.success(`已生成 ${res.items.length} 个兑换码`);
-            void loadRedeemCodes(1, redeemQuery, redeemStatusFilter, redeemKindFilter);
+            setSelectedRedeemIds([]);
+            if (kind !== redeemActiveKind) {
+                setRedeemPage(1);
+                setRedeemActiveKind(kind);
+            } else {
+                void loadRedeemCodes(1, redeemQuery, redeemStatusFilter, kind);
+            }
         } catch (error) {
             message.error(error instanceof Error ? error.message : "生成兑换码失败");
         } finally {
             setCreatingRedeem(false);
+        }
+    };
+
+    const selectedRedeemItems = redeemItems.filter((item) => selectedRedeemIds.includes(item.id));
+    const hasSelectedUsedRedeem = selectedRedeemItems.some((item) => item.usedCount > 0);
+
+    const handleBatchCopyRedeemCodes = () => {
+        if (!selectedRedeemItems.length) return;
+        copyText(
+            selectedRedeemItems.map((item) => item.code).join("\n"),
+            `已复制 ${selectedRedeemItems.length} 个兑换码`,
+        );
+    };
+
+    const handleBatchDeleteRedeemCodes = async () => {
+        if (!selectedRedeemIds.length || hasSelectedUsedRedeem) return;
+        setBatchDeletingRedeem(true);
+        try {
+            const res = await adminApi.batchDeleteRedeemCodes(selectedRedeemIds);
+            message.success(`已删除 ${res.deletedCount} 个兑换码`);
+            setSelectedRedeemIds([]);
+            void loadRedeemCodes();
+        } catch (error) {
+            message.error(error instanceof Error ? error.message : "批量删除失败");
+        } finally {
+            setBatchDeletingRedeem(false);
         }
     };
 
@@ -1580,27 +1613,15 @@ export default function AdminPage() {
                                     ) : null}
 
                                     <Card
-                                        title="兑换码管理（积分兑换码 / 云端存储兑换码）"
+                                        title="兑换码管理（每个兑换码仅限 1 人兑换，已使用不可删除）"
                                         extra={
                                             <Space wrap>
-                                                <Select
-                                                    value={redeemKindFilter}
-                                                    style={{ width: 135 }}
-                                                    onChange={(value) => {
-                                                        setRedeemPage(1);
-                                                        setRedeemKindFilter(value as RedeemCodeKind | "");
-                                                    }}
-                                                    options={[
-                                                        { value: "", label: "全部类型" },
-                                                        { value: "credits", label: "积分兑换码" },
-                                                        { value: "storage", label: "云端存储码" },
-                                                    ]}
-                                                />
                                                 <Select
                                                     value={redeemStatusFilter}
                                                     style={{ width: 115 }}
                                                     onChange={(value) => {
                                                         setRedeemPage(1);
+                                                        setSelectedRedeemIds([]);
                                                         setRedeemStatusFilter(value);
                                                     }}
                                                     options={[
@@ -1615,6 +1636,7 @@ export default function AdminPage() {
                                                     style={{ width: 200 }}
                                                     onSearch={(value) => {
                                                         setRedeemPage(1);
+                                                        setSelectedRedeemIds([]);
                                                         setRedeemQuery(value.trim());
                                                     }}
                                                 />
@@ -1622,15 +1644,13 @@ export default function AdminPage() {
                                                     type="primary"
                                                     icon={<Plus className="size-4" />}
                                                     onClick={() => {
-                                                        const nextKind: RedeemCodeKind = redeemKindFilter === "storage" ? "storage" : "credits";
                                                         createRedeemForm.setFieldsValue({
-                                                            kind: nextKind,
+                                                            kind: redeemActiveKind,
                                                             count: 1,
                                                             credits: 100,
                                                             storageQuotaMb: 1024,
                                                             storageDurationDays: 30,
-                                                            maxUses: 1,
-                                                            prefix: nextKind === "storage" ? "ST" : "IC",
+                                                            prefix: redeemActiveKind === "storage" ? "ST" : "IC",
                                                             customCode: "",
                                                             expiresAt: null,
                                                             note: "",
@@ -1638,22 +1658,82 @@ export default function AdminPage() {
                                                         setCreateRedeemOpen(true);
                                                     }}
                                                 >
-                                                    生成兑换码
+                                                    {redeemActiveKind === "storage" ? "生成存储兑换码" : "生成积分兑换码"}
                                                 </Button>
                                             </Space>
                                         }
                                     >
+                                        <Tabs
+                                            activeKey={redeemActiveKind}
+                                            onChange={(key) => {
+                                                setRedeemPage(1);
+                                                setSelectedRedeemIds([]);
+                                                setRedeemActiveKind(key as RedeemCodeKind);
+                                            }}
+                                            items={[
+                                                { key: "credits", label: "积分兑换码" },
+                                                { key: "storage", label: "云端存储兑换码" },
+                                            ]}
+                                        />
+
+                                        {selectedRedeemIds.length > 0 ? (
+                                            <div
+                                                className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-lg border px-3 py-2 text-xs"
+                                                style={{ borderColor: token.colorBorderSecondary, background: token.colorFillAlter }}
+                                            >
+                                                <span>
+                                                    已选择 <strong>{selectedRedeemIds.length}</strong> 个兑换码
+                                                    {hasSelectedUsedRedeem ? (
+                                                        <Typography.Text type="danger" className="ml-2">
+                                                            （包含已使用兑换码，不可批量删除）
+                                                        </Typography.Text>
+                                                    ) : null}
+                                                </span>
+                                                <Space>
+                                                    <Button size="small" icon={<Copy className="size-3.5" />} onClick={handleBatchCopyRedeemCodes}>
+                                                        批量复制
+                                                    </Button>
+                                                    <Tooltip title={hasSelectedUsedRedeem ? "已使用过的兑换码不能删除，请取消勾选后再试" : undefined}>
+                                                        {hasSelectedUsedRedeem ? (
+                                                            <Button size="small" danger disabled icon={<Trash2 className="size-3.5" />}>
+                                                                批量删除
+                                                            </Button>
+                                                        ) : (
+                                                            <Popconfirm
+                                                                title={`确定删除选中的 ${selectedRedeemIds.length} 个未使用兑换码吗？`}
+                                                                onConfirm={() => void handleBatchDeleteRedeemCodes()}
+                                                            >
+                                                                <Button size="small" danger loading={batchDeletingRedeem} icon={<Trash2 className="size-3.5" />}>
+                                                                    批量删除
+                                                                </Button>
+                                                            </Popconfirm>
+                                                        )}
+                                                    </Tooltip>
+                                                    <Button size="small" type="text" onClick={() => setSelectedRedeemIds([])}>
+                                                        取消选择
+                                                    </Button>
+                                                </Space>
+                                            </div>
+                                        ) : null}
+
                                         <Table<RedeemCodeItem>
                                             rowKey="id"
                                             className={ADMIN_TABLE_CLASS}
                                             scroll={ADMIN_TABLE_SCROLL}
                                             loading={redeemLoading}
                                             dataSource={redeemItems}
+                                            rowSelection={{
+                                                selectedRowKeys: selectedRedeemIds,
+                                                onChange: (keys) => setSelectedRedeemIds(keys.map(String)),
+                                            }}
                                             pagination={{
                                                 current: redeemPage,
                                                 pageSize: 15,
                                                 total: redeemTotal,
-                                                onChange: (page) => setRedeemPage(page),
+                                                onChange: (page) => {
+                                                    setSelectedRedeemIds([]);
+                                                    setRedeemPage(page);
+                                                },
                                             }}
                                             columns={[
                                                 {
@@ -1666,13 +1746,6 @@ export default function AdminPage() {
                                                             <Button size="small" type="text" icon={<Copy className="size-3.5" />} onClick={() => copyText(code)} />
                                                         </Space>
                                                     ),
-                                                },
-                                                {
-                                                    title: "类型",
-                                                    dataIndex: "kind",
-                                                    width: 100,
-                                                    render: (kind?: RedeemCodeKind) =>
-                                                        kind === "storage" ? <Tag color="blue">云端存储</Tag> : <Tag color="gold">积分</Tag>,
                                                 },
                                                 {
                                                     title: "兑换内容",
@@ -1689,20 +1762,37 @@ export default function AdminPage() {
                                                         ),
                                                 },
                                                 {
-                                                    title: "已兑 / 上限",
-                                                    key: "uses",
-                                                    width: 100,
-                                                    render: (_, record) => `${record.usedCount} / ${record.maxUses}`,
-                                                },
-                                                {
                                                     title: "状态",
                                                     key: "state",
                                                     width: 90,
                                                     render: (_, record) => {
+                                                        if (record.usedCount > 0 || record.usedCount >= record.maxUses) return <Tag color="orange">已使用</Tag>;
                                                         if (record.status === "disabled") return <Tag color="default">已停用</Tag>;
-                                                        if (record.usedCount >= record.maxUses) return <Tag color="orange">已兑完</Tag>;
                                                         if (record.expiresAt && new Date(record.expiresAt).getTime() <= Date.now()) return <Tag color="red">已过期</Tag>;
                                                         return <Tag color="green">可用</Tag>;
+                                                    },
+                                                },
+                                                {
+                                                    title: "兑换人 / 兑换时间",
+                                                    key: "redemption",
+                                                    width: 250,
+                                                    render: (_, record) => {
+                                                        const r = record.redemption;
+                                                        if (!r) return <Typography.Text type="secondary">—</Typography.Text>;
+                                                        return (
+                                                            <div className="flex flex-col text-xs leading-5">
+                                                                <div className="flex items-center gap-1.5">
+                                                                    <span className="font-medium">{r.username || r.displayName || "未知用户"}</span>
+                                                                    <Typography.Text type="secondary" code className="text-[11px]">
+                                                                        {r.userId}
+                                                                    </Typography.Text>
+                                                                    <Button size="small" type="text" icon={<Copy className="size-3" />} onClick={() => copyText(r.userId, "已复制用户 ID")} />
+                                                                </div>
+                                                                <Typography.Text type="secondary" className="text-[11px]">
+                                                                    {new Date(r.redeemedAt).toLocaleString("zh-CN")}
+                                                                </Typography.Text>
+                                                            </div>
+                                                        );
                                                     },
                                                 },
                                                 {
@@ -1732,12 +1822,14 @@ export default function AdminPage() {
                                                                 {
                                                                     key: "toggle",
                                                                     label: record.status === "active" ? "停用" : "启用",
+                                                                    disabled: record.usedCount > 0,
                                                                     onClick: () => void handleToggleRedeemStatus(record),
                                                                 },
                                                                 {
                                                                     key: "delete",
                                                                     label: "删除",
                                                                     danger: true,
+                                                                    disabled: record.usedCount > 0,
                                                                     confirm: "确定删除该兑换码吗？",
                                                                     onClick: () => void handleDeleteRedeemCode(record.id),
                                                                 },
@@ -2598,13 +2690,13 @@ export default function AdminPage() {
                     ) : null}
                     <Row gutter={12}>
                         <Col span={12}>
-                            <Form.Item name="maxUses" label="单个码最多可被多少人兑换" rules={[{ required: true, message: "请输入可用次数" }]}>
-                                <InputNumber className="w-full" min={1} />
+                            <Form.Item name="prefix" label="兑换码前缀">
+                                <Input placeholder={redeemKindWatch === "storage" ? "ST" : "IC"} maxLength={16} />
                             </Form.Item>
                         </Col>
                         <Col span={12}>
-                            <Form.Item name="prefix" label="兑换码前缀">
-                                <Input placeholder={redeemKindWatch === "storage" ? "ST" : "IC"} maxLength={16} />
+                            <Form.Item label="兑换限制">
+                                <Input value="每个码仅限 1 人兑换" disabled />
                             </Form.Item>
                         </Col>
                     </Row>

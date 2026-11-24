@@ -53,8 +53,8 @@ export async function claimRedeemCodeInTx(
   if (row.expires_at && new Date(row.expires_at).getTime() <= Date.now()) {
     return { error: "该兑换码已过期", status: 400 as const };
   }
-  if (row.used_count >= row.max_uses) {
-    return { error: "该兑换码已被兑完", status: 400 as const };
+  if (row.used_count >= 1 || row.used_count >= row.max_uses) {
+    return { error: "该兑换码已被兑换", status: 400 as const };
   }
 
   const already = await tx.query.redeemRecords.findFirst({

@@ -6,7 +6,7 @@ import { Hono } from "hono";
 import { nanoid } from "nanoid";
 import { z } from "zod";
 
-import { announcements, canvasProjects, creditWallets, db, mediaObjects, redeemCodes, userAssets, userSessions, userStorageGrants, users, workbenchLogs } from "../db/index.ts";
+import { announcements, canvasProjects, creditWallets, db, mediaObjects, redeemCodes, redeemRecords, userAssets, userSessions, userStorageGrants, users, workbenchLogs } from "../db/index.ts";
 import { adjustWalletCredits, queryConsumptionMetrics, queryCreditLedger, roundCredits } from "../lib/billing.ts";
 import { maskSecret } from "../lib/crypto.ts";
 import {
@@ -135,6 +135,10 @@ const updateStorageGrantSchema = z.object({
 
 const updateRedeemCodeSchema = z.object({
   status: z.enum(["active", "disabled"]),
+});
+
+const batchDeleteRedeemCodesSchema = z.object({
+  ids: z.array(z.string().min(1)).min(1, "请选择要删除的兑换码").max(200),
 });
 
 function generateRedeemCodeString(prefix: string) {
@@ -565,7 +569,43 @@ adminRoutes.get("/redeem-codes", async (c) => {
     db.select({ total: count() }).from(redeemCodes).where(whereClause),
   ]);
 
-  return c.json({ items, total: Number(total), page, pageSize });
+  const codeIds = items.map((item) => item.id);
+  const redemptionMap = new Map<string, { userId: string; username: string; displayName: string; redeemedAt: string }>();
+  if (codeIds.length) {
+    const recordRows = await db
+      .select({
+        codeId: redeemRecords.codeId,
+        userId: redeemRecords.userId,
+        username: users.username,
+        displayName: users.displayName,
+        createdAt: redeemRecords.createdAt,
+      })
+      .from(redeemRecords)
+      .leftJoin(users, eq(redeemRecords.userId, users.id))
+      .where(inArray(redeemRecords.codeId, codeIds))
+      .orderBy(desc(redeemRecords.createdAt));
+
+    for (const row of recordRows) {
+      if (!redemptionMap.has(row.codeId)) {
+        redemptionMap.set(row.codeId, {
+          userId: row.userId,
+          username: row.username || "",
+          displayName: row.displayName || "",
+          redeemedAt: row.createdAt.toISOString(),
+        });
+      }
+    }
+  }
+
+  return c.json({
+    items: items.map((item) => ({
+      ...item,
+      redemption: redemptionMap.get(item.id) ?? null,
+    })),
+    total: Number(total),
+    page,
+    pageSize,
+  });
 });
 
 adminRoutes.post("/redeem-codes", zValidator("json", createRedeemCodesSchema), async (c) => {
@@ -605,7 +645,8 @@ adminRoutes.post("/redeem-codes", zValidator("json", createRedeemCodesSchema), a
       credits,
       storageQuotaBytes,
       storageDurationDays,
-      maxUses: body.maxUses,
+      // 一个兑换码仅限 1 人兑换
+      maxUses: 1,
       usedCount: 0,
       note: body.note,
       status: "active" as const,
@@ -630,10 +671,59 @@ adminRoutes.patch("/redeem-codes/:id", zValidator("json", updateRedeemCodeSchema
   return c.json({ item: updated });
 });
 
+adminRoutes.post("/redeem-codes/batch-delete", zValidator("json", batchDeleteRedeemCodesSchema), async (c) => {
+  const uniqueIds = Array.from(new Set(c.req.valid("json").ids));
+  const result = await db.transaction(async (tx) => {
+    const existingRows = await tx.query.redeemCodes.findMany({
+      where: inArray(redeemCodes.id, uniqueIds),
+      columns: { id: true, usedCount: true },
+    });
+    if (!existingRows.length) {
+      return { error: "未找到可删除的兑换码", status: 404 as const };
+    }
+    const usedCode = existingRows.find((row) => row.usedCount > 0);
+    const hasRecord = await tx.query.redeemRecords.findFirst({
+      where: inArray(redeemRecords.codeId, uniqueIds),
+      columns: { id: true },
+    });
+    if (usedCode || hasRecord) {
+      return { error: "已使用过的兑换码不能删除，请取消勾选后再试", status: 400 as const };
+    }
+    const deleted = await tx
+      .delete(redeemCodes)
+      .where(and(inArray(redeemCodes.id, uniqueIds), eq(redeemCodes.usedCount, 0)))
+      .returning({ id: redeemCodes.id });
+    return { ok: true as const, deletedCount: deleted.length };
+  });
+
+  if ("error" in result) {
+    return c.json({ error: result.error }, result.status);
+  }
+  return c.json(result);
+});
+
 adminRoutes.delete("/redeem-codes/:id", async (c) => {
   const id = c.req.param("id");
-  const [deleted] = await db.delete(redeemCodes).where(eq(redeemCodes.id, id)).returning({ id: true });
-  if (!deleted) return c.json({ error: "兑换码不存在" }, 404);
+  const existing = await db.query.redeemCodes.findFirst({
+    where: eq(redeemCodes.id, id),
+    columns: { id: true, usedCount: true },
+  });
+  if (!existing) return c.json({ error: "兑换码不存在" }, 404);
+  if (existing.usedCount > 0) {
+    return c.json({ error: "已使用过的兑换码不能删除" }, 400);
+  }
+  const hasRecord = await db.query.redeemRecords.findFirst({
+    where: eq(redeemRecords.codeId, id),
+    columns: { id: true },
+  });
+  if (hasRecord) {
+    return c.json({ error: "已使用过的兑换码不能删除" }, 400);
+  }
+  const [deleted] = await db
+    .delete(redeemCodes)
+    .where(and(eq(redeemCodes.id, id), eq(redeemCodes.usedCount, 0)))
+    .returning({ id: redeemCodes.id });
+  if (!deleted) return c.json({ error: "兑换码不存在或已被兑换" }, 400);
   return c.json({ ok: true });
 });
 

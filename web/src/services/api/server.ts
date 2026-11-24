@@ -218,6 +218,13 @@ export type CreditLedgerSummary = {
 
 export type RedeemCodeKind = "credits" | "storage";
 
+export type RedeemCodeRedemption = {
+    userId: string;
+    username: string;
+    displayName: string;
+    redeemedAt: string;
+};
+
 export type RedeemCodeItem = {
     id: string;
     code: string;
@@ -231,6 +238,7 @@ export type RedeemCodeItem = {
     status: "active" | "disabled";
     expiresAt?: string | null;
     createdAt: string;
+    redemption?: RedeemCodeRedemption | null;
 };
 
 export type AdminChannelModel = {
@@ -780,7 +788,7 @@ export const adminApi = {
         credits?: number;
         storageQuotaBytes?: number;
         storageDurationDays?: number | null;
-        maxUses: number;
+        maxUses?: number;
         prefix?: string;
         customCode?: string;
         expiresAt?: string | null;
@@ -790,6 +798,11 @@ export const adminApi = {
     updateRedeemCode: (id: string, payload: { status: "active" | "disabled" }) =>
         requestServer<{ item: RedeemCodeItem }>(`/admin/redeem-codes/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(payload) }),
     deleteRedeemCode: (id: string) => requestServer<{ ok: boolean }>(`/admin/redeem-codes/${encodeURIComponent(id)}`, { method: "DELETE" }),
+    batchDeleteRedeemCodes: (ids: string[]) =>
+        requestServer<{ ok: boolean; deletedCount: number }>("/admin/redeem-codes/batch-delete", {
+            method: "POST",
+            body: JSON.stringify({ ids }),
+        }),
     listLogs: (params?: { scope?: "all" | "self"; q?: string; logId?: string; taskStatus?: string; category?: "usage" | "recharge"; reason?: string; model?: string; startDate?: string; endDate?: string; page?: number; pageSize?: number }) => {
         const query = new URLSearchParams();
         if (params?.scope) query.set("scope", params.scope);
