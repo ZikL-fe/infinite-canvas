@@ -58,6 +58,24 @@ export function ensureSchemaReady() {
           )
         `,
         sqlClient`CREATE INDEX IF NOT EXISTS user_storage_grants_user_idx ON user_storage_grants (user_id, created_at DESC)`,
+        sqlClient`ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verified_at timestamptz`,
+        sqlClient`ALTER TABLE users ADD COLUMN IF NOT EXISTS low_balance_alert_enabled boolean`,
+        sqlClient`ALTER TABLE users ADD COLUMN IF NOT EXISTS low_balance_threshold double precision`,
+        sqlClient`ALTER TABLE users ADD COLUMN IF NOT EXISTS low_balance_alerted_at timestamptz`,
+        sqlClient`
+          CREATE TABLE IF NOT EXISTS email_verification_codes (
+            id text PRIMARY KEY,
+            email text NOT NULL,
+            purpose text NOT NULL,
+            user_id text REFERENCES users(id) ON DELETE CASCADE,
+            code_hash text NOT NULL,
+            attempts integer NOT NULL DEFAULT 0,
+            expires_at timestamptz NOT NULL,
+            consumed_at timestamptz,
+            created_at timestamptz NOT NULL DEFAULT now()
+          )
+        `,
+        sqlClient`CREATE INDEX IF NOT EXISTS email_verification_codes_lookup_idx ON email_verification_codes (email, purpose, created_at DESC)`,
       ];
       for (const stmt of statements) {
         await stmt.catch((err) => {

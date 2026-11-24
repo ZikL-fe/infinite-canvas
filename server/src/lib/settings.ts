@@ -9,6 +9,7 @@ export const AUTH_POLICY_KEY = "auth.policy";
 export const STORAGE_S3_KEY = "storage.s3";
 export const AI_CHANNELS_KEY = "ai.channels";
 export const WEBDAV_CONFIG_KEY = "sync.webdav";
+export const MAIL_CONFIG_KEY = "mail.smtp";
 
 export type PlatformModelCapability = "image" | "video" | "text" | "audio";
 export type PlatformApiFormat = "openai" | "gemini";
@@ -75,6 +76,21 @@ export type PlatformWebdavConfig = {
 
 export type AuthPolicy = {
   allowRegister: boolean;
+  requireEmailOnRegister: boolean;
+};
+
+export type PlatformMailConfig = {
+  enabled: boolean;
+  host: string;
+  port: number;
+  secure: boolean;
+  username: string;
+  password: string;
+  fromName: string;
+  fromAddress: string;
+  lowBalanceAlertEnabled: boolean;
+  lowBalanceThreshold: number;
+  lowBalanceCooldownHours: number;
 };
 
 export type S3Provider = "s3" | "r2" | "oss" | "cos";
@@ -97,6 +113,7 @@ export async function getAuthPolicy(): Promise<AuthPolicy> {
   const raw = row?.value as Partial<AuthPolicy> | undefined;
   return {
     allowRegister: raw?.allowRegister ?? true,
+    requireEmailOnRegister: Boolean(raw?.requireEmailOnRegister),
   };
 }
 
@@ -109,6 +126,63 @@ export async function saveAuthPolicy(policy: AuthPolicy, updatedBy: string) {
       set: { value: policy, updatedBy, updatedAt: new Date() },
     });
   return policy;
+}
+
+export async function getPlatformMailConfig(): Promise<PlatformMailConfig> {
+  const row = await db.query.systemSettings.findFirst({ where: eq(systemSettings.key, MAIL_CONFIG_KEY) });
+  const raw = (row?.value || {}) as Partial<Omit<PlatformMailConfig, "password">>;
+  const password = row?.encryptedSecret ? decryptJson<{ password?: string }>(row.encryptedSecret).password || "" : "";
+  const port = Number(raw.port);
+  const threshold = Number(raw.lowBalanceThreshold);
+  const cooldownHours = Number(raw.lowBalanceCooldownHours);
+  return {
+    enabled: Boolean(raw.enabled),
+    host: raw.host || "",
+    port: Number.isFinite(port) && port > 0 ? Math.floor(port) : 465,
+    secure: raw.secure ?? true,
+    username: raw.username || "",
+    password,
+    fromName: raw.fromName || "无限画布",
+    fromAddress: raw.fromAddress || "",
+    lowBalanceAlertEnabled: raw.lowBalanceAlertEnabled ?? true,
+    lowBalanceThreshold: Number.isFinite(threshold) && threshold >= 0 ? threshold : 10,
+    lowBalanceCooldownHours: Number.isFinite(cooldownHours) && cooldownHours >= 1 ? Math.floor(cooldownHours) : 24,
+  };
+}
+
+export async function savePlatformMailConfig(config: PlatformMailConfig, updatedBy: string) {
+  const publicValue = {
+    enabled: config.enabled,
+    host: config.host.trim(),
+    port: Math.max(1, Math.min(65535, Math.floor(config.port || 465))),
+    secure: config.secure,
+    username: config.username.trim(),
+    fromName: config.fromName.trim() || "无限画布",
+    fromAddress: config.fromAddress.trim(),
+    lowBalanceAlertEnabled: config.lowBalanceAlertEnabled,
+    lowBalanceThreshold: Math.max(0, Number(config.lowBalanceThreshold ?? 10)),
+    lowBalanceCooldownHours: Math.max(1, Math.floor(config.lowBalanceCooldownHours || 24)),
+  };
+  const encryptedSecret = encryptJson({ password: config.password });
+
+  await db
+    .insert(systemSettings)
+    .values({
+      key: MAIL_CONFIG_KEY,
+      value: publicValue,
+      encryptedSecret,
+      updatedBy,
+      updatedAt: new Date(),
+    })
+    .onConflictDoUpdate({
+      target: systemSettings.key,
+      set: {
+        value: publicValue,
+        encryptedSecret,
+        updatedBy,
+        updatedAt: new Date(),
+      },
+    });
 }
 
 export async function getS3StorageConfig(): Promise<S3StorageConfig | null> {

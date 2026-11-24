@@ -3,6 +3,7 @@ import { and, count, desc, eq, gte, ilike, inArray, lte, or, sql, type SQL } fro
 import { nanoid } from "nanoid";
 
 import { creditLedger, creditWallets, db, users } from "../db/index.ts";
+import { scheduleWalletBalanceAlertCheck } from "./billing-alert.ts";
 import type {
   AudioModelPricing,
   ImageModelPricing,
@@ -168,7 +169,11 @@ export async function adjustWalletCreditsInTx(tx: DbTransaction, params: AdjustC
 }
 
 export async function adjustWalletCredits(params: AdjustCreditsParams) {
-  return db.transaction((tx) => adjustWalletCreditsInTx(tx, params));
+  const result = await db.transaction((tx) => adjustWalletCreditsInTx(tx, params));
+  if (result.ok && params.delta !== 0) {
+    scheduleWalletBalanceAlertCheck(params.userId, roundCredits(params.delta), result.balance);
+  }
+  return result;
 }
 
 /** 回写指定账本记录的元数据字段（用于预扣后补充请求耗时与任务最终状态）。 */

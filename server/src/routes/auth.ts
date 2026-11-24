@@ -9,8 +9,10 @@ import { creditWallets, db, userSessions, users, type UserRole } from "../db/ind
 import { env } from "../env.ts";
 import { getWalletBalance } from "../lib/billing.ts";
 import { generateRandomToken, hashPassword, sha256Hex, verifyPassword } from "../lib/crypto.ts";
+import { issueEmailVerificationCode, verifyAndConsumeEmailCode } from "../lib/email-verification.ts";
 import { signAccessToken } from "../lib/jwt.ts";
-import { getAuthPolicy, getPlatformWebdavConfig } from "../lib/settings.ts";
+import { isMailConfigReady } from "../lib/mail.ts";
+import { getAuthPolicy, getPlatformMailConfig, getPlatformWebdavConfig } from "../lib/settings.ts";
 import { getUserStorageQuotaSummary } from "../lib/storage-quota.ts";
 import { requireAuth, type AppEnv } from "../middleware/auth.ts";
 
@@ -23,7 +25,18 @@ const registerSchema = z.object({
     .regex(/^[a-zA-Z0-9_-]+$/, "用户名仅支持字母、数字、下划线和连字符"),
   password: z.string().min(6, "密码至少 6 个字符").max(128, "密码过长"),
   email: z.string().trim().email("邮箱格式不正确").optional().or(z.literal("")),
+  emailCode: z.string().trim().optional().or(z.literal("")),
   displayName: z.string().trim().max(48, "昵称最多 48 个字符").optional().or(z.literal("")),
+});
+
+const sendEmailCodeSchema = z.object({
+  email: z.string().trim().email("邮箱格式不正确"),
+});
+
+const resetPasswordSchema = z.object({
+  email: z.string().trim().email("邮箱格式不正确"),
+  code: z.string().trim().min(1, "请输入邮箱验证码"),
+  newPassword: z.string().min(6, "新密码至少 6 位").max(128, "密码过长"),
 });
 
 const loginSchema = z.object({
@@ -39,6 +52,7 @@ function sanitizeUser(user: {
   id: string;
   username: string;
   email: string | null;
+  emailVerifiedAt?: Date | null;
   displayName: string;
   avatarUrl: string;
   role: UserRole;
@@ -52,6 +66,7 @@ function sanitizeUser(user: {
     id: user.id,
     username: user.username,
     email: user.email,
+    emailVerifiedAt: user.emailVerifiedAt ? user.emailVerifiedAt.toISOString() : null,
     displayName: user.displayName,
     avatarUrl: user.avatarUrl,
     role: user.role,
@@ -81,12 +96,95 @@ async function createSessionTokens(userId: string, role: UserRole, c: { req: { h
 export const authRoutes = new Hono<AppEnv>();
 
 authRoutes.get("/bootstrap-status", async (c) => {
-  const [{ value: userCount }] = await db.select({ value: count() }).from(users);
-  const policy = await getAuthPolicy();
+  const [[{ value: userCount }], policy, mailConfig] = await Promise.all([
+    db.select({ value: count() }).from(users),
+    getAuthPolicy(),
+    getPlatformMailConfig(),
+  ]);
+  const initialized = Number(userCount) > 0;
+  const emailEnabled = isMailConfigReady(mailConfig);
   return c.json({
-    initialized: Number(userCount) > 0,
-    allowRegister: Number(userCount) === 0 ? true : policy.allowRegister,
+    initialized,
+    allowRegister: initialized ? policy.allowRegister : true,
+    requireEmailOnRegister: initialized && emailEnabled ? policy.requireEmailOnRegister : false,
+    emailEnabled,
   });
+});
+
+authRoutes.post("/send-register-code", zValidator("json", sendEmailCodeSchema), async (c) => {
+  const email = c.req.valid("json").email.toLowerCase();
+  const [[{ value: userCount }], policy, existing] = await Promise.all([
+    db.select({ value: count() }).from(users),
+    getAuthPolicy(),
+    db.query.users.findFirst({ where: eq(users.email, email), columns: { id: true } }),
+  ]);
+  if (Number(userCount) > 0 && !policy.allowRegister) {
+    return c.json({ error: "管理员已关闭新用户注册" }, 403);
+  }
+  if (existing) {
+    return c.json({ error: "该邮箱已被注册" }, 409);
+  }
+  const issued = await issueEmailVerificationCode({ email, purpose: "register" });
+  if (!issued.ok) {
+    return c.json({ error: issued.error }, issued.status);
+  }
+  return c.json(issued);
+});
+
+authRoutes.post("/forgot-password/send-code", zValidator("json", sendEmailCodeSchema), async (c) => {
+  const email = c.req.valid("json").email.toLowerCase();
+  const user = await db.query.users.findFirst({
+    where: eq(users.email, email),
+    columns: { id: true, status: true },
+  });
+  if (!user) {
+    return c.json({ error: "该邮箱未绑定任何账号" }, 404);
+  }
+  if (user.status !== "active") {
+    return c.json({ error: "当前账号已被禁用，请联系管理员" }, 403);
+  }
+  const issued = await issueEmailVerificationCode({ email, purpose: "reset_password", userId: user.id });
+  if (!issued.ok) {
+    return c.json({ error: issued.error }, issued.status);
+  }
+  return c.json(issued);
+});
+
+authRoutes.post("/forgot-password/reset", zValidator("json", resetPasswordSchema), async (c) => {
+  const body = c.req.valid("json");
+  const email = body.email.toLowerCase();
+  const user = await db.query.users.findFirst({
+    where: eq(users.email, email),
+    columns: { id: true, status: true },
+  });
+  if (!user) {
+    return c.json({ error: "该邮箱未绑定任何账号" }, 404);
+  }
+  if (user.status !== "active") {
+    return c.json({ error: "当前账号已被禁用，请联系管理员" }, 403);
+  }
+
+  const verified = await verifyAndConsumeEmailCode({
+    email,
+    purpose: "reset_password",
+    code: body.code,
+    userId: user.id,
+  });
+  if (!verified.ok) {
+    return c.json({ error: verified.error }, verified.status);
+  }
+
+  const nextHash = await hashPassword(body.newPassword);
+  const now = new Date();
+  await db.transaction(async (tx) => {
+    await tx.update(users).set({ passwordHash: nextHash, emailVerifiedAt: now, updatedAt: now }).where(eq(users.id, user.id));
+    await tx
+      .update(userSessions)
+      .set({ revokedAt: now })
+      .where(and(eq(userSessions.userId, user.id), isNull(userSessions.revokedAt)));
+  });
+
+  return c.json({ ok: true });
 });
 
 authRoutes.post("/register", zValidator("json", registerSchema), async (c) => {
@@ -94,7 +192,12 @@ authRoutes.post("/register", zValidator("json", registerSchema), async (c) => {
   const normalizedEmail = body.email ? body.email.toLowerCase() : null;
   const passwordHash = await hashPassword(body.password);
 
-  const [policy, platformWebdav] = await Promise.all([getAuthPolicy(), getPlatformWebdavConfig()]);
+  const [policy, platformWebdav, mailConfig] = await Promise.all([
+    getAuthPolicy(),
+    getPlatformWebdavConfig(),
+    getPlatformMailConfig(),
+  ]);
+  const mailReady = isMailConfigReady(mailConfig);
   const result = await db.transaction(async (tx) => {
     // 事务级锁防止并发注册导致产生多个初始管理员
     await tx.execute(sql`SELECT pg_advisory_xact_lock(20261123)`);
@@ -103,6 +206,10 @@ authRoutes.post("/register", zValidator("json", registerSchema), async (c) => {
     const isFirstUser = Number(totalUsers) === 0;
     if (!isFirstUser && !policy.allowRegister) {
       return { error: "管理员已关闭新用户注册", status: 403 as const };
+    }
+
+    if (!isFirstUser && mailReady && policy.requireEmailOnRegister && !normalizedEmail) {
+      return { error: "管理员已开启注册邮箱验证，请填写邮箱", status: 400 as const };
     }
 
     const existing = await tx.query.users.findFirst({
@@ -116,6 +223,19 @@ authRoutes.post("/register", zValidator("json", registerSchema), async (c) => {
         error: existing.username === body.username ? "用户名已被占用" : "邮箱已被注册",
         status: 409 as const,
       };
+    }
+
+    let emailVerifiedAt: Date | null = null;
+    if (!isFirstUser && mailReady && normalizedEmail) {
+      const verified = await verifyAndConsumeEmailCode({
+        email: normalizedEmail,
+        purpose: "register",
+        code: body.emailCode || "",
+      });
+      if (!verified.ok) {
+        return { error: verified.error, status: verified.status };
+      }
+      emailVerifiedAt = new Date();
     }
 
     const id = nanoid();
@@ -134,6 +254,7 @@ authRoutes.post("/register", zValidator("json", registerSchema), async (c) => {
         id,
         username: body.username,
         email: normalizedEmail,
+        emailVerifiedAt,
         passwordHash,
         displayName: body.displayName || body.username,
         role,

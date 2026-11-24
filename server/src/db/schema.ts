@@ -1,5 +1,5 @@
 /** 数据库表结构定义：用户、会话、对象存储媒体、素材、画布、系统配置、钱包账本、视频计费任务、兑换码及平台公告。 */
-import { bigint, boolean, doublePrecision, integer, jsonb, pgTable, text, timestamp, uniqueIndex } from "drizzle-orm/pg-core";
+import { bigint, boolean, doublePrecision, index, integer, jsonb, pgTable, text, timestamp, uniqueIndex } from "drizzle-orm/pg-core";
 
 export type UserRole = "admin" | "user";
 export type UserStatus = "active" | "disabled";
@@ -22,6 +22,7 @@ export const users = pgTable("users", {
   id: text("id").primaryKey(),
   username: text("username").notNull().unique(),
   email: text("email").unique(),
+  emailVerifiedAt: timestamp("email_verified_at", { withTimezone: true }),
   passwordHash: text("password_hash").notNull(),
   displayName: text("display_name").notNull(),
   avatarUrl: text("avatar_url").notNull().default(""),
@@ -31,6 +32,9 @@ export const users = pgTable("users", {
   storageQuotaBytes: bigint("storage_quota_bytes", { mode: "number" }).notNull().default(0),
   storageQuotaExpiresAt: timestamp("storage_quota_expires_at", { withTimezone: true }),
   webdavConfig: jsonb("webdav_config").$type<UserWebdavConfig | null>(),
+  lowBalanceAlertEnabled: boolean("low_balance_alert_enabled"),
+  lowBalanceThreshold: doublePrecision("low_balance_threshold"),
+  lowBalanceAlertedAt: timestamp("low_balance_alerted_at", { withTimezone: true }),
   lastLoginAt: timestamp("last_login_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
@@ -264,3 +268,21 @@ export const announcements = pgTable("announcements", {
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
+
+export type EmailCodePurpose = "register" | "bind_email" | "reset_password" | "change_password";
+
+export const emailVerificationCodes = pgTable(
+  "email_verification_codes",
+  {
+    id: text("id").primaryKey(),
+    email: text("email").notNull(),
+    purpose: text("purpose").$type<EmailCodePurpose>().notNull(),
+    userId: text("user_id").references(() => users.id, { onDelete: "cascade" }),
+    codeHash: text("code_hash").notNull(),
+    attempts: integer("attempts").notNull().default(0),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    consumedAt: timestamp("consumed_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [index("email_verification_codes_lookup_idx").on(table.email, table.purpose, table.createdAt)],
+);

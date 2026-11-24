@@ -1,11 +1,12 @@
 /** 个人后台与公共面板组件：概览趋势、平台公告卡片、账号安全维护、充值钱包、NewAPI 风格使用日志及云端媒体清理。 */
 import { useCallback, useEffect, useState } from "react";
-import { Alert, App, Avatar, Button, Card, Col, DatePicker, Descriptions, Empty, Form, Image, Input, Modal, Popconfirm, Progress, Row, Segmented, Select, Space, Spin, Statistic, Switch, Table, Tabs, Tag, Tooltip, Typography, theme as antdTheme } from "antd";
+import { Alert, App, Avatar, Button, Card, Col, DatePicker, Descriptions, Empty, Form, Image, Input, InputNumber, Modal, Popconfirm, Progress, Radio, Row, Segmented, Select, Space, Spin, Statistic, Switch, Table, Tabs, Tag, Tooltip, Typography, theme as antdTheme } from "antd";
 import type { Dayjs } from "dayjs";
 import localforage from "localforage";
-import { AudioLines, Download, FileIcon, Gift, ImageIcon, KeyRound, Laptop, Megaphone, Pin, RefreshCw, Search, TrendingUp, User, Video } from "lucide-react";
+import { AudioLines, Bell, Download, Eye, FileIcon, Gift, ImageIcon, KeyRound, Laptop, Megaphone, Pin, RefreshCw, Search, TrendingUp, User, Video } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 
+import { useEmailCodeSender } from "@/hooks/use-email-code-sender";
 import { createImageThumbnail, createVideoThumbnail } from "@/lib/image-thumbnail";
 import { previewUrlFor } from "@/services/image-storage";
 import { ADMIN_TABLE_CLASS, ADMIN_TABLE_SCROLL, TableRowActions } from "@/pages/admin/components/table-row-actions";
@@ -128,11 +129,15 @@ function formatDurationSec(ms: number) {
     return `${(ms / 1000).toFixed(2)}s`;
 }
 
-/** 根据流式状态与耗时计算 `tok/s` 输出速度及 `首字 / 总耗时` 展示文案。 */
+/** 根据流式状态与分段耗时计算 `tok/s` 输出速度及 `首字 / 总耗时`、`上游/拿图/云存` 展示文案。 */
 function getLedgerTimingStats(meta?: Record<string, unknown>) {
     const isStream = typeof meta?.isStream === "boolean" ? meta.isStream : undefined;
     const durationMs = typeof meta?.durationMs === "number" && meta.durationMs > 0 ? meta.durationMs : undefined;
     const firstTokenMs = typeof meta?.firstTokenMs === "number" && meta.firstTokenMs > 0 ? meta.firstTokenMs : undefined;
+    const upstreamMs = typeof meta?.upstreamMs === "number" && meta.upstreamMs >= 0 ? meta.upstreamMs : undefined;
+    const fetchImageMs = typeof meta?.fetchImageMs === "number" && meta.fetchImageMs >= 0 ? meta.fetchImageMs : undefined;
+    const cloudSaveMs = typeof meta?.cloudSaveMs === "number" && meta.cloudSaveMs >= 0 ? meta.cloudSaveMs : undefined;
+    const clientAborted = meta?.clientAborted === true;
     const outputTokens = typeof meta?.outputTokens === "number" ? meta.outputTokens : 0;
     let tokPerSec = typeof meta?.tokensPerSecond === "number" && meta.tokensPerSecond > 0 ? meta.tokensPerSecond : 0;
     if (!tokPerSec && outputTokens > 0 && durationMs) {
@@ -148,7 +153,24 @@ function getLedgerTimingStats(meta?: Record<string, unknown>) {
                 : formatDurationSec(durationMs);
     }
 
-    return { isStream, durationMs, firstTokenMs, durationText, tokPerSec };
+    const stageParts: string[] = [];
+    if (upstreamMs !== undefined) stageParts.push(`上游 ${formatDurationSec(upstreamMs)}`);
+    if (fetchImageMs !== undefined) stageParts.push(`拿图 ${formatDurationSec(fetchImageMs)}`);
+    if (cloudSaveMs !== undefined) stageParts.push(`云存 ${formatDurationSec(cloudSaveMs)}`);
+    const stageText = stageParts.join(" · ");
+
+    return {
+        isStream,
+        durationMs,
+        firstTokenMs,
+        upstreamMs,
+        fetchImageMs,
+        cloudSaveMs,
+        clientAborted,
+        durationText,
+        stageText,
+        tokPerSec,
+    };
 }
 
 function formatLedgerUsageDetail(record: CreditLedgerItem) {
@@ -457,11 +479,23 @@ export function ProfileSecurityPanel() {
     const [loading, setLoading] = useState(false);
     const [savingProfile, setSavingProfile] = useState(false);
     const [changingPassword, setChangingPassword] = useState(false);
+    const [savingAlert, setSavingAlert] = useState(false);
+    const [passwordMode, setPasswordMode] = useState<"password" | "email">("password");
     const [sessions, setSessions] = useState<AccountSessionItem[]>([]);
     const [sessionsLoading, setSessionsLoading] = useState(false);
 
-    const [profileForm] = Form.useForm<{ displayName: string; email: string; avatarUrl: string }>();
-    const [passwordForm] = Form.useForm<{ currentPassword: string; newPassword: string; confirmPassword: string; revokeOtherSessions: boolean }>();
+    const bindEmailCodeSender = useEmailCodeSender();
+    const changePasswordCodeSender = useEmailCodeSender();
+
+    const [profileForm] = Form.useForm<{ displayName: string; email: string; emailCode?: string; avatarUrl: string }>();
+    const [alertForm] = Form.useForm<{ mode: "inherit" | "custom_on" | "off"; threshold: number }>();
+    const [passwordForm] = Form.useForm<{
+        currentPassword?: string;
+        emailCode?: string;
+        newPassword: string;
+        confirmPassword: string;
+        revokeOtherSessions: boolean;
+    }>();
 
     const loadProfile = useCallback(async () => {
         setLoading(true);
@@ -472,14 +506,22 @@ export function ProfileSecurityPanel() {
             profileForm.setFieldsValue({
                 displayName: res.user.displayName,
                 email: res.user.email || "",
+                emailCode: "",
                 avatarUrl: res.user.avatarUrl || "",
+            });
+            const alertCfg = res.lowBalanceAlert;
+            const alertMode: "inherit" | "custom_on" | "off" =
+                alertCfg?.enabled === false ? "off" : alertCfg?.enabled === true ? "custom_on" : "inherit";
+            alertForm.setFieldsValue({
+                mode: alertMode,
+                threshold: alertCfg?.threshold ?? alertCfg?.platformThreshold ?? 10,
             });
         } catch (error) {
             message.error(error instanceof Error ? error.message : "加载个人信息失败");
         } finally {
             setLoading(false);
         }
-    }, [message, profileForm, setUser]);
+    }, [alertForm, message, profileForm, setUser]);
 
     const loadSessions = useCallback(async () => {
         setSessionsLoading(true);
@@ -498,15 +540,31 @@ export function ProfileSecurityPanel() {
         void loadSessions();
     }, [loadProfile, loadSessions]);
 
-    const handleSaveProfile = async (values: { displayName: string; email: string; avatarUrl: string }) => {
+    const handleSendBindEmailCode = async () => {
+        try {
+            const { email } = await profileForm.validateFields(["email"]);
+            const clean = (email || "").trim();
+            if (!clean) {
+                message.warning("请先填写需要绑定的邮箱");
+                return;
+            }
+            await bindEmailCodeSender.sendCode(() => accountApi.sendEmailBindCode(clean));
+        } catch {
+            // validation error shown on field
+        }
+    };
+
+    const handleSaveProfile = async (values: { displayName: string; email: string; emailCode?: string; avatarUrl: string }) => {
         setSavingProfile(true);
         try {
             const res = await accountApi.updateProfile({
                 displayName: values.displayName.trim(),
                 email: values.email.trim(),
+                ...(values.emailCode?.trim() ? { emailCode: values.emailCode.trim() } : {}),
                 avatarUrl: values.avatarUrl.trim(),
             });
             setUser(res.user);
+            bindEmailCodeSender.resetCooldown();
             message.success("个人信息已保存");
             void loadProfile();
         } catch (error) {
@@ -516,17 +574,48 @@ export function ProfileSecurityPanel() {
         }
     };
 
-    const handleChangePassword = async (values: { currentPassword: string; newPassword: string; revokeOtherSessions: boolean }) => {
+    const handleSaveAlertSettings = async (values: { mode: "inherit" | "custom_on" | "off"; threshold: number }) => {
+        setSavingAlert(true);
+        try {
+            const lowBalanceAlertEnabled = values.mode === "inherit" ? null : values.mode === "custom_on";
+            const lowBalanceThreshold = values.mode === "custom_on" ? Number(values.threshold ?? 10) : null;
+            await accountApi.updateProfile({
+                lowBalanceAlertEnabled,
+                lowBalanceThreshold,
+            });
+            message.success("余额不足提醒设置已保存");
+            void loadProfile();
+        } catch (error) {
+            message.error(error instanceof Error ? error.message : "保存提醒设置失败");
+        } finally {
+            setSavingAlert(false);
+        }
+    };
+
+    const handleSendChangePasswordCode = async () => {
+        await changePasswordCodeSender.sendCode(() => accountApi.sendChangePasswordCode());
+    };
+
+    const handleChangePassword = async (values: {
+        currentPassword?: string;
+        emailCode?: string;
+        newPassword: string;
+        revokeOtherSessions: boolean;
+    }) => {
         setChangingPassword(true);
         try {
             await accountApi.changePassword({
+                mode: passwordMode,
                 currentPassword: values.currentPassword,
+                emailCode: values.emailCode?.trim(),
                 newPassword: values.newPassword,
                 revokeOtherSessions: values.revokeOtherSessions,
             });
             passwordForm.resetFields();
+            changePasswordCodeSender.resetCooldown();
             message.success("密码已修改");
             void loadSessions();
+            void loadProfile();
         } catch (error) {
             message.error(error instanceof Error ? error.message : "修改密码失败");
         } finally {
@@ -556,6 +645,18 @@ export function ProfileSecurityPanel() {
 
     const detail = profileData?.user || user;
     const avatarWatch = Form.useWatch("avatarUrl", profileForm);
+    const emailWatch = Form.useWatch("email", profileForm);
+    const alertModeWatch = Form.useWatch("mode", alertForm);
+
+    const emailServiceEnabled = Boolean(profileData?.emailServiceEnabled);
+    const normalizedSavedEmail = (profileData?.user.email || "").trim().toLowerCase();
+    const normalizedInputEmail = (emailWatch || "").trim().toLowerCase();
+    const needsEmailVerifyCode = Boolean(
+        emailServiceEnabled &&
+            normalizedInputEmail &&
+            (normalizedInputEmail !== normalizedSavedEmail || !profileData?.user.emailVerifiedAt),
+    );
+    const canResetByEmail = Boolean(emailServiceEnabled && detail?.email);
 
     return (
         <div className="flex flex-col gap-5">
@@ -665,9 +766,51 @@ export function ProfileSecurityPanel() {
                             <Form.Item name="displayName" label="显示名称" rules={[{ required: true, message: "请输入显示名称" }]}>
                                 <Input maxLength={48} placeholder="请输入显示名称" />
                             </Form.Item>
-                            <Form.Item name="email" label="绑定邮箱" rules={[{ type: "email", message: "邮箱格式不正确" }]}>
+                            <Form.Item
+                                name="email"
+                                label={
+                                    <span className="inline-flex items-center gap-2">
+                                        <span>绑定邮箱</span>
+                                        {detail?.email ? (
+                                            detail.emailVerifiedAt ? (
+                                                <Tag color="green" style={{ marginInlineEnd: 0 }}>
+                                                    已验证
+                                                </Tag>
+                                            ) : (
+                                                <Tag color="orange" style={{ marginInlineEnd: 0 }}>
+                                                    未验证
+                                                </Tag>
+                                            )
+                                        ) : null}
+                                    </span>
+                                }
+                                rules={[
+                                    ...(profileData?.requireEmailOnRegister && detail?.role !== "admin"
+                                        ? [{ required: true, message: "当前平台要求绑定邮箱" }]
+                                        : []),
+                                    { type: "email" as const, message: "邮箱格式不正确" },
+                                ]}
+                            >
                                 <Input placeholder="example@domain.com" />
                             </Form.Item>
+                            {needsEmailVerifyCode ? (
+                                <Form.Item
+                                    name="emailCode"
+                                    label="邮箱验证码"
+                                    rules={[{ required: true, message: "更改或验证邮箱时请输入验证码" }]}
+                                >
+                                    <Space.Compact className="w-full">
+                                        <Input placeholder="输入 6 位验证码" maxLength={8} />
+                                        <Button
+                                            loading={bindEmailCodeSender.sending}
+                                            disabled={bindEmailCodeSender.cooldown > 0}
+                                            onClick={() => void handleSendBindEmailCode()}
+                                        >
+                                            {bindEmailCodeSender.cooldown > 0 ? `${bindEmailCodeSender.cooldown}s 后重试` : "获取验证码"}
+                                        </Button>
+                                    </Space.Compact>
+                                </Form.Item>
+                            ) : null}
                             <Form.Item name="avatarUrl" label="头像地址（可选）">
                                 <Input placeholder="https://..." />
                             </Form.Item>
@@ -686,11 +829,56 @@ export function ProfileSecurityPanel() {
                                 账号安全 · 修改密码
                             </span>
                         }
+                        extra={
+                            <Segmented
+                                size="small"
+                                value={passwordMode}
+                                onChange={(val) => {
+                                    setPasswordMode(val as "password" | "email");
+                                    passwordForm.resetFields(["currentPassword", "emailCode"]);
+                                }}
+                                options={[
+                                    { label: "原密码验证", value: "password" },
+                                    { label: "邮箱验证码", value: "email", disabled: !canResetByEmail },
+                                ]}
+                            />
+                        }
                     >
+                        {!canResetByEmail ? (
+                            <Typography.Text type="secondary" className="mb-3 block text-xs">
+                                {emailServiceEnabled ? "提示：绑定邮箱后即可使用邮箱验证码修改密码。" : "提示：管理员启用邮件服务且账号绑定邮箱后，可使用邮箱验证码改密。"}
+                            </Typography.Text>
+                        ) : null}
                         <Form form={passwordForm} layout="vertical" initialValues={{ revokeOtherSessions: true }} onFinish={handleChangePassword}>
-                            <Form.Item name="currentPassword" label="当前密码" rules={[{ required: true, message: "请输入当前密码" }]}>
-                                <Input.Password placeholder="输入当前使用的密码" />
-                            </Form.Item>
+                            {passwordMode === "password" ? (
+                                <Form.Item name="currentPassword" label="当前密码" rules={[{ required: true, message: "请输入当前密码" }]}>
+                                    <Input.Password placeholder="输入当前使用的密码" />
+                                </Form.Item>
+                            ) : (
+                                <>
+                                    <Form.Item label="接收验证码邮箱">
+                                        <Input value={detail?.email || ""} disabled />
+                                    </Form.Item>
+                                    <Form.Item
+                                        name="emailCode"
+                                        label="邮箱验证码"
+                                        rules={[{ required: true, message: "请输入邮箱验证码" }]}
+                                    >
+                                        <Space.Compact className="w-full">
+                                            <Input placeholder="输入 6 位验证码" maxLength={8} />
+                                            <Button
+                                                loading={changePasswordCodeSender.sending}
+                                                disabled={changePasswordCodeSender.cooldown > 0}
+                                                onClick={() => void handleSendChangePasswordCode()}
+                                            >
+                                                {changePasswordCodeSender.cooldown > 0
+                                                    ? `${changePasswordCodeSender.cooldown}s 后重试`
+                                                    : "发送验证码"}
+                                            </Button>
+                                        </Space.Compact>
+                                    </Form.Item>
+                                </>
+                            )}
                             <Form.Item
                                 name="newPassword"
                                 label="新密码"
@@ -727,6 +915,82 @@ export function ProfileSecurityPanel() {
                     </Card>
                 </Col>
             </Row>
+
+            <Card
+                title={
+                    <span className="inline-flex items-center gap-2">
+                        <Bell className="size-4" />
+                        积分余额不足邮件提醒
+                    </span>
+                }
+            >
+                {!emailServiceEnabled ? (
+                    <Alert
+                        type="info"
+                        showIcon
+                        className="mb-4"
+                        message="平台邮件服务当前未启用"
+                        description="你可以预先保存提醒偏好；待管理员启用邮件服务且当前账号绑定邮箱后将自动生效。"
+                    />
+                ) : !detail?.email ? (
+                    <Alert
+                        type="warning"
+                        showIcon
+                        className="mb-4"
+                        message="当前账号尚未绑定邮箱"
+                        description="请先在上方「基本资料维护」中绑定邮箱，才能接收余额不足提醒邮件。"
+                    />
+                ) : null}
+                <Form
+                    form={alertForm}
+                    layout="vertical"
+                    initialValues={{ mode: "inherit", threshold: 10 }}
+                    onFinish={handleSaveAlertSettings}
+                >
+                    <Row gutter={16} align="bottom">
+                        <Col xs={24} md={12}>
+                            <Form.Item name="mode" label="提醒策略">
+                                <Radio.Group>
+                                    <Radio value="inherit">
+                                        跟随平台默认（
+                                        {profileData?.lowBalanceAlert?.platformEnabled
+                                            ? `低于 ${profileData.lowBalanceAlert.platformThreshold} 积分`
+                                            : "已关闭"}
+                                        ）
+                                    </Radio>
+                                    <Radio value="custom_on">自定义阈值</Radio>
+                                    <Radio value="off">关闭提醒</Radio>
+                                </Radio.Group>
+                            </Form.Item>
+                        </Col>
+                        {alertModeWatch === "custom_on" ? (
+                            <Col xs={24} md={6}>
+                                <Form.Item
+                                    name="threshold"
+                                    label="低于多少积分时发送邮件"
+                                    rules={[{ required: true, message: "请填写积分阈值" }]}
+                                >
+                                    <InputNumber min={0} max={1000000} precision={2} className="w-full" />
+                                </Form.Item>
+                            </Col>
+                        ) : null}
+                        <Col xs={24} md={6}>
+                            <Form.Item>
+                                <Button type="primary" htmlType="submit" loading={savingAlert}>
+                                    保存提醒设置
+                                </Button>
+                            </Form.Item>
+                        </Col>
+                    </Row>
+                    <Typography.Text type="secondary" className="text-xs">
+                        防骚扰规则：跌破阈值时发送一次提醒；余额回充到阈值以上后重置，或至少间隔{" "}
+                        {profileData?.lowBalanceAlert?.cooldownHours ?? 24} 小时才会再次提醒。
+                        {profileData?.lowBalanceAlert?.lastAlertedAt
+                            ? ` 上次提醒：${new Date(profileData.lowBalanceAlert.lastAlertedAt).toLocaleString("zh-CN")}`
+                            : ""}
+                    </Typography.Text>
+                </Form>
+            </Card>
 
             <Card
                 title={
@@ -836,10 +1100,16 @@ function LedgerDetailModal({
     const [mediaItems, setMediaItems] = useState<MediaItem[]>([]);
     const [mediaLoading, setMediaLoading] = useState(false);
     const [downloadingId, setDownloadingId] = useState<string | null>(null);
+    const [previewMedia, setPreviewMedia] = useState<MediaItem | null>(null);
+    const [previewOriginalUrl, setPreviewOriginalUrl] = useState("");
+    const [loadingPreviewId, setLoadingPreviewId] = useState<string | null>(null);
 
     const isMediaGeneration = item?.reason === "image_gen" || item?.reason === "video_gen";
 
     useEffect(() => {
+        setPreviewMedia(null);
+        setPreviewOriginalUrl("");
+        setLoadingPreviewId(null);
         if (!item || !isMediaGeneration) {
             setMediaItems([]);
             setMediaLoading(false);
@@ -862,6 +1132,24 @@ function LedgerDetailModal({
             cancelled = true;
         };
     }, [isMediaGeneration, item]);
+
+    const handlePreviewGenerated = async (media: MediaItem) => {
+        if (loadingPreviewId) return;
+        setLoadingPreviewId(media.id);
+        try {
+            const url = media.url || (await storageApi.getUrl(media.id)).url;
+            if (!url) {
+                message.error("文件链接暂不可用");
+                return;
+            }
+            setPreviewOriginalUrl(url);
+            setPreviewMedia(media);
+        } catch (error) {
+            message.error(error instanceof Error ? error.message : "加载原文件失败");
+        } finally {
+            setLoadingPreviewId(null);
+        }
+    };
 
     const handleDownloadGenerated = async (media: MediaItem) => {
         setDownloadingId(media.id);
@@ -979,7 +1267,19 @@ function LedgerDetailModal({
                                 <Typography.Text type="secondary" className="block text-xs">
                                     {timing.isStream && timing.firstTokenMs !== undefined ? "耗时（首字 / 总耗时）" : "请求耗时"}
                                 </Typography.Text>
-                                <div className="mt-0.5 text-sm font-medium">{timing.durationText}</div>
+                                <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-sm font-medium">
+                                    <span>{timing.durationText}</span>
+                                    {timing.clientAborted ? (
+                                        <Tag color="orange" style={{ marginInlineEnd: 0 }}>
+                                            前端提前断开
+                                        </Tag>
+                                    ) : null}
+                                </div>
+                                {timing.stageText ? (
+                                    <Typography.Text type="secondary" className="mt-0.5 block text-xs">
+                                        {timing.stageText}
+                                    </Typography.Text>
+                                ) : null}
                             </div>
                         ) : null}
 
@@ -1072,28 +1372,44 @@ function LedgerDetailModal({
                                     </Typography.Text>
                                 </div>
                             ) : mediaItems.length ? (
-                                <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
+                                <div className={mediaItems.length === 1 ? "grid grid-cols-1 gap-2.5" : "grid grid-cols-1 gap-2.5 sm:grid-cols-2"}>
                                     {mediaItems.map((media) => {
                                         const thumb = media.thumbnailUrl || previewUrlFor(media.id) || "";
                                         const fileLabel = mediaDownloadFilename(media);
+                                        const isLoadingPreview = loadingPreviewId === media.id;
                                         return (
                                             <div
                                                 key={media.id}
                                                 className="flex items-center gap-3 rounded-lg border p-2.5"
                                                 style={{ borderColor: token.colorBorderSecondary }}
                                             >
-                                                {thumb ? (
-                                                    <img src={thumb} alt={fileLabel} className="size-16 shrink-0 rounded object-cover" />
-                                                ) : (
-                                                    <div className="flex size-16 shrink-0 items-center justify-center rounded bg-black/5 text-stone-400 dark:bg-white/10">
-                                                        {media.kind === "video" ? <Video className="size-5" /> : <ImageIcon className="size-5" />}
+                                                <button
+                                                    type="button"
+                                                    onClick={() => void handlePreviewGenerated(media)}
+                                                    disabled={Boolean(loadingPreviewId)}
+                                                    className="group relative size-16 shrink-0 cursor-pointer overflow-hidden rounded border-0 bg-transparent p-0"
+                                                    title="点击预览原文件"
+                                                >
+                                                    {thumb ? (
+                                                        <img src={thumb} alt={fileLabel} className="size-full object-cover transition group-hover:scale-105" />
+                                                    ) : (
+                                                        <div className="flex size-full items-center justify-center bg-black/5 text-stone-400 dark:bg-white/10">
+                                                            {media.kind === "video" ? <Video className="size-5" /> : <ImageIcon className="size-5" />}
+                                                        </div>
+                                                    )}
+                                                    <div
+                                                        className={`absolute inset-0 flex items-center justify-center bg-black/45 text-white transition-opacity ${
+                                                            isLoadingPreview ? "opacity-100" : "opacity-0 group-hover:opacity-100"
+                                                        }`}
+                                                    >
+                                                        {isLoadingPreview ? <Spin size="small" /> : <Eye className="size-4" />}
                                                     </div>
-                                                )}
+                                                </button>
                                                 <div className="min-w-0 flex-1">
-                                                    <div className="flex items-center gap-1.5">
+                                                    <div className="flex flex-wrap items-center gap-1.5">
                                                         <Tag style={{ marginInlineEnd: 0 }}>{kindLabels[media.kind] || media.kind}</Tag>
                                                         {media.width && media.height ? (
-                                                            <Typography.Text type="secondary" className="text-xs">
+                                                            <Typography.Text type="secondary" className="whitespace-nowrap text-xs">
                                                                 {media.width}×{media.height}
                                                             </Typography.Text>
                                                         ) : null}
@@ -1105,22 +1421,32 @@ function LedgerDetailModal({
                                                         {formatBytes(media.bytes)}
                                                     </Typography.Text>
                                                 </div>
-                                                <Popconfirm
-                                                    title="确定下载该原文件到本地吗？"
-                                                    okText="确认下载"
-                                                    cancelText="取消"
-                                                    onConfirm={() => void handleDownloadGenerated(media)}
-                                                >
+                                                <Space size={6} className="shrink-0">
                                                     <Button
                                                         size="small"
-                                                        type="primary"
-                                                        ghost
-                                                        icon={<Download className="size-3.5" />}
-                                                        loading={downloadingId === media.id}
+                                                        icon={<Eye className="size-3.5" />}
+                                                        loading={isLoadingPreview}
+                                                        onClick={() => void handlePreviewGenerated(media)}
                                                     >
-                                                        下载
+                                                        预览
                                                     </Button>
-                                                </Popconfirm>
+                                                    <Popconfirm
+                                                        title="确定下载该原文件到本地吗？"
+                                                        okText="确认下载"
+                                                        cancelText="取消"
+                                                        onConfirm={() => void handleDownloadGenerated(media)}
+                                                    >
+                                                        <Button
+                                                            size="small"
+                                                            type="primary"
+                                                            ghost
+                                                            icon={<Download className="size-3.5" />}
+                                                            loading={downloadingId === media.id}
+                                                        >
+                                                            下载
+                                                        </Button>
+                                                    </Popconfirm>
+                                                </Space>
                                             </div>
                                         );
                                     })}
@@ -1157,6 +1483,52 @@ function LedgerDetailModal({
                     ) : null}
                 </div>
             ) : null}
+            <Modal
+                open={Boolean(previewMedia)}
+                title="生成结果预览"
+                onCancel={() => {
+                    setPreviewMedia(null);
+                    setPreviewOriginalUrl("");
+                }}
+                footer={
+                    <Space>
+                        {previewMedia && previewOriginalUrl ? (
+                            <Button
+                                icon={<Download className="size-4" />}
+                                loading={downloadingId === previewMedia.id}
+                                onClick={() => void handleDownloadGenerated(previewMedia)}
+                            >
+                                下载原文件
+                            </Button>
+                        ) : null}
+                        <Button
+                            type="primary"
+                            onClick={() => {
+                                setPreviewMedia(null);
+                                setPreviewOriginalUrl("");
+                            }}
+                        >
+                            关闭
+                        </Button>
+                    </Space>
+                }
+                width={780}
+                destroyOnHidden
+            >
+                {previewMedia && previewOriginalUrl ? (
+                    previewMedia.kind === "image" ? (
+                        <div className="flex justify-center rounded-lg bg-black/5 p-2 dark:bg-white/5">
+                            <Image src={previewOriginalUrl} alt={previewMedia.objectKey} className="max-h-[70vh] object-contain" />
+                        </div>
+                    ) : previewMedia.kind === "video" ? (
+                        <video src={previewOriginalUrl} controls autoPlay className="max-h-[70vh] w-full rounded-lg bg-black" />
+                    ) : (
+                        <a href={previewOriginalUrl} target="_blank" rel="noreferrer">
+                            打开文件链接
+                        </a>
+                    )
+                ) : null}
+            </Modal>
         </Modal>
     );
 }
@@ -1741,28 +2113,33 @@ export function UsageLogsPanel({ defaultScope = "self" }: { defaultScope?: "all"
                         {
                             title: "耗时 / 速度",
                             key: "timing",
-                            width: 140,
+                            width: 170,
                             render: (_, record) => {
-                                const { isStream, durationText, firstTokenMs, tokPerSec } = getLedgerTimingStats(record.meta);
+                                const { isStream, durationText, firstTokenMs, upstreamMs, stageText, clientAborted, tokPerSec } = getLedgerTimingStats(record.meta);
                                 if (!durationText && !tokPerSec) return <Typography.Text type="secondary">—</Typography.Text>;
+                                const tooltipTitle =
+                                    isStream && firstTokenMs !== undefined
+                                        ? `首字耗时 ${formatDurationSec(firstTokenMs)} / 总耗时 ${formatDurationSec(Number(record.meta?.durationMs ?? 0))}`
+                                        : stageText
+                                          ? `总耗时 ${durationText}（${stageText}${clientAborted ? " · 前端提前断开" : ""}）`
+                                          : `总耗时 ${durationText}${clientAborted ? "（前端提前断开）" : ""}`;
                                 return (
                                     <div className="flex flex-col leading-tight">
                                         {durationText ? (
-                                            <Tooltip
-                                                title={
-                                                    isStream && firstTokenMs !== undefined
-                                                        ? `首字耗时 ${formatDurationSec(firstTokenMs)} / 总耗时 ${formatDurationSec(
-                                                              Number(record.meta?.durationMs ?? 0),
-                                                          )}`
-                                                        : `总耗时 ${durationText}`
-                                                }
-                                            >
-                                                <span className="font-mono text-xs">{durationText}</span>
+                                            <Tooltip title={tooltipTitle}>
+                                                <span className="font-mono text-xs">
+                                                    {durationText}
+                                                    {clientAborted ? " · 断连" : ""}
+                                                </span>
                                             </Tooltip>
                                         ) : null}
                                         {tokPerSec > 0 ? (
                                             <Typography.Text type="secondary" className="font-mono text-[11px]">
                                                 {tokPerSec} tok/s
+                                            </Typography.Text>
+                                        ) : upstreamMs !== undefined ? (
+                                            <Typography.Text type="secondary" className="font-mono text-[11px]">
+                                                上游 {formatDurationSec(upstreamMs)}
                                             </Typography.Text>
                                         ) : null}
                                     </div>

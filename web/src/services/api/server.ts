@@ -270,6 +270,36 @@ export type AdminWebdavSettings = {
     passwordPreview: string;
 };
 
+export type AdminMailSettings = {
+    enabled: boolean;
+    host: string;
+    port: number;
+    secure: boolean;
+    username: string;
+    hasPassword: boolean;
+    passwordPreview: string;
+    fromName: string;
+    fromAddress: string;
+    lowBalanceAlertEnabled: boolean;
+    lowBalanceThreshold: number;
+    lowBalanceCooldownHours: number;
+    ready: boolean;
+};
+
+export type AdminMailSettingsForm = {
+    enabled: boolean;
+    host: string;
+    port: number;
+    secure: boolean;
+    username: string;
+    password?: string;
+    fromName: string;
+    fromAddress: string;
+    lowBalanceAlertEnabled: boolean;
+    lowBalanceThreshold: number;
+    lowBalanceCooldownHours: number;
+};
+
 export type RuntimeConfigResponse = {
     channels: Array<{
         id: string;
@@ -359,8 +389,22 @@ export async function requestServer<T>(path: string, init: RequestInit = {}, aut
     return (await response.json()) as T;
 }
 
+export type AccountLowBalanceAlertConfig = {
+    enabled: boolean | null;
+    threshold: number | null;
+    effectiveEnabled: boolean;
+    effectiveThreshold: number;
+    platformEnabled: boolean;
+    platformThreshold: number;
+    cooldownHours: number;
+    lastAlertedAt: string | null;
+};
+
 export type AccountProfileResponse = {
     user: LocalUser & { lastLoginAt?: string | null; createdAt: string };
+    emailServiceEnabled?: boolean;
+    requireEmailOnRegister?: boolean;
+    lowBalanceAlert?: AccountLowBalanceAlertConfig;
     storageQuotaDetail?: StorageQuotaDetail;
     stats: {
         canvasProjectCount: number;
@@ -392,9 +436,30 @@ export type AccountSessionItem = {
 export const accountApi = {
     getOverview: (days = 7) => requestServer<AccountOverviewResponse>(`/account/overview?days=${days}`),
     getProfile: () => requestServer<AccountProfileResponse>("/account/profile"),
-    updateProfile: (payload: { displayName?: string; email?: string; avatarUrl?: string }) =>
-        requestServer<{ user: LocalUser }>("/account/profile", { method: "PATCH", body: JSON.stringify(payload) }),
-    changePassword: (payload: { currentPassword: string; newPassword: string; revokeOtherSessions?: boolean }) =>
+    sendEmailBindCode: (email: string) =>
+        requestServer<{ ok: boolean; cooldownSeconds: number; expiresInMinutes: number }>("/account/email/send-code", {
+            method: "POST",
+            body: JSON.stringify({ email }),
+        }),
+    updateProfile: (payload: {
+        displayName?: string;
+        email?: string;
+        emailCode?: string;
+        avatarUrl?: string;
+        lowBalanceAlertEnabled?: boolean | null;
+        lowBalanceThreshold?: number | null;
+    }) => requestServer<{ user: LocalUser }>("/account/profile", { method: "PATCH", body: JSON.stringify(payload) }),
+    sendChangePasswordCode: () =>
+        requestServer<{ ok: boolean; cooldownSeconds: number; expiresInMinutes: number }>("/account/change-password/send-code", {
+            method: "POST",
+        }),
+    changePassword: (payload: {
+        mode?: "password" | "email";
+        currentPassword?: string;
+        emailCode?: string;
+        newPassword: string;
+        revokeOtherSessions?: boolean;
+    }) =>
         requestServer<{ ok: boolean }>("/account/change-password", {
             method: "POST",
             body: JSON.stringify({ ...payload, currentRefreshToken: useUserStore.getState().refreshToken }),
@@ -413,10 +478,24 @@ export const accountApi = {
 
 export const authApi = {
     getBootstrapStatus: () => requestServer<BootstrapStatus>("/auth/bootstrap-status", {}, false),
-    register: (payload: { username: string; password: string; email?: string; displayName?: string }) =>
+    sendRegisterCode: (email: string) =>
+        requestServer<{ ok: boolean; cooldownSeconds: number; expiresInMinutes: number }>(
+            "/auth/send-register-code",
+            { method: "POST", body: JSON.stringify({ email }) },
+            false,
+        ),
+    register: (payload: { username: string; password: string; email?: string; emailCode?: string; displayName?: string }) =>
         requestServer<{ user: LocalUser; accessToken: string; refreshToken: string }>("/auth/register", { method: "POST", body: JSON.stringify(payload) }, false),
     login: (payload: { account: string; password: string }) =>
         requestServer<{ user: LocalUser; accessToken: string; refreshToken: string }>("/auth/login", { method: "POST", body: JSON.stringify(payload) }, false),
+    sendForgotPasswordCode: (email: string) =>
+        requestServer<{ ok: boolean; cooldownSeconds: number; expiresInMinutes: number }>(
+            "/auth/forgot-password/send-code",
+            { method: "POST", body: JSON.stringify({ email }) },
+            false,
+        ),
+    resetPasswordByEmail: (payload: { email: string; code: string; newPassword: string }) =>
+        requestServer<{ ok: boolean }>("/auth/forgot-password/reset", { method: "POST", body: JSON.stringify(payload) }, false),
     logout: async () => {
         const { refreshToken } = useUserStore.getState();
         if (!refreshToken) return;
@@ -719,9 +798,14 @@ export const adminApi = {
         requestServer<{ ok: boolean; secretAccessKeyPreview: string }>("/admin/settings/storage", { method: "PUT", body: JSON.stringify(payload) }),
     testStorageSettings: (payload: S3StorageConfigForm) =>
         requestServer<{ ok: boolean; message: string }>("/admin/settings/storage/test", { method: "POST", body: JSON.stringify(payload) }),
-    getAuthSettings: () => requestServer<{ allowRegister: boolean }>("/admin/settings/auth"),
-    saveAuthSettings: (payload: { allowRegister: boolean }) =>
-        requestServer<{ allowRegister: boolean }>("/admin/settings/auth", { method: "PUT", body: JSON.stringify(payload) }),
+    getAuthSettings: () => requestServer<{ allowRegister: boolean; requireEmailOnRegister: boolean; emailEnabled: boolean }>("/admin/settings/auth"),
+    saveAuthSettings: (payload: { allowRegister: boolean; requireEmailOnRegister?: boolean }) =>
+        requestServer<{ allowRegister: boolean; requireEmailOnRegister: boolean }>("/admin/settings/auth", { method: "PUT", body: JSON.stringify(payload) }),
+    getMailSettings: () => requestServer<AdminMailSettings>("/admin/settings/mail"),
+    saveMailSettings: (payload: AdminMailSettingsForm) =>
+        requestServer<{ ok: boolean; ready: boolean; passwordPreview: string }>("/admin/settings/mail", { method: "PUT", body: JSON.stringify(payload) }),
+    testMailSettings: (payload: AdminMailSettingsForm & { testTo: string }) =>
+        requestServer<{ ok: boolean; message: string }>("/admin/settings/mail/test", { method: "POST", body: JSON.stringify(payload) }),
     getChannelSettings: () => requestServer<{ channels: AdminChannelItem[] }>("/admin/settings/channels"),
     saveChannelSettings: (channels: AdminChannelItem[]) =>
         requestServer<{ ok: boolean }>("/admin/settings/channels", { method: "PUT", body: JSON.stringify({ channels }) }),

@@ -256,40 +256,47 @@ function extractImageSources(payload: unknown): ExtractedImageSource[] {
   return [];
 }
 
-/** 从 AI 生图上游 JSON 响应提取全部图片并上传至用户云端对象存储，返回按顺序对应的 mediaId 数组。 */
+/** 从 AI 生图上游 JSON 响应提取全部图片并上传至用户云端对象存储，返回 mediaId 数组及拿图、云端存储分段耗时。 */
 export async function persistGeneratedImagesFromPayload(params: {
   userId: string;
   payload: unknown;
   model: string;
   prompt?: string;
   clientTaskId?: string;
-}): Promise<Array<string | null>> {
+}): Promise<{ mediaIds: Array<string | null>; fetchImageMs: number; cloudSaveMs: number }> {
   const sources = extractImageSources(params.payload);
-  if (!sources.length) return [];
+  if (!sources.length) return { mediaIds: [], fetchImageMs: 0, cloudSaveMs: 0 };
 
   const mediaIds: Array<string | null> = [];
+  let fetchImageMs = 0;
+  let cloudSaveMs = 0;
   for (let idx = 0; idx < sources.length; idx += 1) {
     const src = sources[idx];
     try {
       let buffer: Buffer;
       let mimeType = "image/png";
+      const fetchStartedAt = Date.now();
       if (src.kind === "b64") {
         buffer = Buffer.from(src.b64, "base64");
         mimeType = src.mimeType || "image/png";
       } else {
         const res = await fetch(src.url);
         if (!res.ok) {
+          fetchImageMs += Date.now() - fetchStartedAt;
           mediaIds.push(null);
           continue;
         }
         mimeType = res.headers.get("content-type")?.split(";")[0]?.trim() || "image/png";
         if (!mimeType.startsWith("image/")) {
+          fetchImageMs += Date.now() - fetchStartedAt;
           mediaIds.push(null);
           continue;
         }
         buffer = Buffer.from(await res.arrayBuffer());
       }
+      fetchImageMs += Date.now() - fetchStartedAt;
 
+      const saveStartedAt = Date.now();
       const saved = await persistCloudMediaBuffer({
         userId: params.userId,
         kind: "image",
@@ -303,11 +310,12 @@ export async function persistGeneratedImagesFromPayload(params: {
           slotIndex: idx,
         },
       });
+      cloudSaveMs += Date.now() - saveStartedAt;
       mediaIds.push(saved?.mediaId ?? null);
     } catch (error) {
       console.warn("[ai-media-persist] 服务端转存生图结果失败:", error);
       mediaIds.push(null);
     }
   }
-  return mediaIds;
+  return { mediaIds, fetchImageMs, cloudSaveMs };
 }

@@ -514,6 +514,12 @@ aiRoutes.all("/proxy/:channelId/*", async (c) => {
   }
 
   const startedAt = Date.now();
+  let clientAborted = Boolean(c.req.raw.signal?.aborted);
+  const handleAbort = () => {
+    clientAborted = true;
+  };
+  c.req.raw.signal?.addEventListener("abort", handleAbort, { once: true });
+
   let upstream: Response;
   try {
     upstream = await fetch(targetUrl, {
@@ -522,10 +528,14 @@ aiRoutes.all("/proxy/:channelId/*", async (c) => {
       body: rawBody,
     });
   } catch (error) {
+    c.req.raw.signal?.removeEventListener("abort", handleAbort);
+    const elapsedMs = Math.max(1, Date.now() - startedAt);
     if (preChargedLedgerId) {
       await patchLedgerMeta(preChargedLedgerId, {
         taskStatus: "failed",
-        durationMs: Math.max(1, Date.now() - startedAt),
+        durationMs: elapsedMs,
+        upstreamMs: elapsedMs,
+        ...(clientAborted ? { clientAborted: true } : {}),
       }).catch(() => undefined);
     }
     if (preCharged > 0) {
@@ -577,10 +587,14 @@ aiRoutes.all("/proxy/:channelId/*", async (c) => {
   }
 
   if (!upstream.ok) {
+    c.req.raw.signal?.removeEventListener("abort", handleAbort);
+    const elapsedMs = Math.max(1, Date.now() - startedAt);
     if (preChargedLedgerId) {
       await patchLedgerMeta(preChargedLedgerId, {
         taskStatus: "failed",
-        durationMs: Math.max(1, Date.now() - startedAt),
+        durationMs: elapsedMs,
+        upstreamMs: elapsedMs,
+        ...(clientAborted ? { clientAborted: true } : {}),
       }).catch(() => undefined);
     }
     if (preCharged > 0) {
@@ -595,15 +609,19 @@ aiRoutes.all("/proxy/:channelId/*", async (c) => {
   }
 
   if (!shouldTrackUsage || !channelModel) {
+    c.req.raw.signal?.removeEventListener("abort", handleAbort);
     return new Response(upstream.body, { status: upstream.status, headers: responseHeaders });
   }
 
-  // 图片生成成功校验实际出图张数并自动转存至云端对象存储（防止前端网络卡顿/刷新丢失结果）
+  // 图片生成成功校验实际出图张数并自动转存至云端对象存储（分段记录上游生成、拿图与云端存储耗时）
   if (channelModel.capability === "image") {
     if (respType.includes("application/json")) {
       const text = await upstream.text();
+      const upstreamMs = Math.max(1, Date.now() - startedAt);
       let imageTaskStatus: "completed" | "failed" = "completed";
       let savedMediaIds: string[] = [];
+      let fetchImageMs = 0;
+      let cloudSaveMs = 0;
       try {
         const parsed = JSON.parse(text);
         const actualCount = countReturnedImages(parsed);
@@ -622,35 +640,46 @@ aiRoutes.all("/proxy/:channelId/*", async (c) => {
             });
           }
         }
-        const savedIds = await persistGeneratedImagesFromPayload({
+        const persisted = await persistGeneratedImagesFromPayload({
           userId: user.id,
           payload: parsed,
           model: modelName,
           prompt: promptText,
           clientTaskId: clientTaskId || undefined,
         });
-        savedMediaIds = savedIds.filter((id): id is string => Boolean(id));
+        fetchImageMs = persisted.fetchImageMs;
+        cloudSaveMs = persisted.cloudSaveMs;
+        savedMediaIds = persisted.mediaIds.filter((id): id is string => Boolean(id));
         if (savedMediaIds.length) {
-          responseHeaders.set("X-Cloud-Media-Ids", JSON.stringify(savedIds));
+          responseHeaders.set("X-Cloud-Media-Ids", JSON.stringify(persisted.mediaIds));
         }
       } catch {
         // ignore parse failure
       }
+      c.req.raw.signal?.removeEventListener("abort", handleAbort);
       if (preChargedLedgerId) {
         await patchLedgerMeta(preChargedLedgerId, {
           durationMs: Math.max(1, Date.now() - startedAt),
+          upstreamMs,
+          fetchImageMs,
+          cloudSaveMs,
           isStream: false,
           taskStatus: imageTaskStatus,
+          ...(clientAborted ? { clientAborted: true } : {}),
           ...(savedMediaIds.length ? { mediaIds: savedMediaIds } : {}),
         }).catch(() => undefined);
       }
       return new Response(text, { status: upstream.status, headers: responseHeaders });
     }
+    c.req.raw.signal?.removeEventListener("abort", handleAbort);
+    const upstreamMs = Math.max(1, Date.now() - startedAt);
     if (preChargedLedgerId) {
       await patchLedgerMeta(preChargedLedgerId, {
-        durationMs: Math.max(1, Date.now() - startedAt),
+        durationMs: upstreamMs,
+        upstreamMs,
         isStream: false,
         taskStatus: "completed",
+        ...(clientAborted ? { clientAborted: true } : {}),
       }).catch(() => undefined);
     }
   }

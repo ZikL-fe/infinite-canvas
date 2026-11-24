@@ -7,22 +7,42 @@ import { z } from "zod";
 import { announcements, canvasProjects, db, mediaObjects, userAssets, userSessions, users } from "../db/index.ts";
 import { getWalletBalance, queryConsumptionMetrics } from "../lib/billing.ts";
 import { hashPassword, sha256Hex, verifyPassword } from "../lib/crypto.ts";
-import { getPlatformWebdavConfig, resolveEffectiveUserWebdav } from "../lib/settings.ts";
+import { issueEmailVerificationCode, verifyAndConsumeEmailCode } from "../lib/email-verification.ts";
+import { isMailConfigReady } from "../lib/mail.ts";
+import { getAuthPolicy, getPlatformMailConfig, getPlatformWebdavConfig, resolveEffectiveUserWebdav } from "../lib/settings.ts";
 import { getUserStorageQuotaSummary, serializeStorageGrant } from "../lib/storage-quota.ts";
 import { requireAuth, type AppEnv } from "../middleware/auth.ts";
 
 const updateProfileSchema = z.object({
   displayName: z.string().trim().min(1, "显示名称不能为空").max(48, "显示名称最多 48 个字符").optional(),
   email: z.string().trim().email("邮箱格式不正确").optional().or(z.literal("")),
+  emailCode: z.string().trim().optional().or(z.literal("")),
   avatarUrl: z.string().trim().max(500, "头像链接过长").optional(),
+  lowBalanceAlertEnabled: z.boolean().nullable().optional(),
+  lowBalanceThreshold: z.number().nonnegative("提醒阈值不能小于 0").max(1_000_000).nullable().optional(),
 });
 
-const changePasswordSchema = z.object({
-  currentPassword: z.string().min(1, "请输入当前密码"),
-  newPassword: z.string().min(6, "新密码至少 6 位").max(128, "密码过长"),
-  revokeOtherSessions: z.boolean().optional().default(true),
-  currentRefreshToken: z.string().optional(),
+const sendBindEmailCodeSchema = z.object({
+  email: z.string().trim().email("邮箱格式不正确"),
 });
+
+const changePasswordSchema = z
+  .object({
+    mode: z.enum(["password", "email"]).optional().default("password"),
+    currentPassword: z.string().optional().default(""),
+    emailCode: z.string().trim().optional().default(""),
+    newPassword: z.string().min(6, "新密码至少 6 位").max(128, "密码过长"),
+    revokeOtherSessions: z.boolean().optional().default(true),
+    currentRefreshToken: z.string().optional(),
+  })
+  .superRefine((data, ctx) => {
+    if (data.mode === "password" && !data.currentPassword) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["currentPassword"], message: "请输入当前密码" });
+    }
+    if (data.mode === "email" && !data.emailCode) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["emailCode"], message: "请输入邮箱验证码" });
+    }
+  });
 
 const revokeOthersSchema = z.object({
   currentRefreshToken: z.string().optional(),
@@ -68,7 +88,7 @@ accountRoutes.get("/overview", async (c) => {
 
 accountRoutes.get("/profile", async (c) => {
   const authUser = c.get("user");
-  const [userRow, creditBalance, [projectStats], [assetStats], mediaByKind, platformWebdav] = await Promise.all([
+  const [userRow, creditBalance, [projectStats], [assetStats], mediaByKind, platformWebdav, mailConfig, authPolicy] = await Promise.all([
     db.query.users.findFirst({ where: eq(users.id, authUser.id) }),
     getWalletBalance(authUser.id),
     db
@@ -89,6 +109,8 @@ accountRoutes.get("/profile", async (c) => {
       .where(and(eq(mediaObjects.userId, authUser.id), eq(mediaObjects.status, "active")))
       .groupBy(mediaObjects.kind),
     getPlatformWebdavConfig(),
+    getPlatformMailConfig(),
+    getAuthPolicy(),
   ]);
 
   if (!userRow) {
@@ -97,12 +119,14 @@ accountRoutes.get("/profile", async (c) => {
 
   const quotaSummary = await getUserStorageQuotaSummary(userRow);
   const effectiveWebdav = authUser.role === "admin" ? resolveEffectiveUserWebdav(platformWebdav, userRow.webdavConfig) : null;
+  const emailServiceEnabled = isMailConfigReady(mailConfig);
 
   return c.json({
     user: {
       id: userRow.id,
       username: userRow.username,
       email: userRow.email,
+      emailVerifiedAt: userRow.emailVerifiedAt ? userRow.emailVerifiedAt.toISOString() : null,
       displayName: userRow.displayName,
       avatarUrl: userRow.avatarUrl,
       role: userRow.role,
@@ -113,6 +137,18 @@ accountRoutes.get("/profile", async (c) => {
       creditBalance,
       lastLoginAt: userRow.lastLoginAt,
       createdAt: userRow.createdAt,
+    },
+    emailServiceEnabled,
+    requireEmailOnRegister: emailServiceEnabled ? authPolicy.requireEmailOnRegister : false,
+    lowBalanceAlert: {
+      enabled: userRow.lowBalanceAlertEnabled ?? null,
+      threshold: userRow.lowBalanceThreshold ?? null,
+      effectiveEnabled: userRow.lowBalanceAlertEnabled ?? mailConfig.lowBalanceAlertEnabled,
+      effectiveThreshold: userRow.lowBalanceThreshold ?? mailConfig.lowBalanceThreshold,
+      platformEnabled: mailConfig.lowBalanceAlertEnabled,
+      platformThreshold: mailConfig.lowBalanceThreshold,
+      cooldownHours: mailConfig.lowBalanceCooldownHours,
+      lastAlertedAt: userRow.lowBalanceAlertedAt ? userRow.lowBalanceAlertedAt.toISOString() : null,
     },
     storageQuotaDetail: {
       baseQuotaBytes: quotaSummary.baseStorageQuotaBytes,
@@ -145,42 +181,106 @@ accountRoutes.get("/profile", async (c) => {
   });
 });
 
+accountRoutes.post("/email/send-code", zValidator("json", sendBindEmailCodeSchema), async (c) => {
+  const authUser = c.get("user");
+  const email = c.req.valid("json").email.toLowerCase();
+  const conflict = await db.query.users.findFirst({
+    where: and(eq(users.email, email), ne(users.id, authUser.id)),
+    columns: { id: true },
+  });
+  if (conflict) {
+    return c.json({ error: "该邮箱已被其他账号使用" }, 409);
+  }
+  const issued = await issueEmailVerificationCode({ email, purpose: "bind_email", userId: authUser.id });
+  if (!issued.ok) {
+    return c.json({ error: issued.error }, issued.status);
+  }
+  return c.json(issued);
+});
+
 accountRoutes.patch("/profile", zValidator("json", updateProfileSchema), async (c) => {
   const authUser = c.get("user");
   const body = c.req.valid("json");
   const nextEmail = body.email !== undefined ? (body.email ? body.email.toLowerCase() : null) : undefined;
 
-  if (nextEmail) {
-    const conflict = await db.query.users.findFirst({
-      where: and(eq(users.email, nextEmail), ne(users.id, authUser.id)),
-      columns: { id: true },
-    });
-    if (conflict) {
-      return c.json({ error: "该邮箱已被其他账号使用" }, 409);
+  const [currentRow, mailConfig, authPolicy, currentBalance] = await Promise.all([
+    db.query.users.findFirst({ where: eq(users.id, authUser.id) }),
+    getPlatformMailConfig(),
+    getAuthPolicy(),
+    getWalletBalance(authUser.id),
+  ]);
+  if (!currentRow) {
+    return c.json({ error: "账号不存在" }, 404);
+  }
+
+  const mailReady = isMailConfigReady(mailConfig);
+  let emailPatch: { email?: string | null; emailVerifiedAt?: Date | null } = {};
+
+  if (nextEmail !== undefined) {
+    if (nextEmail === null) {
+      if (mailReady && authPolicy.requireEmailOnRegister && currentRow.role !== "admin") {
+        return c.json({ error: "当前系统策略要求账号绑定邮箱，仅支持更换新邮箱" }, 400);
+      }
+      emailPatch = { email: null, emailVerifiedAt: null };
+    } else {
+      const conflict = await db.query.users.findFirst({
+        where: and(eq(users.email, nextEmail), ne(users.id, authUser.id)),
+        columns: { id: true },
+      });
+      if (conflict) {
+        return c.json({ error: "该邮箱已被其他账号使用" }, 409);
+      }
+
+      const emailChanged = nextEmail !== (currentRow.email || "").toLowerCase();
+      const needsVerify = mailReady && (emailChanged || !currentRow.emailVerifiedAt);
+      if (needsVerify) {
+        const verified = await verifyAndConsumeEmailCode({
+          email: nextEmail,
+          purpose: "bind_email",
+          code: body.emailCode || "",
+          userId: authUser.id,
+        });
+        if (!verified.ok) {
+          return c.json({ error: verified.error }, verified.status);
+        }
+        emailPatch = { email: nextEmail, emailVerifiedAt: new Date() };
+      } else if (emailChanged) {
+        emailPatch = { email: nextEmail, emailVerifiedAt: null };
+      }
     }
   }
+
+  const nextAlertEnabled =
+    body.lowBalanceAlertEnabled !== undefined ? body.lowBalanceAlertEnabled : currentRow.lowBalanceAlertEnabled;
+  const nextAlertThreshold =
+    body.lowBalanceThreshold !== undefined ? body.lowBalanceThreshold : currentRow.lowBalanceThreshold;
+  const effectiveThreshold = nextAlertThreshold ?? mailConfig.lowBalanceThreshold;
+  const shouldResetAlertedAt =
+    (body.lowBalanceAlertEnabled !== undefined || body.lowBalanceThreshold !== undefined) &&
+    currentBalance >= effectiveThreshold;
 
   const [updated] = await db
     .update(users)
     .set({
       ...(body.displayName !== undefined ? { displayName: body.displayName } : {}),
-      ...(nextEmail !== undefined ? { email: nextEmail } : {}),
+      ...emailPatch,
       ...(body.avatarUrl !== undefined ? { avatarUrl: body.avatarUrl } : {}),
+      ...(body.lowBalanceAlertEnabled !== undefined ? { lowBalanceAlertEnabled: nextAlertEnabled } : {}),
+      ...(body.lowBalanceThreshold !== undefined ? { lowBalanceThreshold: nextAlertThreshold } : {}),
+      ...(shouldResetAlertedAt ? { lowBalanceAlertedAt: null } : {}),
       updatedAt: new Date(),
     })
     .where(eq(users.id, authUser.id))
     .returning();
 
-  const [creditBalance, quotaSummary] = await Promise.all([
-    getWalletBalance(authUser.id),
-    getUserStorageQuotaSummary(updated),
-  ]);
+  const quotaSummary = await getUserStorageQuotaSummary(updated);
 
   return c.json({
     user: {
       id: updated.id,
       username: updated.username,
       email: updated.email,
+      emailVerifiedAt: updated.emailVerifiedAt ? updated.emailVerifiedAt.toISOString() : null,
       displayName: updated.displayName,
       avatarUrl: updated.avatarUrl,
       role: updated.role,
@@ -188,11 +288,28 @@ accountRoutes.patch("/profile", zValidator("json", updateProfileSchema), async (
       storageUsedBytes: updated.storageUsedBytes,
       storageQuotaBytes: quotaSummary.storageQuotaBytes,
       storageQuotaExpiresAt: quotaSummary.storageQuotaExpiresAt ? quotaSummary.storageQuotaExpiresAt.toISOString() : null,
-      creditBalance,
+      creditBalance: currentBalance,
       lastLoginAt: updated.lastLoginAt,
       createdAt: updated.createdAt,
     },
   });
+});
+
+accountRoutes.post("/change-password/send-code", async (c) => {
+  const authUser = c.get("user");
+  const row = await db.query.users.findFirst({
+    where: eq(users.id, authUser.id),
+    columns: { id: true, email: true },
+  });
+  if (!row) return c.json({ error: "账号不存在" }, 404);
+  if (!row.email) {
+    return c.json({ error: "当前账号尚未绑定邮箱，请先在基本资料中绑定邮箱" }, 400);
+  }
+  const issued = await issueEmailVerificationCode({ email: row.email, purpose: "change_password", userId: row.id });
+  if (!issued.ok) {
+    return c.json({ error: issued.error }, issued.status);
+  }
+  return c.json(issued);
 });
 
 accountRoutes.post("/change-password", zValidator("json", changePasswordSchema), async (c) => {
@@ -201,13 +318,35 @@ accountRoutes.post("/change-password", zValidator("json", changePasswordSchema),
   const row = await db.query.users.findFirst({ where: eq(users.id, authUser.id) });
   if (!row) return c.json({ error: "账号不存在" }, 404);
 
-  const valid = await verifyPassword(body.currentPassword, row.passwordHash);
-  if (!valid) {
-    return c.json({ error: "当前密码不正确" }, 400);
+  if (body.mode === "email") {
+    if (!row.email) {
+      return c.json({ error: "当前账号尚未绑定邮箱，请先绑定邮箱" }, 400);
+    }
+    const verified = await verifyAndConsumeEmailCode({
+      email: row.email,
+      purpose: "change_password",
+      code: body.emailCode,
+      userId: row.id,
+    });
+    if (!verified.ok) {
+      return c.json({ error: verified.error }, verified.status);
+    }
+  } else {
+    const valid = await verifyPassword(body.currentPassword, row.passwordHash);
+    if (!valid) {
+      return c.json({ error: "当前密码不正确" }, 400);
+    }
   }
 
   const nextHash = await hashPassword(body.newPassword);
-  await db.update(users).set({ passwordHash: nextHash, updatedAt: new Date() }).where(eq(users.id, authUser.id));
+  await db
+    .update(users)
+    .set({
+      passwordHash: nextHash,
+      ...(body.mode === "email" && !row.emailVerifiedAt ? { emailVerifiedAt: new Date() } : {}),
+      updatedAt: new Date(),
+    })
+    .where(eq(users.id, authUser.id));
 
   if (body.revokeOtherSessions) {
     const currentHash = body.currentRefreshToken ? sha256Hex(body.currentRefreshToken) : "";

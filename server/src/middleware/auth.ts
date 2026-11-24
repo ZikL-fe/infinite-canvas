@@ -10,6 +10,7 @@ export type AuthUser = {
   id: string;
   username: string;
   email: string | null;
+  emailVerifiedAt: Date | null;
   displayName: string;
   avatarUrl: string;
   role: UserRole;
@@ -50,6 +51,7 @@ export const requireAuth: MiddlewareHandler<AppEnv> = async (c, next) => {
       id: true,
       username: true,
       email: true,
+      emailVerifiedAt: true,
       displayName: true,
       avatarUrl: true,
       role: true,

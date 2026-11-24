@@ -3,7 +3,7 @@ import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { Alert, App, Button, Card, Col, DatePicker, Descriptions, Drawer, Form, Image, Input, InputNumber, Menu, Modal, Popconfirm, Progress, Radio, Result, Row, Select, Space, Statistic, Switch, Table, Tabs, Tag, Tooltip, Typography, Upload, theme as antdTheme } from "antd";
 import type { MenuProps, UploadProps } from "antd";
 import dayjs, { type Dayjs } from "dayjs";
-import { AudioLines, Copy, Coins, Cpu, Database, Download, FileIcon, FolderKanban, Gift, HardDrive, ImageIcon, LayoutDashboard, Megaphone, Menu as MenuIcon, Plus, RefreshCw, ScrollText, Shield, Sliders, Trash2, UploadCloud, UserCheck, Users, Video, Wifi } from "lucide-react";
+import { AudioLines, Copy, Coins, Cpu, Database, Download, FileIcon, FolderKanban, Gift, HardDrive, ImageIcon, LayoutDashboard, Mail, Megaphone, Menu as MenuIcon, Plus, RefreshCw, ScrollText, Send, Shield, Sliders, Trash2, UploadCloud, UserCheck, Users, Video, Wifi } from "lucide-react";
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 
 import { ChannelEditorDrawer } from "@/components/layout/channel-editor-drawer";
@@ -14,6 +14,7 @@ import {
     adminApi,
     storageApi,
     type AdminChannelItem,
+    type AdminMailSettingsForm,
     type AdminOverview,
     type AdminUserItem,
     type AnnouncementItem,
@@ -117,31 +118,44 @@ export default function AdminPage() {
 
     const requestedTab = searchParams.get("tab") || "";
     const defaultTab = isAdmin && isAdminRoute ? "overview" : "user-overview";
-    const [activeTab, setActiveTab] = useState(requestedTab || defaultTab);
+    const normalizeTab = useCallback((tab: string) => (tab === "settings" ? "settings-auth" : tab), []);
+    const [activeTab, setActiveTab] = useState(normalizeTab(requestedTab || defaultTab));
+    const [openMenuKeys, setOpenMenuKeys] = useState<string[]>(() => {
+        const initial = normalizeTab(requestedTab || defaultTab);
+        return initial.startsWith("settings-") ? ["settings"] : [];
+    });
     const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
     const switchTab = useCallback(
         (nextTab: string) => {
-            setActiveTab(nextTab);
+            const resolved = normalizeTab(nextTab);
+            setActiveTab(resolved);
+            if (resolved.startsWith("settings-")) {
+                setOpenMenuKeys((prev) => (prev.includes("settings") ? prev : [...prev, "settings"]));
+            }
             setSearchParams(
                 (prev) => {
                     const next = new URLSearchParams(prev);
-                    next.set("tab", nextTab);
+                    next.set("tab", resolved);
                     return next;
                 },
                 { replace: true },
             );
         },
-        [setSearchParams],
+        [normalizeTab, setSearchParams],
     );
 
     useEffect(() => {
         if (requestedTab) {
-            setActiveTab(requestedTab);
+            const resolved = normalizeTab(requestedTab);
+            setActiveTab(resolved);
+            if (resolved.startsWith("settings-")) {
+                setOpenMenuKeys((prev) => (prev.includes("settings") ? prev : [...prev, "settings"]));
+            }
         } else {
             setActiveTab(isAdmin && isAdminRoute ? "overview" : "user-overview");
         }
-    }, [isAdmin, isAdminRoute, requestedTab]);
+    }, [isAdmin, isAdminRoute, normalizeTab, requestedTab]);
     const [overview, setOverview] = useState<AdminOverview | null>(null);
     const [overviewLoading, setOverviewLoading] = useState(false);
     const [overviewDays, setOverviewDays] = useState<7 | 14 | 30>(7);
@@ -183,6 +197,13 @@ export default function AdminPage() {
     const [webdavSaving, setWebdavSaving] = useState(false);
     const [webdavTesting, setWebdavTesting] = useState(false);
 
+    const [mailForm] = Form.useForm<AdminMailSettingsForm>();
+    const [mailPasswordPreview, setMailPasswordPreview] = useState("");
+    const [mailReady, setMailReady] = useState(false);
+    const [mailSaving, setMailSaving] = useState(false);
+    const [mailTesting, setMailTesting] = useState(false);
+    const [testMailTo, setTestMailTo] = useState("");
+
     const [mediaSubTab, setMediaSubTab] = useState<"media" | "canvas" | "image_workbench" | "video_workbench">("media");
     const [mediaItems, setMediaItems] = useState<MediaItem[]>([]);
     const [mediaTotal, setMediaTotal] = useState(0);
@@ -203,6 +224,7 @@ export default function AdminPage() {
     const [downloadingPreviewMedia, setDownloadingPreviewMedia] = useState(false);
 
     const [allowRegister, setAllowRegister] = useState(true);
+    const [requireEmailOnRegister, setRequireEmailOnRegister] = useState(false);
     const [authPolicySaving, setAuthPolicySaving] = useState(false);
 
     useEffect(() => {
@@ -335,8 +357,13 @@ export default function AdminPage() {
 
     const loadAuthAndWebdavSettings = useCallback(async () => {
         try {
-            const [authRes, webdavRes] = await Promise.all([adminApi.getAuthSettings(), adminApi.getWebdavSettings()]);
+            const [authRes, webdavRes, mailRes] = await Promise.all([
+                adminApi.getAuthSettings(),
+                adminApi.getWebdavSettings(),
+                adminApi.getMailSettings(),
+            ]);
             setAllowRegister(authRes.allowRegister);
+            setRequireEmailOnRegister(authRes.requireEmailOnRegister);
             setWebdavPasswordPreview(webdavRes.passwordPreview);
             webdavForm.setFieldsValue({
                 enabled: webdavRes.enabled,
@@ -346,10 +373,25 @@ export default function AdminPage() {
                 baseDirectory: webdavRes.baseDirectory,
                 autoAssignNewUsers: webdavRes.autoAssignNewUsers,
             });
+            setMailPasswordPreview(mailRes.passwordPreview);
+            setMailReady(mailRes.ready);
+            mailForm.setFieldsValue({
+                enabled: mailRes.enabled,
+                host: mailRes.host,
+                port: mailRes.port,
+                secure: mailRes.secure,
+                username: mailRes.username,
+                password: "",
+                fromName: mailRes.fromName,
+                fromAddress: mailRes.fromAddress,
+                lowBalanceAlertEnabled: mailRes.lowBalanceAlertEnabled,
+                lowBalanceThreshold: mailRes.lowBalanceThreshold,
+                lowBalanceCooldownHours: mailRes.lowBalanceCooldownHours,
+            });
         } catch (error) {
             message.error(error instanceof Error ? error.message : "读取系统设置失败");
         }
-    }, [message, webdavForm]);
+    }, [mailForm, message, webdavForm]);
 
     const loadRedeemCodes = useCallback(
         async (page = redeemPage, q = redeemQuery, status = redeemStatusFilter, kind = redeemActiveKind) => {
@@ -422,6 +464,11 @@ export default function AdminPage() {
             window.removeEventListener("infinite-canvas:cloud-workspace-synced", handleChanged);
         };
     }, [activeTab, isAdmin, loadMedia, loadOverview, loadWorkspaceData, mediaKindFilter, mediaModuleFilter, mediaPage, mediaQuery, mediaSubTab, overviewDays, workspaceDataPage, workspaceDataQuery]);
+
+    useEffect(() => {
+        if (!isAdmin || !activeTab.startsWith("settings-")) return;
+        void loadAuthAndWebdavSettings();
+    }, [activeTab, isAdmin, loadAuthAndWebdavSettings]);
 
     useEffect(() => {
         if (!isAdmin || activeTab !== "redeem-codes") return;
@@ -856,16 +903,62 @@ export default function AdminPage() {
         }
     };
 
-    const handleToggleRegister = async (checked: boolean) => {
+    const handleUpdateAuthPolicy = async (patch: { allowRegister?: boolean; requireEmailOnRegister?: boolean }) => {
         setAuthPolicySaving(true);
         try {
-            const res = await adminApi.saveAuthSettings({ allowRegister: checked });
+            const nextAllow = patch.allowRegister ?? allowRegister;
+            const nextRequireEmail = patch.requireEmailOnRegister ?? requireEmailOnRegister;
+            const res = await adminApi.saveAuthSettings({
+                allowRegister: nextAllow,
+                requireEmailOnRegister: nextRequireEmail,
+            });
             setAllowRegister(res.allowRegister);
-            message.success(res.allowRegister ? "已开放新用户注册" : "已关闭新用户注册");
+            setRequireEmailOnRegister(res.requireEmailOnRegister);
+            if (patch.allowRegister !== undefined) {
+                message.success(res.allowRegister ? "已开放新用户注册" : "已关闭新用户注册");
+            } else {
+                message.success(res.requireEmailOnRegister ? "已开启注册强制邮箱验证" : "已关闭注册强制邮箱验证");
+            }
         } catch (error) {
             message.error(error instanceof Error ? error.message : "保存失败");
         } finally {
             setAuthPolicySaving(false);
+        }
+    };
+
+    const handleSaveMailSettings = async (values: AdminMailSettingsForm) => {
+        setMailSaving(true);
+        try {
+            const res = await adminApi.saveMailSettings(values);
+            setMailReady(res.ready);
+            setMailPasswordPreview(res.passwordPreview);
+            if (!values.enabled) {
+                setRequireEmailOnRegister(false);
+            }
+            mailForm.setFieldValue("password", "");
+            message.success("邮件服务配置已保存");
+        } catch (error) {
+            message.error(error instanceof Error ? error.message : "保存邮件配置失败");
+        } finally {
+            setMailSaving(false);
+        }
+    };
+
+    const handleTestMailSettings = async () => {
+        const cleanTo = testMailTo.trim();
+        if (!cleanTo) {
+            message.warning("请先填写测试收件邮箱");
+            return;
+        }
+        try {
+            const values = await mailForm.validateFields();
+            setMailTesting(true);
+            const res = await adminApi.testMailSettings({ ...values, testTo: cleanTo });
+            message.success(res.message);
+        } catch (error) {
+            if (error instanceof Error) message.error(error.message);
+        } finally {
+            setMailTesting(false);
         }
     };
 
@@ -2222,82 +2315,265 @@ export default function AdminPage() {
                                     系统设置
                                 </span>
                             ),
-                            children: (
-                                <div className="flex flex-col gap-5">
-                                    <Card title="注册与安全策略">
-                                        <div className="flex items-center justify-between gap-4">
-                                            <div>
-                                                <div className="font-medium">允许开放注册</div>
-                                                <Typography.Text type="secondary">关闭后仅现有管理员可登录，普通用户无法通过注册页自主创建账号（系统首个管理员不受此限制）</Typography.Text>
+                            children: [
+                                {
+                                    key: "settings-auth",
+                                    label: (
+                                        <span className="inline-flex items-center gap-1.5">
+                                            <Shield className="size-3.5" />
+                                            注册与安全
+                                        </span>
+                                    ),
+                                    pageTitle: "系统设置 · 注册与安全",
+                                    children: (
+                                        <Card title="注册与安全策略">
+                                            <div className="flex flex-col gap-4">
+                                                <div className="flex items-center justify-between gap-4">
+                                                    <div>
+                                                        <div className="font-medium">允许开放注册</div>
+                                                        <Typography.Text type="secondary">
+                                                            关闭后仅现有管理员可登录，普通用户无法通过注册页自主创建账号（系统首个管理员不受此限制）
+                                                        </Typography.Text>
+                                                    </div>
+                                                    <Switch
+                                                        checked={allowRegister}
+                                                        loading={authPolicySaving}
+                                                        onChange={(checked) => void handleUpdateAuthPolicy({ allowRegister: checked })}
+                                                    />
+                                                </div>
+                                                <div className="flex items-center justify-between gap-4 border-t border-black/5 pt-4 dark:border-white/5">
+                                                    <div>
+                                                        <div className="font-medium">注册时必须绑定并验证邮箱</div>
+                                                        <Typography.Text type="secondary">
+                                                            开启后新用户注册必须填写邮箱并通过邮件验证码校验（需先在「邮件服务」中启用并完成配置；首个初始化管理员不受限制）
+                                                        </Typography.Text>
+                                                    </div>
+                                                    <Switch
+                                                        checked={requireEmailOnRegister}
+                                                        disabled={!mailReady && !requireEmailOnRegister}
+                                                        loading={authPolicySaving}
+                                                        onChange={(checked) => void handleUpdateAuthPolicy({ requireEmailOnRegister: checked })}
+                                                    />
+                                                </div>
                                             </div>
-                                            <Switch checked={allowRegister} loading={authPolicySaving} onChange={(checked) => void handleToggleRegister(checked)} />
-                                        </div>
-                                    </Card>
-
-                                    <Card title="平台 WebDAV 服务配置（统一管理与按用户分配）">
-                                        <Form
-                                            form={webdavForm}
-                                            layout="vertical"
-                                            initialValues={{ enabled: false, baseDirectory: "infinite-canvas", autoAssignNewUsers: false }}
-                                            onFinish={handleSavePlatformWebdav}
+                                        </Card>
+                                    ),
+                                },
+                                {
+                                    key: "settings-mail",
+                                    label: (
+                                        <span className="inline-flex items-center gap-1.5">
+                                            <Mail className="size-3.5" />
+                                            邮件服务
+                                        </span>
+                                    ),
+                                    pageTitle: "系统设置 · 邮件服务",
+                                    children: (
+                                        <Card
+                                            title={
+                                                <span className="inline-flex items-center gap-2">
+                                                    <Mail className="size-4" />
+                                                    邮件服务配置（SMTP 与余额不足提醒）
+                                                </span>
+                                            }
+                                            extra={<Tag color={mailReady ? "green" : "default"}>{mailReady ? "已启用" : "未启用"}</Tag>}
                                         >
-                                            <Row gutter={16}>
-                                                <Col xs={24} md={12}>
-                                                    <Form.Item name="enabled" label="启用平台 WebDAV 服务" valuePropName="checked">
-                                                        <Switch />
-                                                    </Form.Item>
-                                                </Col>
-                                                <Col xs={24} md={12}>
-                                                    <Form.Item name="autoAssignNewUsers" label="新用户注册时自动分配专属子目录" valuePropName="checked">
-                                                        <Switch />
-                                                    </Form.Item>
-                                                </Col>
-                                                <Col xs={24} md={12}>
-                                                    <Form.Item name="url" label="WebDAV 服务地址">
-                                                        <Input placeholder="https://nas.example.com/webdav" />
-                                                    </Form.Item>
-                                                </Col>
-                                                <Col xs={24} md={12}>
-                                                    <Form.Item name="baseDirectory" label="默认根目录">
-                                                        <Input placeholder="infinite-canvas" />
-                                                    </Form.Item>
-                                                </Col>
-                                                <Col xs={24} md={12}>
-                                                    <Form.Item name="username" label="默认用户名">
-                                                        <Input placeholder="WebDAV 用户名" />
-                                                    </Form.Item>
-                                                </Col>
-                                                <Col xs={24} md={12}>
-                                                    <Form.Item
-                                                        name="password"
-                                                        label={`默认密码${webdavPasswordPreview ? `（已保存：${webdavPasswordPreview}，留空则保持不变）` : ""}`}
-                                                    >
-                                                        <Input.Password placeholder={webdavPasswordPreview ? "留空表示沿用已保存密码" : "输入 WebDAV 密码"} />
-                                                    </Form.Item>
-                                                </Col>
-                                            </Row>
-                                            <Space>
-                                                <Button icon={<Wifi className="size-4" />} onClick={() => void handleTestPlatformWebdav()} loading={webdavTesting}>
-                                                    测试连接
-                                                </Button>
-                                                <Button type="primary" htmlType="submit" loading={webdavSaving}>
-                                                    保存 WebDAV 配置
-                                                </Button>
-                                            </Space>
-                                        </Form>
-                                    </Card>
-                                </div>
-                            ),
+                                            <Form
+                                                form={mailForm}
+                                                layout="vertical"
+                                                initialValues={{
+                                                    enabled: false,
+                                                    port: 465,
+                                                    secure: true,
+                                                    fromName: "无限画布",
+                                                    lowBalanceAlertEnabled: true,
+                                                    lowBalanceThreshold: 10,
+                                                    lowBalanceCooldownHours: 24,
+                                                }}
+                                                onFinish={handleSaveMailSettings}
+                                            >
+                                                <Row gutter={16}>
+                                                    <Col xs={24} md={12}>
+                                                        <Form.Item name="enabled" label="启用平台邮件服务" valuePropName="checked">
+                                                            <Switch />
+                                                        </Form.Item>
+                                                    </Col>
+                                                    <Col xs={24} md={12}>
+                                                        <Form.Item name="secure" label="使用 SSL/TLS 加密连接（465 端口通常开启，587 通常关闭）" valuePropName="checked">
+                                                            <Switch />
+                                                        </Form.Item>
+                                                    </Col>
+                                                    <Col xs={24} md={12}>
+                                                        <Form.Item name="host" label="SMTP 服务器地址">
+                                                            <Input placeholder="如 smtp.qq.com 或 smtp.gmail.com" />
+                                                        </Form.Item>
+                                                    </Col>
+                                                    <Col xs={24} md={12}>
+                                                        <Form.Item name="port" label="SMTP 端口">
+                                                            <InputNumber min={1} max={65535} className="w-full" placeholder="465" />
+                                                        </Form.Item>
+                                                    </Col>
+                                                    <Col xs={24} md={12}>
+                                                        <Form.Item name="username" label="SMTP 登录账号">
+                                                            <Input placeholder="通常与发件人邮箱一致" />
+                                                        </Form.Item>
+                                                    </Col>
+                                                    <Col xs={24} md={12}>
+                                                        <Form.Item
+                                                            name="password"
+                                                            label={`SMTP 密码 / 授权码${mailPasswordPreview ? `（已保存：${mailPasswordPreview}，留空则保持不变）` : ""}`}
+                                                        >
+                                                            <Input.Password placeholder={mailPasswordPreview ? "留空表示沿用已保存密码" : "输入 SMTP 密码或授权码"} />
+                                                        </Form.Item>
+                                                    </Col>
+                                                    <Col xs={24} md={12}>
+                                                        <Form.Item name="fromName" label="发件人显示名称">
+                                                            <Input placeholder="无限画布" />
+                                                        </Form.Item>
+                                                    </Col>
+                                                    <Col xs={24} md={12}>
+                                                        <Form.Item
+                                                            name="fromAddress"
+                                                            label="发件人邮箱地址"
+                                                            rules={[{ type: "email", message: "请输入有效的发件人邮箱地址" }]}
+                                                        >
+                                                            <Input placeholder="noreply@example.com" />
+                                                        </Form.Item>
+                                                    </Col>
+                                                    <Col xs={24} md={8}>
+                                                        <Form.Item name="lowBalanceAlertEnabled" label="全局默认开启余额不足邮件提醒" valuePropName="checked">
+                                                            <Switch />
+                                                        </Form.Item>
+                                                    </Col>
+                                                    <Col xs={24} md={8}>
+                                                        <Form.Item name="lowBalanceThreshold" label="默认低余额提醒阈值（积分）">
+                                                            <InputNumber min={0} max={1000000} precision={2} className="w-full" />
+                                                        </Form.Item>
+                                                    </Col>
+                                                    <Col xs={24} md={8}>
+                                                        <Form.Item name="lowBalanceCooldownHours" label="同用户提醒最小冷却间隔（小时）">
+                                                            <InputNumber min={1} max={720} className="w-full" />
+                                                        </Form.Item>
+                                                    </Col>
+                                                </Row>
+                                                <div className="flex flex-wrap items-center justify-between gap-3">
+                                                    <Space wrap>
+                                                        <Input
+                                                            value={testMailTo}
+                                                            onChange={(e) => setTestMailTo(e.target.value)}
+                                                            placeholder="输入测试收件邮箱"
+                                                            style={{ width: 240 }}
+                                                        />
+                                                        <Button icon={<Send className="size-4" />} onClick={() => void handleTestMailSettings()} loading={mailTesting}>
+                                                            发送测试邮件
+                                                        </Button>
+                                                    </Space>
+                                                    <Button type="primary" htmlType="submit" loading={mailSaving}>
+                                                        保存邮件配置
+                                                    </Button>
+                                                </div>
+                                            </Form>
+                                        </Card>
+                                    ),
+                                },
+                                {
+                                    key: "settings-webdav",
+                                    label: (
+                                        <span className="inline-flex items-center gap-1.5">
+                                            <Wifi className="size-3.5" />
+                                            WebDAV 同步
+                                        </span>
+                                    ),
+                                    pageTitle: "系统设置 · WebDAV 同步",
+                                    children: (
+                                        <Card title="平台 WebDAV 服务配置（统一管理与按用户分配）">
+                                            <Form
+                                                form={webdavForm}
+                                                layout="vertical"
+                                                initialValues={{ enabled: false, baseDirectory: "infinite-canvas", autoAssignNewUsers: false }}
+                                                onFinish={handleSavePlatformWebdav}
+                                            >
+                                                <Row gutter={16}>
+                                                    <Col xs={24} md={12}>
+                                                        <Form.Item name="enabled" label="启用平台 WebDAV 服务" valuePropName="checked">
+                                                            <Switch />
+                                                        </Form.Item>
+                                                    </Col>
+                                                    <Col xs={24} md={12}>
+                                                        <Form.Item name="autoAssignNewUsers" label="新用户注册时自动分配专属子目录" valuePropName="checked">
+                                                            <Switch />
+                                                        </Form.Item>
+                                                    </Col>
+                                                    <Col xs={24} md={12}>
+                                                        <Form.Item name="url" label="WebDAV 服务地址">
+                                                            <Input placeholder="https://nas.example.com/webdav" />
+                                                        </Form.Item>
+                                                    </Col>
+                                                    <Col xs={24} md={12}>
+                                                        <Form.Item name="baseDirectory" label="默认根目录">
+                                                            <Input placeholder="infinite-canvas" />
+                                                        </Form.Item>
+                                                    </Col>
+                                                    <Col xs={24} md={12}>
+                                                        <Form.Item name="username" label="默认用户名">
+                                                            <Input placeholder="WebDAV 用户名" />
+                                                        </Form.Item>
+                                                    </Col>
+                                                    <Col xs={24} md={12}>
+                                                        <Form.Item
+                                                            name="password"
+                                                            label={`默认密码${webdavPasswordPreview ? `（已保存：${webdavPasswordPreview}，留空则保持不变）` : ""}`}
+                                                        >
+                                                            <Input.Password placeholder={webdavPasswordPreview ? "留空表示沿用已保存密码" : "输入 WebDAV 密码"} />
+                                                        </Form.Item>
+                                                    </Col>
+                                                </Row>
+                                                <Space>
+                                                    <Button icon={<Wifi className="size-4" />} onClick={() => void handleTestPlatformWebdav()} loading={webdavTesting}>
+                                                        测试连接
+                                                    </Button>
+                                                    <Button type="primary" htmlType="submit" loading={webdavSaving}>
+                                                        保存 WebDAV 配置
+                                                    </Button>
+                                                </Space>
+                                            </Form>
+                                        </Card>
+                                    ),
+                                },
+                            ],
                         },
     ];
 
-    const allSections = isAdmin ? (isAdminRoute ? [...adminTabs, ...personalTabs] : [...personalTabs, ...adminTabs]) : personalTabs;
+    type NavTabItem = {
+        key: string;
+        label: ReactNode;
+        pageTitle?: string;
+        children: ReactNode | NavTabItem[];
+    };
+
+    const flattenTabItems = (items: NavTabItem[]): Array<{ key: string; label: ReactNode; pageTitle?: string; children: ReactNode }> =>
+        items.flatMap((item) =>
+            Array.isArray(item.children)
+                ? flattenTabItems(item.children)
+                : [{ key: item.key, label: item.label, pageTitle: item.pageTitle, children: item.children }],
+        );
+
+    const allSections = flattenTabItems(
+        isAdmin ? (isAdminRoute ? [...adminTabs, ...personalTabs] : [...personalTabs, ...adminTabs]) : personalTabs,
+    );
     const activeSection = allSections.find((item) => item.key === activeTab) ?? allSections[0];
 
-    const toMenuItem = (item: { key: string; label: ReactNode }) => ({
-        key: item.key,
-        label: item.label,
-    });
+    const toMenuItem = (item: NavTabItem): NonNullable<MenuProps["items"]>[number] =>
+        Array.isArray(item.children)
+            ? {
+                  key: item.key,
+                  label: item.label,
+                  children: item.children.map((child) => toMenuItem(child)),
+              }
+            : {
+                  key: item.key,
+                  label: item.label,
+              };
 
     const menuItems: MenuProps["items"] = isAdmin
         ? isAdminRoute
@@ -2356,6 +2632,8 @@ export default function AdminPage() {
                     <Menu
                         mode="inline"
                         selectedKeys={[activeSection?.key || activeTab]}
+                        openKeys={openMenuKeys}
+                        onOpenChange={(keys) => setOpenMenuKeys(keys)}
                         items={menuItems}
                         onClick={handleMenuSelect}
                         style={{ borderInlineEnd: 0, background: "transparent" }}
@@ -2380,7 +2658,7 @@ export default function AdminPage() {
                             </Button>
                             <div>
                                 <Typography.Title level={4} style={{ margin: 0 }}>
-                                    {activeSection?.label}
+                                    {activeSection?.pageTitle || activeSection?.label}
                                 </Typography.Title>
                                 <Typography.Text type="secondary" className="text-xs">
                                     {isAdmin && isAdminRoute
@@ -2411,6 +2689,8 @@ export default function AdminPage() {
                 <Menu
                     mode="inline"
                     selectedKeys={[activeSection?.key || activeTab]}
+                    openKeys={openMenuKeys}
+                    onOpenChange={(keys) => setOpenMenuKeys(keys)}
                     items={menuItems}
                     onClick={handleMenuSelect}
                     style={{ borderInlineEnd: 0, background: "transparent" }}

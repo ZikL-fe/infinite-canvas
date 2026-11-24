@@ -18,16 +18,20 @@ import {
   type MediaSourceModule,
 } from "../lib/media-cleanup.ts";
 import { createMediaReadUrl, deleteS3Object, testS3Connection } from "../lib/s3.ts";
+import { isMailConfigReady, sendTestMail } from "../lib/mail.ts";
 import {
   getAuthPolicy,
   getPlatformChannels,
+  getPlatformMailConfig,
   getPlatformWebdavConfig,
   getS3StorageConfig,
   saveAuthPolicy,
   savePlatformChannels,
+  savePlatformMailConfig,
   savePlatformWebdavConfig,
   saveS3StorageConfig,
   type PlatformChannel,
+  type PlatformMailConfig,
   type S3StorageConfig,
 } from "../lib/settings.ts";
 import { getUserStorageQuotaSummary, getUsersStorageQuotaMap, serializeStorageGrant } from "../lib/storage-quota.ts";
@@ -194,6 +198,25 @@ const storageConfigSchema = z.object({
 
 const authPolicySchema = z.object({
   allowRegister: z.boolean(),
+  requireEmailOnRegister: z.boolean().optional().default(false),
+});
+
+const mailConfigSchema = z.object({
+  enabled: z.boolean(),
+  host: z.string().trim().default(""),
+  port: z.number().int().min(1).max(65535).default(465),
+  secure: z.boolean().default(true),
+  username: z.string().trim().default(""),
+  password: z.string().optional().default(""),
+  fromName: z.string().trim().max(64).default("无限画布"),
+  fromAddress: z.string().trim().email("发件人邮箱格式不正确").optional().or(z.literal("")),
+  lowBalanceAlertEnabled: z.boolean().default(true),
+  lowBalanceThreshold: z.number().nonnegative("低余额阈值不能小于 0").max(1_000_000).default(10),
+  lowBalanceCooldownHours: z.number().int().min(1).max(720).default(24),
+});
+
+const testMailSchema = mailConfigSchema.extend({
+  testTo: z.string().trim().email("请填写有效的测试收件邮箱"),
 });
 
 const announcementSchema = z.object({
@@ -904,13 +927,96 @@ adminRoutes.post("/settings/storage/test", zValidator("json", storageConfigSchem
 });
 
 adminRoutes.get("/settings/auth", async (c) => {
-  const policy = await getAuthPolicy();
-  return c.json(policy);
+  const [policy, mailConfig] = await Promise.all([getAuthPolicy(), getPlatformMailConfig()]);
+  return c.json({
+    ...policy,
+    emailEnabled: isMailConfigReady(mailConfig),
+  });
 });
 
 adminRoutes.put("/settings/auth", zValidator("json", authPolicySchema), async (c) => {
-  const policy = await saveAuthPolicy(c.req.valid("json"), c.get("user").id);
+  const body = c.req.valid("json");
+  if (body.requireEmailOnRegister) {
+    const mailConfig = await getPlatformMailConfig();
+    if (!isMailConfigReady(mailConfig)) {
+      return c.json({ error: "请先在「邮件服务配置」中启用并配置完整的 SMTP 参数后再开启强制邮箱验证" }, 400);
+    }
+  }
+  const policy = await saveAuthPolicy(body, c.get("user").id);
   return c.json(policy);
+});
+
+adminRoutes.get("/settings/mail", async (c) => {
+  const config = await getPlatformMailConfig();
+  return c.json({
+    enabled: config.enabled,
+    host: config.host,
+    port: config.port,
+    secure: config.secure,
+    username: config.username,
+    hasPassword: Boolean(config.password),
+    passwordPreview: maskSecret(config.password),
+    fromName: config.fromName,
+    fromAddress: config.fromAddress,
+    lowBalanceAlertEnabled: config.lowBalanceAlertEnabled,
+    lowBalanceThreshold: config.lowBalanceThreshold,
+    lowBalanceCooldownHours: config.lowBalanceCooldownHours,
+    ready: isMailConfigReady(config),
+  });
+});
+
+adminRoutes.put("/settings/mail", zValidator("json", mailConfigSchema), async (c) => {
+  const body = c.req.valid("json");
+  const existing = await getPlatformMailConfig();
+  const nextConfig: PlatformMailConfig = {
+    enabled: body.enabled,
+    host: body.host,
+    port: body.port,
+    secure: body.secure,
+    username: body.username,
+    password: body.password.trim() || existing.password,
+    fromName: body.fromName || "无限画布",
+    fromAddress: body.fromAddress || "",
+    lowBalanceAlertEnabled: body.lowBalanceAlertEnabled,
+    lowBalanceThreshold: body.lowBalanceThreshold,
+    lowBalanceCooldownHours: body.lowBalanceCooldownHours,
+  };
+  if (nextConfig.enabled && !isMailConfigReady(nextConfig)) {
+    return c.json({ error: "启用邮件服务时，请填写完整的 SMTP 主机、端口与发件人邮箱" }, 400);
+  }
+  await savePlatformMailConfig(nextConfig, c.get("user").id);
+  if (!nextConfig.enabled) {
+    const authPolicy = await getAuthPolicy();
+    if (authPolicy.requireEmailOnRegister) {
+      await saveAuthPolicy({ ...authPolicy, requireEmailOnRegister: false }, c.get("user").id);
+    }
+  }
+  return c.json({ ok: true, ready: isMailConfigReady(nextConfig), passwordPreview: maskSecret(nextConfig.password) });
+});
+
+adminRoutes.post("/settings/mail/test", zValidator("json", testMailSchema), async (c) => {
+  const body = c.req.valid("json");
+  const existing = await getPlatformMailConfig();
+  const config: PlatformMailConfig = {
+    enabled: true,
+    host: body.host,
+    port: body.port,
+    secure: body.secure,
+    username: body.username,
+    password: body.password.trim() || existing.password,
+    fromName: body.fromName || "无限画布",
+    fromAddress: body.fromAddress || "",
+    lowBalanceAlertEnabled: body.lowBalanceAlertEnabled,
+    lowBalanceThreshold: body.lowBalanceThreshold,
+    lowBalanceCooldownHours: body.lowBalanceCooldownHours,
+  };
+  try {
+    await sendTestMail({ to: body.testTo, config });
+    return c.json({ ok: true, message: `测试邮件已发送至 ${body.testTo}` });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "测试邮件发送失败";
+    return c.json({ error: `测试邮件发送失败：${message}` }, 400);
+  }
 });
 
 adminRoutes.get("/settings/channels", async (c) => {

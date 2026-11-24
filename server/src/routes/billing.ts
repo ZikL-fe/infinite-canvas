@@ -5,6 +5,7 @@ import { z } from "zod";
 
 import { db } from "../db/index.ts";
 import { adjustWalletCreditsInTx, getWalletBalance, queryCreditLedger } from "../lib/billing.ts";
+import { scheduleWalletBalanceAlertCheck } from "../lib/billing-alert.ts";
 import { claimRedeemCodeInTx } from "../lib/redeem.ts";
 import { requireAuth, type AppEnv } from "../middleware/auth.ts";
 
@@ -71,5 +72,8 @@ billingRoutes.post("/redeem", zValidator("json", redeemSchema), async (c) => {
     return c.json({ error: result.error }, result.status);
   }
 
+  if ("creditsAdded" in result) {
+    scheduleWalletBalanceAlertCheck(user.id, result.creditsAdded, result.balance);
+  }
   return c.json(result);
 });

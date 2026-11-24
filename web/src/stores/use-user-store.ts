@@ -9,6 +9,7 @@ export type LocalUser = {
     id: string;
     username: string;
     email?: string | null;
+    emailVerifiedAt?: string | null;
     displayName: string;
     avatarUrl: string;
     role: UserRole;
@@ -23,6 +24,8 @@ export type LocalUser = {
 export type BootstrapStatus = {
     initialized: boolean;
     allowRegister: boolean;
+    requireEmailOnRegister?: boolean;
+    emailEnabled?: boolean;
 };
 
 type UserStore = {
