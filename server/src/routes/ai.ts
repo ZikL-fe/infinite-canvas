@@ -150,6 +150,57 @@ function countReturnedImages(payload: unknown): number | null {
   return null;
 }
 
+function truncateErrorText(text: string, maxLength = 1000) {
+  const clean = text.trim();
+  if (!clean) return "";
+  return clean.length > maxLength ? `${clean.slice(0, maxLength)}…` : clean;
+}
+
+function extractErrorFromPayload(payload: unknown): string {
+  if (!payload || typeof payload !== "object") return "";
+  const rec = payload as Record<string, unknown>;
+  const errObj = rec.error && typeof rec.error === "object" ? (rec.error as Record<string, unknown>) : null;
+  const errMsg =
+    (typeof errObj?.message === "string" && errObj.message) ||
+    (typeof rec.error === "string" && rec.error) ||
+    (typeof rec.message === "string" && rec.message) ||
+    (typeof rec.msg === "string" && rec.msg) ||
+    (typeof rec.detail === "string" && rec.detail) ||
+    "";
+  if (errMsg.trim()) return truncateErrorText(errMsg);
+
+  const promptFeedback = rec.promptFeedback && typeof rec.promptFeedback === "object" ? (rec.promptFeedback as Record<string, unknown>) : null;
+  if (typeof promptFeedback?.blockReason === "string" && promptFeedback.blockReason.trim()) {
+    return truncateErrorText(`请求被上游内容安全策略拦截（${promptFeedback.blockReason.trim()}）`);
+  }
+
+  if (Array.isArray(rec.candidates) && rec.candidates.length > 0) {
+    const first = rec.candidates[0] as Record<string, unknown> | undefined;
+    const finishMessage = typeof first?.finishMessage === "string" ? first.finishMessage.trim() : "";
+    if (finishMessage) return truncateErrorText(finishMessage);
+    const finishReason = typeof first?.finishReason === "string" ? first.finishReason.trim() : "";
+    if (finishReason && finishReason.toUpperCase() !== "STOP") {
+      return truncateErrorText(`上游生成未返回图片（finishReason: ${finishReason}）`);
+    }
+  }
+  return "";
+}
+
+function extractUpstreamErrorMessage(rawText: string, status?: number) {
+  const trimmed = rawText.trim();
+  if (trimmed) {
+    try {
+      const parsed = JSON.parse(trimmed);
+      const parsedMsg = extractErrorFromPayload(parsed);
+      if (parsedMsg) return parsedMsg;
+    } catch {
+      // non-JSON response falls through to raw snippet
+    }
+    return truncateErrorText(trimmed);
+  }
+  return status ? `上游返回异常状态码 HTTP ${status}` : "上游请求失败";
+}
+
 function mapUpstreamTaskStatus(payload: unknown): "not_started" | "processing" | "completed" | "failed" {
   if (!payload || typeof payload !== "object") return "processing";
   const rec = payload as Record<string, unknown>;
@@ -530,11 +581,13 @@ aiRoutes.all("/proxy/:channelId/*", async (c) => {
   } catch (error) {
     c.req.raw.signal?.removeEventListener("abort", handleAbort);
     const elapsedMs = Math.max(1, Date.now() - startedAt);
+    const errorMessage = truncateErrorText(error instanceof Error ? error.message : String(error || "上游连接失败")) || "上游连接失败";
     if (preChargedLedgerId) {
       await patchLedgerMeta(preChargedLedgerId, {
         taskStatus: "failed",
         durationMs: elapsedMs,
         upstreamMs: elapsedMs,
+        errorMessage,
         ...(clientAborted ? { clientAborted: true } : {}),
       }).catch(() => undefined);
     }
@@ -543,7 +596,7 @@ aiRoutes.all("/proxy/:channelId/*", async (c) => {
         userId: user.id,
         delta: preCharged,
         reason: "refund",
-        meta: { model: modelName, taskStatus: "refunded", detail: "上游连接失败自动退回" },
+        meta: { model: modelName, taskStatus: "refunded", detail: "上游连接失败自动退回", errorMessage },
       });
     }
     throw error;
@@ -589,11 +642,15 @@ aiRoutes.all("/proxy/:channelId/*", async (c) => {
   if (!upstream.ok) {
     c.req.raw.signal?.removeEventListener("abort", handleAbort);
     const elapsedMs = Math.max(1, Date.now() - startedAt);
+    const errorText = await upstream.text().catch(() => "");
+    const errorMessage = extractUpstreamErrorMessage(errorText, upstream.status);
     if (preChargedLedgerId) {
       await patchLedgerMeta(preChargedLedgerId, {
         taskStatus: "failed",
         durationMs: elapsedMs,
         upstreamMs: elapsedMs,
+        errorStatus: upstream.status,
+        errorMessage,
         ...(clientAborted ? { clientAborted: true } : {}),
       }).catch(() => undefined);
     }
@@ -602,10 +659,10 @@ aiRoutes.all("/proxy/:channelId/*", async (c) => {
         userId: user.id,
         delta: preCharged,
         reason: "refund",
-        meta: { model: modelName, status: upstream.status, taskStatus: "refunded", detail: "请求失败自动退回" },
+        meta: { model: modelName, status: upstream.status, taskStatus: "refunded", detail: "请求失败自动退回", errorStatus: upstream.status, errorMessage },
       });
     }
-    return new Response(upstream.body, { status: upstream.status, headers: responseHeaders });
+    return new Response(errorText, { status: upstream.status, headers: responseHeaders });
   }
 
   if (!shouldTrackUsage || !channelModel) {
@@ -619,14 +676,30 @@ aiRoutes.all("/proxy/:channelId/*", async (c) => {
       const text = await upstream.text();
       const upstreamMs = Math.max(1, Date.now() - startedAt);
       let imageTaskStatus: "completed" | "failed" = "completed";
+      let errorMessage = "";
       let savedMediaIds: string[] = [];
       let fetchImageMs = 0;
       let cloudSaveMs = 0;
       try {
         const parsed = JSON.parse(text);
         const actualCount = countReturnedImages(parsed);
-        if (actualCount !== null && actualCount < requestedImageCount) {
-          if (actualCount <= 0) imageTaskStatus = "failed";
+        const payloadError = extractErrorFromPayload(parsed);
+        if (actualCount === null && payloadError) {
+          imageTaskStatus = "failed";
+          errorMessage = payloadError;
+          if (preCharged > 0) {
+            await adjustWalletCredits({
+              userId: user.id,
+              delta: preCharged,
+              reason: "refund",
+              meta: { model: modelName, taskStatus: "refunded", detail: "上游返回错误信息自动退回", errorMessage },
+            });
+          }
+        } else if (actualCount !== null && actualCount < requestedImageCount) {
+          if (actualCount <= 0) {
+            imageTaskStatus = "failed";
+            errorMessage = payloadError || "上游未返回有效图片（返回数量为 0）";
+          }
           const refundAmount =
             actualCount <= 0
               ? preCharged
@@ -636,7 +709,14 @@ aiRoutes.all("/proxy/:channelId/*", async (c) => {
               userId: user.id,
               delta: refundAmount,
               reason: "refund",
-              meta: { model: modelName, requested: requestedImageCount, actual: actualCount, taskStatus: "refunded", detail: "按实际出图数量退回差额" },
+              meta: {
+                model: modelName,
+                requested: requestedImageCount,
+                actual: actualCount,
+                taskStatus: "refunded",
+                detail: "按实际出图数量退回差额",
+                ...(errorMessage ? { errorMessage } : {}),
+              },
             });
           }
         }
@@ -653,8 +733,17 @@ aiRoutes.all("/proxy/:channelId/*", async (c) => {
         if (savedMediaIds.length) {
           responseHeaders.set("X-Cloud-Media-Ids", JSON.stringify(persisted.mediaIds));
         }
-      } catch {
-        // ignore parse failure
+      } catch (parseError) {
+        imageTaskStatus = "failed";
+        errorMessage = extractUpstreamErrorMessage(text) || (parseError instanceof Error ? parseError.message : "上游响应解析失败");
+        if (preCharged > 0) {
+          await adjustWalletCredits({
+            userId: user.id,
+            delta: preCharged,
+            reason: "refund",
+            meta: { model: modelName, taskStatus: "refunded", detail: "上游响应解析失败自动退回", errorMessage },
+          });
+        }
       }
       c.req.raw.signal?.removeEventListener("abort", handleAbort);
       if (preChargedLedgerId) {
@@ -665,11 +754,38 @@ aiRoutes.all("/proxy/:channelId/*", async (c) => {
           cloudSaveMs,
           isStream: false,
           taskStatus: imageTaskStatus,
+          ...(errorMessage ? { errorMessage } : {}),
           ...(clientAborted ? { clientAborted: true } : {}),
           ...(savedMediaIds.length ? { mediaIds: savedMediaIds } : {}),
         }).catch(() => undefined);
       }
       return new Response(text, { status: upstream.status, headers: responseHeaders });
+    }
+    if (respType.startsWith("text/")) {
+      const textBody = await upstream.text().catch(() => "");
+      c.req.raw.signal?.removeEventListener("abort", handleAbort);
+      const upstreamMs = Math.max(1, Date.now() - startedAt);
+      const errorMessage = extractUpstreamErrorMessage(textBody, upstream.status);
+      if (preChargedLedgerId) {
+        await patchLedgerMeta(preChargedLedgerId, {
+          durationMs: upstreamMs,
+          upstreamMs,
+          isStream: false,
+          taskStatus: "failed",
+          errorStatus: upstream.status,
+          errorMessage,
+          ...(clientAborted ? { clientAborted: true } : {}),
+        }).catch(() => undefined);
+      }
+      if (preCharged > 0) {
+        await adjustWalletCredits({
+          userId: user.id,
+          delta: preCharged,
+          reason: "refund",
+          meta: { model: modelName, status: upstream.status, taskStatus: "refunded", detail: "请求返回异常文本自动退回", errorStatus: upstream.status, errorMessage },
+        });
+      }
+      return new Response(textBody, { status: upstream.status, headers: responseHeaders });
     }
     c.req.raw.signal?.removeEventListener("abort", handleAbort);
     const upstreamMs = Math.max(1, Date.now() - startedAt);

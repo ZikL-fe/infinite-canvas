@@ -1,13 +1,14 @@
 /** 云端生成成果页面：列表仅加载云端缩略图，点击查看或下载时才按需加载原图/原视频。 */
 import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
-import { App, Button, Card, Descriptions, Drawer, Empty, Image, Input, Pagination, Popconfirm, Progress, Result, Space, Spin, Tag, Typography } from "antd";
-import { AudioLines, Copy, Download, Eye, FolderPlus, HardDrive, ImageIcon, Play, RefreshCw, Search, Trash2, Video } from "lucide-react";
+import { App, Button, Card, Checkbox, Descriptions, Drawer, Empty, Image, Input, Pagination, Popconfirm, Progress, Result, Space, Spin, Tag, Typography } from "antd";
+import { AudioLines, CheckSquare, Copy, Download, Eye, FolderPlus, HardDrive, ImageIcon, Play, RefreshCw, Search, Trash2, Video } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 
+import { useBatchZipDownload } from "@/hooks/use-batch-zip-download";
 import { useCopyText } from "@/hooks/use-copy-text";
 import { createImageThumbnail, createVideoThumbnail } from "@/lib/image-thumbnail";
 import { formatBytes, formatStoragePair } from "@/lib/image-utils";
-import { authApi, storageApi, type MediaItem } from "@/services/api/server";
+import { authApi, mediaDownloadFilename, storageApi, type MediaItem } from "@/services/api/server";
 import { notifyCloudWorkspaceChanged, WORKSPACE_CHANGED_EVENT } from "@/services/cloud-media";
 import { uploadMediaFile } from "@/services/file-storage";
 import { getImagePreviewRevision, previewUrlFor, subscribeImagePreviews, uploadImage } from "@/services/image-storage";
@@ -56,6 +57,8 @@ export default function ResultsPage() {
     const [previewItem, setPreviewItem] = useState<MediaItem | null>(null);
     const [previewOriginalUrl, setPreviewOriginalUrl] = useState("");
     const [loadingOriginalId, setLoadingOriginalId] = useState<string | null>(null);
+    const [selectedIds, setSelectedIds] = useState<string[]>([]);
+    const { downloading: batchDownloading, downloadZip } = useBatchZipDownload();
 
     const loadResults = useCallback(async () => {
         if (!accessToken) return;
@@ -70,6 +73,8 @@ export default function ResultsPage() {
             });
             setItems(res.items);
             setTotal(res.total ?? res.items.length);
+            const loadedIds = new Set(res.items.map((entry) => entry.id));
+            setSelectedIds((prev) => prev.filter((id) => loadedIds.has(id)));
         } catch (error) {
             message.error(error instanceof Error ? error.message : "加载云端成果失败");
         } finally {
@@ -141,6 +146,22 @@ export default function ResultsPage() {
         }
     };
 
+    const allPageSelected = Boolean(items.length) && items.every((item) => selectedIds.includes(item.id));
+    const toggleSelectAllPage = () => {
+        setSelectedIds(allPageSelected ? [] : items.map((item) => item.id));
+    };
+
+    const handleBatchDownload = async () => {
+        const targets = items.filter((item) => selectedIds.includes(item.id));
+        await downloadZip({
+            entries: targets.map((item) => ({
+                filename: mediaDownloadFilename(item),
+                loadBlob: () => storageApi.downloadBlob(item.id),
+            })),
+            zipFilename: `results-${Date.now()}.zip`,
+        });
+    };
+
     const handleDownload = async (item: MediaItem) => {
         setLoadingOriginalId(item.id);
         try {
@@ -151,6 +172,22 @@ export default function ResultsPage() {
         } finally {
             setLoadingOriginalId(null);
         }
+    };
+
+    const allPageSelected = Boolean(items.length) && items.every((item) => selectedIds.includes(item.id));
+    const toggleSelectAllPage = () => {
+        setSelectedIds(allPageSelected ? [] : items.map((item) => item.id));
+    };
+
+    const handleBatchDownload = async () => {
+        const targets = items.filter((item) => selectedIds.includes(item.id));
+        await downloadZip({
+            entries: targets.map((item) => ({
+                filename: mediaDownloadFilename(item),
+                loadBlob: () => storageApi.downloadBlob(item.id),
+            })),
+            zipFilename: `results-${Date.now()}.zip`,
+        });
     };
 
     const handleSaveToAssets = async (item: MediaItem) => {
@@ -331,9 +368,25 @@ export default function ResultsPage() {
                                 </Tag.CheckableTag>
                             ))}
                         </div>
-                        <Button size="small" icon={<RefreshCw className="size-3.5" />} loading={loading} onClick={() => void loadResults()}>
-                            刷新
-                        </Button>
+                        <Space wrap>
+                            <Button size="small" icon={<CheckSquare className="size-3.5" />} disabled={!items.length} onClick={toggleSelectAllPage}>
+                                {allPageSelected ? "取消全选" : "全选本页"}
+                            </Button>
+                            {selectedIds.length > 0 ? (
+                                <Button
+                                    size="small"
+                                    type="primary"
+                                    icon={<Download className="size-3.5" />}
+                                    loading={batchDownloading}
+                                    onClick={() => void handleBatchDownload()}
+                                >
+                                    打包下载 ({selectedIds.length})
+                                </Button>
+                            ) : null}
+                            <Button size="small" icon={<RefreshCw className="size-3.5" />} loading={loading} onClick={() => void loadResults()}>
+                                刷新
+                            </Button>
+                        </Space>
                     </div>
                 </div>
 
@@ -345,21 +398,63 @@ export default function ResultsPage() {
                                     const model = typeof item.meta?.model === "string" ? item.meta.model : "";
                                     const promptText = typeof item.meta?.prompt === "string" ? item.meta.prompt : "";
                                     const thumbSrc = item.thumbnailUrl || previewUrlFor(item.id) || "";
+                                    const selected = selectedIds.includes(item.id);
                                     return (
                                         <Card
                                             key={item.id}
                                             hoverable
-                                            className="flex h-full flex-col overflow-hidden"
+                                            className={`flex h-full flex-col overflow-hidden ${selected ? "ring-2 ring-stone-900 dark:ring-stone-100" : ""}`}
                                             styles={{ body: { padding: 14, flex: 1, display: "flex", flexDirection: "column" } }}
                                             cover={
-                                                item.kind === "image" ? (
-                                                    thumbSrc ? (
+                                                <div className="relative">
+                                                    <div
+                                                        className="absolute left-2.5 top-2.5 z-10 rounded-md bg-white/85 px-1.5 py-0.5 shadow-sm backdrop-blur dark:bg-stone-900/80"
+                                                        onClick={(event) => event.stopPropagation()}
+                                                    >
+                                                        <Checkbox
+                                                            checked={selected}
+                                                            onChange={(event) =>
+                                                                setSelectedIds((prev) =>
+                                                                    event.target.checked
+                                                                        ? Array.from(new Set([...prev, item.id]))
+                                                                        : prev.filter((id) => id !== item.id),
+                                                                )
+                                                            }
+                                                        />
+                                                    </div>
+                                                    {item.kind === "image" ? (
+                                                        thumbSrc ? (
+                                                            <button
+                                                                type="button"
+                                                                className="group relative block aspect-[4/3] w-full cursor-pointer overflow-hidden bg-stone-100 dark:bg-stone-900"
+                                                                onClick={() => void handleOpenPreview(item)}
+                                                            >
+                                                                <img src={thumbSrc} alt={promptText || item.objectKey} className="h-full w-full object-cover transition group-hover:scale-[1.02]" />
+                                                            </button>
+                                                        ) : (
+                                                            <button
+                                                                type="button"
+                                                                className="flex aspect-[4/3] w-full cursor-pointer flex-col items-center justify-center gap-2 bg-stone-100 text-stone-500 transition hover:bg-stone-200/70 dark:bg-stone-900 dark:text-stone-400 dark:hover:bg-stone-800/70"
+                                                                onClick={() => void handleOpenPreview(item)}
+                                                            >
+                                                                <ImageIcon className="size-7" />
+                                                                <span className="text-xs">点击查看原图</span>
+                                                            </button>
+                                                        )
+                                                    ) : item.kind === "video" ? (
                                                         <button
                                                             type="button"
-                                                            className="group relative block aspect-[4/3] w-full cursor-pointer overflow-hidden bg-stone-100 dark:bg-stone-900"
+                                                            className="group relative flex aspect-[4/3] w-full cursor-pointer items-center justify-center overflow-hidden bg-stone-950 text-white"
                                                             onClick={() => void handleOpenPreview(item)}
                                                         >
-                                                            <img src={thumbSrc} alt={promptText || item.objectKey} className="h-full w-full object-cover transition group-hover:scale-[1.02]" />
+                                                            {thumbSrc ? (
+                                                                <img src={thumbSrc} alt={promptText || item.objectKey} className="h-full w-full object-cover opacity-85 transition group-hover:scale-[1.02]" />
+                                                            ) : (
+                                                                <Video className="size-8 text-stone-400" />
+                                                            )}
+                                                            <span className="absolute flex size-11 items-center justify-center rounded-full bg-black/60 text-white backdrop-blur-sm transition group-hover:scale-105">
+                                                                <Play className="ml-0.5 size-5 fill-current" />
+                                                            </span>
                                                         </button>
                                                     ) : (
                                                         <button
@@ -367,35 +462,11 @@ export default function ResultsPage() {
                                                             className="flex aspect-[4/3] w-full cursor-pointer flex-col items-center justify-center gap-2 bg-stone-100 text-stone-500 transition hover:bg-stone-200/70 dark:bg-stone-900 dark:text-stone-400 dark:hover:bg-stone-800/70"
                                                             onClick={() => void handleOpenPreview(item)}
                                                         >
-                                                            <ImageIcon className="size-7" />
-                                                            <span className="text-xs">点击查看原图</span>
+                                                            <AudioLines className="size-8" />
+                                                            <span className="text-xs">点击试听音频</span>
                                                         </button>
-                                                    )
-                                                ) : item.kind === "video" ? (
-                                                    <button
-                                                        type="button"
-                                                        className="group relative flex aspect-[4/3] w-full cursor-pointer items-center justify-center overflow-hidden bg-stone-950 text-white"
-                                                        onClick={() => void handleOpenPreview(item)}
-                                                    >
-                                                        {thumbSrc ? (
-                                                            <img src={thumbSrc} alt={promptText || item.objectKey} className="h-full w-full object-cover opacity-85 transition group-hover:scale-[1.02]" />
-                                                        ) : (
-                                                            <Video className="size-8 text-stone-400" />
-                                                        )}
-                                                        <span className="absolute flex size-11 items-center justify-center rounded-full bg-black/60 text-white backdrop-blur-sm transition group-hover:scale-105">
-                                                            <Play className="ml-0.5 size-5 fill-current" />
-                                                        </span>
-                                                    </button>
-                                                ) : (
-                                                    <button
-                                                        type="button"
-                                                        className="flex aspect-[4/3] w-full cursor-pointer flex-col items-center justify-center gap-2 bg-stone-100 text-stone-500 transition hover:bg-stone-200/70 dark:bg-stone-900 dark:text-stone-400 dark:hover:bg-stone-800/70"
-                                                        onClick={() => void handleOpenPreview(item)}
-                                                    >
-                                                        <AudioLines className="size-8" />
-                                                        <span className="text-xs">点击试听音频</span>
-                                                    </button>
-                                                )
+                                                    )}
+                                                </div>
                                             }
                                         >
                                             <div className="flex flex-1 flex-col gap-2">

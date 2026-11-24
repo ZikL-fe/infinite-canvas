@@ -1,10 +1,11 @@
-import { Copy, Download, HardDrive, PencilLine, Search, Trash2, Upload } from "lucide-react";
+import { CheckSquare, Copy, Download, HardDrive, PencilLine, Search, Trash2, Upload } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
-import { App, Button, Card, Drawer, Empty, Form, Image, Input, Modal, Pagination, Progress, Select, Space, Tag, Typography } from "antd";
+import { App, Button, Card, Checkbox, Drawer, Empty, Form, Image, Input, Modal, Pagination, Progress, Select, Space, Tag, Typography } from "antd";
 import { saveAs } from "file-saver";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
 
+import { useBatchZipDownload } from "@/hooks/use-batch-zip-download";
 import { useCopyText } from "@/hooks/use-copy-text";
 import { formatBytes, formatStoragePair, readFileAsDataUrl } from "@/lib/image-utils";
 import { getMediaBlob } from "@/services/file-storage";
@@ -58,6 +59,8 @@ export default function AssetsPage() {
     const [importingAssets, setImportingAssets] = useState(false);
     const [exportingAssets, setExportingAssets] = useState(false);
     const [downloadingId, setDownloadingId] = useState<string | null>(null);
+    const [selectedIds, setSelectedIds] = useState<string[]>([]);
+    const { downloading: batchDownloading, downloadZip } = useBatchZipDownload();
     const coverUrl = Form.useWatch("coverUrl", form) || "";
     const title = Form.useWatch("title", form) || "";
     const tags = Form.useWatch("tags", form) || [];
@@ -82,6 +85,11 @@ export default function AssetsPage() {
         const maxPage = Math.max(1, Math.ceil(filteredAssets.length / pageSize));
         setPage((value) => Math.min(value, maxPage));
     }, [filteredAssets.length, pageSize]);
+
+    useEffect(() => {
+        const validIdSet = new Set(validAssets.map((asset) => asset.id));
+        setSelectedIds((prev) => prev.filter((id) => validIdSet.has(id)));
+    }, [validAssets]);
 
     const openCreate = () => {
         setEditingAsset(null);
@@ -204,6 +212,37 @@ export default function AssetsPage() {
             hide();
             setExportingAssets(false);
         }
+    };
+
+    const allPageSelected = Boolean(visibleAssets.length) && visibleAssets.every((asset) => selectedIds.includes(asset.id));
+    const toggleSelectAllPage = () => {
+        const pageIds = visibleAssets.map((asset) => asset.id);
+        if (allPageSelected) {
+            const pageSet = new Set(pageIds);
+            setSelectedIds((prev) => prev.filter((id) => !pageSet.has(id)));
+        } else {
+            setSelectedIds((prev) => Array.from(new Set([...prev, ...pageIds])));
+        }
+    };
+
+    const handleBatchDownload = async () => {
+        const targets = validAssets.filter((asset) => selectedIds.includes(asset.id));
+        await downloadZip({
+            entries: targets.map((asset) => {
+                if (asset.kind === "text") {
+                    return {
+                        filename: `${asset.title || "text-asset"}.txt`,
+                        loadBlob: async () => new Blob([asset.data.content], { type: "text/plain;charset=utf-8" }),
+                    };
+                }
+                const ext = asset.data.mimeType?.split("/")[1]?.split("+")[0] || (asset.kind === "video" ? "mp4" : "png");
+                return {
+                    filename: `${asset.title || "asset"}.${ext}`,
+                    loadBlob: () => readAssetMediaBlob(asset),
+                };
+            }),
+            zipFilename: `assets-batch-${Date.now()}.zip`,
+        });
     };
 
     const importAssetZip = async (file?: File) => {
@@ -342,7 +381,21 @@ export default function AssetsPage() {
                                     ))}
                                 </div>
                             </div>
-                            <div className="flex flex-wrap gap-4">
+                            <div className="flex flex-wrap items-center gap-3">
+                                <Button size="small" icon={<CheckSquare className="size-3.5" />} disabled={!visibleAssets.length} onClick={toggleSelectAllPage}>
+                                    {allPageSelected ? "取消全选" : "全选本页"}
+                                </Button>
+                                {selectedIds.length > 0 ? (
+                                    <Button
+                                        size="small"
+                                        type="primary"
+                                        icon={<Download className="size-3.5" />}
+                                        loading={batchDownloading}
+                                        onClick={() => void handleBatchDownload()}
+                                    >
+                                        打包下载 ({selectedIds.length})
+                                    </Button>
+                                ) : null}
                                 <button
                                     type="button"
                                     disabled={exportingAssets}
@@ -374,7 +427,22 @@ export default function AssetsPage() {
                 <div className="mx-auto flex max-w-7xl flex-col gap-5">
                     <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
                         {visibleAssets.map((asset) => (
-                            <AssetCard key={asset.id} asset={asset} downloading={downloadingId === asset.id} onOpen={() => setPreviewAsset(asset)} onEdit={() => openEdit(asset)} onCopy={copyAssetText} onDownload={downloadImage} onDelete={() => setDeletingAsset(asset)} />
+                            <AssetCard
+                                key={asset.id}
+                                asset={asset}
+                                selected={selectedIds.includes(asset.id)}
+                                downloading={downloadingId === asset.id}
+                                onSelectedChange={(checked) =>
+                                    setSelectedIds((prev) =>
+                                        checked ? Array.from(new Set([...prev, asset.id])) : prev.filter((id) => id !== asset.id),
+                                    )
+                                }
+                                onOpen={() => setPreviewAsset(asset)}
+                                onEdit={() => openEdit(asset)}
+                                onCopy={copyAssetText}
+                                onDownload={downloadImage}
+                                onDelete={() => setDeletingAsset(asset)}
+                            />
                         ))}
                     </div>
 
@@ -539,7 +607,7 @@ export default function AssetsPage() {
     );
 }
 
-function AssetCard({ asset, downloading, onOpen, onEdit, onCopy, onDownload, onDelete }: { asset: Asset; downloading?: boolean; onOpen: () => void; onEdit: () => void; onCopy: (asset: Asset) => void; onDownload: (asset: Asset) => void; onDelete: () => void }) {
+function AssetCard({ asset, selected, downloading, onSelectedChange, onOpen, onEdit, onCopy, onDownload, onDelete }: { asset: Asset; selected?: boolean; downloading?: boolean; onSelectedChange: (checked: boolean) => void; onOpen: () => void; onEdit: () => void; onCopy: (asset: Asset) => void; onDownload: (asset: Asset) => void; onDelete: () => void }) {
     const { t } = useTranslation();
     useSyncExternalStore(subscribeImagePreviews, getImagePreviewRevision);
     const cover = assetCoverUrl(asset);
@@ -547,16 +615,24 @@ function AssetCard({ asset, downloading, onOpen, onEdit, onCopy, onDownload, onD
     return (
         <Card
             hoverable
-            className="flex h-full flex-col overflow-hidden"
+            className={`flex h-full flex-col overflow-hidden ${selected ? "ring-2 ring-stone-900 dark:ring-stone-100" : ""}`}
             styles={{ body: { padding: 0, flex: 1, display: "flex", flexDirection: "column" } }}
             cover={
-                <button type="button" className="block w-full text-left" onClick={onOpen}>
-                    {cover ? (
-                        <img src={cover} alt={asset.title} className="aspect-[4/3] w-full object-cover" />
-                    ) : (
-                        <div className="flex aspect-[4/3] items-center justify-center bg-stone-100 p-5 text-center text-sm leading-6 text-stone-600 dark:bg-stone-900 dark:text-stone-300">{asset.kind === "text" ? asset.data.content : t("assets.noCover")}</div>
-                    )}
-                </button>
+                <div className="relative">
+                    <div
+                        className="absolute left-2.5 top-2.5 z-10 rounded-md bg-white/85 px-1.5 py-0.5 shadow-sm backdrop-blur dark:bg-stone-900/80"
+                        onClick={(event) => event.stopPropagation()}
+                    >
+                        <Checkbox checked={selected} onChange={(event) => onSelectedChange(event.target.checked)} />
+                    </div>
+                    <button type="button" className="block w-full text-left" onClick={onOpen}>
+                        {cover ? (
+                            <img src={cover} alt={asset.title} className="aspect-[4/3] w-full object-cover" />
+                        ) : (
+                            <div className="flex aspect-[4/3] items-center justify-center bg-stone-100 p-5 text-center text-sm leading-6 text-stone-600 dark:bg-stone-900 dark:text-stone-300">{asset.kind === "text" ? asset.data.content : t("assets.noCover")}</div>
+                        )}
+                    </button>
+                </div>
             }
         >
             <button type="button" className="flex w-full flex-1 flex-col text-left" onClick={onOpen}>

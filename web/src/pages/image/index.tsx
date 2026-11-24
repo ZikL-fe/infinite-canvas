@@ -10,9 +10,9 @@ import { CloudQuotaTag } from "@/components/layout/cloud-quota-tag";
 import { ModelPicker } from "@/components/model-picker";
 import { PromptSelectDialog } from "@/components/prompts/prompt-select-dialog";
 import { AssetPickerModal, type InsertAssetPayload } from "@/components/canvas/asset-picker-modal";
+import { useBatchZipDownload } from "@/hooks/use-batch-zip-download";
 import { canvasThemes } from "@/lib/canvas-theme";
 import { imageReferenceLabel } from "@/lib/image-reference-prompt";
-import { createZip } from "@/lib/zip";
 import { modelOptionLabel, useConfigStore, useEffectiveConfig, type AiConfig } from "@/stores/use-config-store";
 import { useThemeStore } from "@/stores/use-theme-store";
 import { nanoid } from "nanoid";
@@ -21,7 +21,7 @@ import { requestEdit, requestGeneration } from "@/services/api/image";
 import { storageApi } from "@/services/api/server";
 import { isCloudAuthenticated, WORKSPACE_CHANGED_EVENT, type WorkspaceChangeScope } from "@/services/cloud-media";
 import { ensureRuntimeConfigForGeneration } from "@/services/cloud-sync";
-import { ensureImagePreview, getImagePreviewRevision, previewUrlFor, resolveImageUrl, resolvePickedImage, subscribeImagePreviews, uploadImage } from "@/services/image-storage";
+import { ensureImagePreview, getImageBlob, getImagePreviewRevision, previewUrlFor, resolveImageUrl, resolvePickedImage, subscribeImagePreviews, uploadImage } from "@/services/image-storage";
 import { deleteWorkbenchLogsWithCloud, pushWorkbenchLogToCloud, syncWorkbenchLogsWithCloud } from "@/services/workbench-sync";
 import { useAssetStore } from "@/stores/use-asset-store";
 import { useWorkbenchAgentStore } from "@/stores/use-workbench-agent-store";
@@ -132,7 +132,7 @@ export default function ImagePage() {
     const [liveBatchJobs, setLiveBatchJobs] = useState<Record<string, { id: string; startedAt: number; running: boolean; groups: BatchResultGroup[] }>>({});
     const [activeBatchJobId, setActiveBatchJobId] = useState<string | null>(null);
     const [batchShowPreview, setBatchShowPreview] = useState(true);
-    const [batchDownloadingZip, setBatchDownloadingZip] = useState(false);
+    const { downloading: downloadingZip, downloadZip } = useBatchZipDownload();
     const [promptDialogTarget, setPromptDialogTarget] = useState<"single" | "same-prompt" | "multi-prompt">("single");
     const [assetPickerTarget, setAssetPickerTarget] = useState<
         | { mode: "single" }
@@ -991,34 +991,69 @@ export default function ImagePage() {
         }
     };
 
+    const loadGeneratedImageBlob = async (image: GeneratedImage): Promise<Blob | null> => {
+        if (image.storageKey) {
+            const localBlob = await getImageBlob(image.storageKey).catch(() => null);
+            if (localBlob) return localBlob;
+        }
+        const url = image.dataUrl || (image.storageKey ? previewUrlFor(image.storageKey) : "");
+        if (!url) {
+            if (image.storageKey && !image.storageKey.startsWith("image:")) {
+                return storageApi.downloadBlob(image.storageKey).catch(() => null);
+            }
+            return null;
+        }
+        const res = await fetch(url);
+        return res.ok ? res.blob() : null;
+    };
+
+    const imageExtOf = (image: GeneratedImage) => image.mimeType?.split("/")[1]?.split("+")[0] || "png";
+
     const downloadAllBatchResults = async () => {
         const entries = batchGroups.flatMap((group) =>
             group.results
                 .map((slot, slotIdx) => (slot.status === "success" && slot.image ? { groupIndex: group.index, slotIdx, image: slot.image } : null))
                 .filter((entry): entry is NonNullable<typeof entry> => Boolean(entry)),
         );
-        if (!entries.length || batchDownloadingZip) return;
-        setBatchDownloadingZip(true);
-        try {
-            const files = await Promise.all(
-                entries.map(async ({ groupIndex, slotIdx, image }) => {
-                    const res = await fetch(image.dataUrl);
-                    const blob = await res.blob();
-                    const ext = image.mimeType?.split("/")[1]?.split("+")[0] || "png";
-                    return {
-                        name: `batch-${String(groupIndex + 1).padStart(2, "0")}-${slotIdx + 1}.${ext}`,
-                        data: blob,
-                    };
-                }),
-            );
-            const zipBlob = await createZip(files);
-            saveAs(zipBlob, `image-batch-${Date.now()}.zip`);
-            message.success(`已打包下载 ${files.length} 张图片`);
-        } catch (error) {
-            message.error(error instanceof Error ? error.message : "打包下载失败");
-        } finally {
-            setBatchDownloadingZip(false);
-        }
+        await downloadZip({
+            entries: entries.map(({ groupIndex, slotIdx, image }) => ({
+                filename: `batch-${String(groupIndex + 1).padStart(2, "0")}-${slotIdx + 1}.${imageExtOf(image)}`,
+                loadBlob: () => loadGeneratedImageBlob(image),
+            })),
+            zipFilename: `image-batch-${Date.now()}.zip`,
+            emptyWarning: "暂无可下载的生成图片",
+        });
+    };
+
+    const downloadAllSingleResults = async () => {
+        const images = displayedSingleResults
+            .map((r) => (r.status === "success" && r.image ? r.image : null))
+            .filter((img): img is GeneratedImage => Boolean(img));
+        await downloadZip({
+            entries: images.map((image, idx) => ({
+                filename: `image-${idx + 1}.${imageExtOf(image)}`,
+                loadBlob: () => loadGeneratedImageBlob(image),
+            })),
+            zipFilename: `image-results-${Date.now()}.zip`,
+            emptyWarning: "当前结果中暂无可下载的图片",
+        });
+    };
+
+    const downloadSelectedLogs = async () => {
+        const selectedLogs = logs.filter((log) => selectedLogIds.includes(log.id));
+        const entries = selectedLogs.flatMap((log, logIdx) =>
+            log.images
+                .filter((image) => Boolean(image.dataUrl || image.storageKey))
+                .map((image, imgIdx) => ({
+                    filename: `${log.title || `log-${logIdx + 1}`}-${imgIdx + 1}.${imageExtOf(image)}`,
+                    loadBlob: () => loadGeneratedImageBlob(image),
+                })),
+        );
+        await downloadZip({
+            entries,
+            zipFilename: `image-logs-${Date.now()}.zip`,
+            emptyWarning: "所选记录中没有可下载的成功图片",
+        });
     };
 
     const retryResult = async (index: number) => {
@@ -1079,6 +1114,8 @@ export default function ImagePage() {
                         activeLogId={previewLog?.id}
                         onSelectedLogIdsChange={setSelectedLogIds}
                         onCreateSession={createSession}
+                        onDownloadSelected={() => void downloadSelectedLogs()}
+                        downloadingSelected={downloadingZip}
                         onDeleteSelected={() => setDeleteConfirmOpen(true)}
                         onPreviewLog={(log) => void previewGenerationLog(log)}
                     />
@@ -1368,10 +1405,21 @@ export default function ImagePage() {
                                     <Button
                                         size="small"
                                         icon={<Download className="size-3.5" />}
-                                        loading={batchDownloadingZip}
+                                        loading={downloadingZip}
                                         onClick={() => void downloadAllBatchResults()}
                                     >
                                         打包下载全部 ({batchGroups.reduce((sum, g) => sum + g.results.filter((r) => r.status === "success").length, 0)})
+                                    </Button>
+                                ) : null}
+                                {workbenchMode === "single" &&
+                                displayedSingleResults.some((r) => r.status === "success" && r.image) ? (
+                                    <Button
+                                        size="small"
+                                        icon={<Download className="size-3.5" />}
+                                        loading={downloadingZip}
+                                        onClick={() => void downloadAllSingleResults()}
+                                    >
+                                        打包下载 ({displayedSingleResults.filter((r) => r.status === "success" && r.image).length})
                                     </Button>
                                 ) : null}
                             </div>
@@ -1534,6 +1582,8 @@ export default function ImagePage() {
                     activeLogId={previewLog?.id}
                     onSelectedLogIdsChange={setSelectedLogIds}
                     onCreateSession={createSession}
+                    onDownloadSelected={() => void downloadSelectedLogs()}
+                    downloadingSelected={downloadingZip}
                     onDeleteSelected={() => setDeleteConfirmOpen(true)}
                     onPreviewLog={(log) => void previewGenerationLog(log)}
                 />
@@ -1715,16 +1765,20 @@ function LogPanel({
     logs,
     selectedLogIds,
     activeLogId,
+    downloadingSelected,
     onSelectedLogIdsChange,
     onCreateSession,
+    onDownloadSelected,
     onDeleteSelected,
     onPreviewLog,
 }: {
     logs: GenerationLog[];
     selectedLogIds: string[];
     activeLogId?: string;
+    downloadingSelected?: boolean;
     onSelectedLogIdsChange: (ids: string[]) => void;
     onCreateSession: () => void;
+    onDownloadSelected: () => void;
     onDeleteSelected: () => void;
     onPreviewLog: (log: GenerationLog) => void;
 }) {
@@ -1746,6 +1800,9 @@ function LogPanel({
                 </Button>
                 <Button size="small" icon={<CheckSquare className="size-3.5" />} disabled={!logs.length} onClick={toggleAll}>
                     {allSelected ? t("common.cancel") : t("workbench.selectAll")}
+                </Button>
+                <Button size="small" icon={<Download className="size-3.5" />} loading={downloadingSelected} disabled={!selectedLogIds.length} onClick={onDownloadSelected}>
+                    打包下载
                 </Button>
                 <Button size="small" danger icon={<Trash2 className="size-3.5" />} disabled={!selectedLogIds.length} onClick={onDeleteSelected}>
                     {t("common.delete")}

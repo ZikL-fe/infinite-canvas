@@ -6,6 +6,7 @@ import localforage from "localforage";
 import { AudioLines, Bell, Download, Eye, FileIcon, Gift, ImageIcon, KeyRound, Laptop, Megaphone, Pin, RefreshCw, Search, TrendingUp, User, Video } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 
+import { useBatchZipDownload } from "@/hooks/use-batch-zip-download";
 import { useEmailCodeSender } from "@/hooks/use-email-code-sender";
 import { createImageThumbnail, createVideoThumbnail } from "@/lib/image-thumbnail";
 import { previewUrlFor } from "@/services/image-storage";
@@ -1161,6 +1162,17 @@ function LedgerDetailModal({
             setDownloadingId(null);
         }
     };
+
+    const handleBatchDownloadMedia = async () => {
+        const targets = items.filter((item) => selectedMediaIds.includes(item.id));
+        await downloadZip({
+            entries: targets.map((item) => ({
+                filename: mediaDownloadFilename(item),
+                loadBlob: () => storageApi.downloadBlob(item.id),
+            })),
+            zipFilename: `cloud-media-${Date.now()}.zip`,
+        });
+    };
     const reasonInfo = item ? ledgerReasonMeta[item.reason] : undefined;
     const modelName = typeof item?.meta?.model === "string" && item.meta.model ? item.meta.model : "";
     const hasTokens = typeof item?.meta?.inputTokens === "number" || typeof item?.meta?.outputTokens === "number";
@@ -1173,6 +1185,8 @@ function LedgerDetailModal({
         .join(" · ");
     const hasMediaDuration = typeof item?.meta?.seconds === "number" || typeof item?.meta?.durationSeconds === "number";
     const timing = getLedgerTimingStats(item?.meta);
+    const errorMessage = typeof item?.meta?.errorMessage === "string" ? item.meta.errorMessage.trim() : "";
+    const errorStatus = typeof item?.meta?.errorStatus === "number" ? item.meta.errorStatus : undefined;
 
     return (
         <Modal
@@ -1221,6 +1235,19 @@ function LedgerDetailModal({
                             </Typography.Text>
                         </div>
                     </div>
+
+                    {errorMessage || errorStatus !== undefined ? (
+                        <Alert
+                            type="error"
+                            showIcon
+                            title={errorStatus !== undefined ? `请求失败（HTTP ${errorStatus}）` : "生成失败原因"}
+                            description={
+                                <div className="mt-1 max-h-44 overflow-auto whitespace-pre-wrap break-all font-mono text-xs leading-5">
+                                    {errorMessage || `上游返回异常状态码 HTTP ${errorStatus}`}
+                                </div>
+                            }
+                        />
+                    ) : null}
 
                     <div
                         className="grid grid-cols-1 gap-x-6 gap-y-3 rounded-lg border p-3.5 sm:grid-cols-2"
@@ -2086,7 +2113,14 @@ export function UsageLogsPanel({ defaultScope = "self" }: { defaultScope?: "all"
                             width: 85,
                             render: (_, record) => {
                                 const st = getLedgerTaskStatus(record);
-                                return <Tag color={st.color}>{st.label}</Tag>;
+                                const err = typeof record.meta?.errorMessage === "string" ? record.meta.errorMessage.trim() : "";
+                                return err ? (
+                                    <Tooltip title={err}>
+                                        <Tag color={st.color}>{st.label}</Tag>
+                                    </Tooltip>
+                                ) : (
+                                    <Tag color={st.color}>{st.label}</Tag>
+                                );
                             },
                         },
                         {
@@ -2227,6 +2261,8 @@ export function MyMediaPanel() {
     const [previewItem, setPreviewItem] = useState<MediaItem | null>(null);
     const [previewOriginalUrl, setPreviewOriginalUrl] = useState("");
     const [downloadingId, setDownloadingId] = useState<string | null>(null);
+    const [selectedMediaIds, setSelectedMediaIds] = useState<string[]>([]);
+    const { downloading: batchDownloading, downloadZip } = useBatchZipDownload();
 
     const loadData = useCallback(async () => {
         setLoading(true);
@@ -2237,6 +2273,8 @@ export function MyMediaPanel() {
             ]);
             setItems(listRes.items);
             setTotal(listRes.total ?? listRes.items.length);
+            const loadedIdSet = new Set(listRes.items.map((item) => item.id));
+            setSelectedMediaIds((prev) => prev.filter((id) => loadedIdSet.has(id)));
             if (listRes.workspaceStats) setWorkspaceStats(listRes.workspaceStats);
             setUsedBytes(profileRes.user.storageUsedBytes);
             setQuotaBytes(profileRes.user.storageQuotaBytes ?? 0);
@@ -2350,6 +2388,17 @@ export function MyMediaPanel() {
         } finally {
             setDownloadingId(null);
         }
+    };
+
+    const handleBatchDownloadMedia = async () => {
+        const targets = items.filter((item) => selectedMediaIds.includes(item.id));
+        await downloadZip({
+            entries: targets.map((item) => ({
+                filename: mediaDownloadFilename(item),
+                loadBlob: () => storageApi.downloadBlob(item.id),
+            })),
+            zipFilename: `cloud-media-${Date.now()}.zip`,
+        });
     };
 
     const handleViewMedia = async (record: MediaItem) => {
@@ -2541,9 +2590,21 @@ export function MyMediaPanel() {
                                                 }}
                                             />
                                         </Space>
-                                        <Button icon={<RefreshCw className="size-4" />} loading={loading} onClick={() => void loadData()}>
-                                            刷新
-                                        </Button>
+                                        <Space wrap>
+                                            {selectedMediaIds.length > 0 ? (
+                                                <Button
+                                                    type="primary"
+                                                    icon={<Download className="size-4" />}
+                                                    loading={batchDownloading}
+                                                    onClick={() => void handleBatchDownloadMedia()}
+                                                >
+                                                    打包下载 ({selectedMediaIds.length})
+                                                </Button>
+                                            ) : null}
+                                            <Button icon={<RefreshCw className="size-4" />} loading={loading} onClick={() => void loadData()}>
+                                                刷新
+                                            </Button>
+                                        </Space>
                                     </div>
                                     <Table<MediaItem>
                                         rowKey="id"
@@ -2551,6 +2612,10 @@ export function MyMediaPanel() {
                                         scroll={ADMIN_TABLE_SCROLL}
                                         loading={loading}
                                         dataSource={items}
+                                        rowSelection={{
+                                            selectedRowKeys: selectedMediaIds,
+                                            onChange: (keys) => setSelectedMediaIds(keys.map(String)),
+                                        }}
                                         pagination={{
                                             current: page,
                                             pageSize: 12,

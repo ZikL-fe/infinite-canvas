@@ -461,6 +461,73 @@
     mix-blend-mode: normal;
 }
 
+/* Ant Design 的 .ant-alert 默认以 unlayered 方式注入 margin: 0，会覆盖 Tailwind v4 @layer utilities 的间距类 */
+.ant-alert.mt-1 {
+    margin-top: 0.25rem;
+}
+.ant-alert.mt-2 {
+    margin-top: 0.5rem;
+}
+.ant-alert.mt-3 {
+    margin-top: 0.75rem;
+}
+.ant-alert.mt-4 {
+    margin-top: 1rem;
+}
+.ant-alert.mt-5 {
+    margin-top: 1.25rem;
+}
+.ant-alert.mt-6 {
+    margin-top: 1.5rem;
+}
+.ant-alert.mb-1 {
+    margin-bottom: 0.25rem;
+}
+.ant-alert.mb-2 {
+    margin-bottom: 0.5rem;
+}
+.ant-alert.mb-3 {
+    margin-bottom: 0.75rem;
+}
+.ant-alert.mb-4 {
+    margin-bottom: 1rem;
+}
+.ant-alert.mb-5 {
+    margin-bottom: 1.25rem;
+}
+.ant-alert.mb-6 {
+    margin-bottom: 1.5rem;
+}
+.ant-alert.my-2 {
+    margin-block: 0.5rem;
+}
+.ant-alert.my-3 {
+    margin-block: 0.75rem;
+}
+.ant-alert.my-4 {
+    margin-block: 1rem;
+}
+.ant-alert.my-6 {
+    margin-block: 1.5rem;
+}
+.space-y-2 > .ant-alert:not(:last-child) {
+    margin-bottom: 0.5rem;
+}
+.space-y-3 > .ant-alert:not(:last-child) {
+    margin-bottom: 0.75rem;
+}
+.space-y-4 > .ant-alert:not(:last-child) {
+    margin-bottom: 1rem;
+}
+/* Ant Design 的 .ant-input-number 等组件默认 unlayered width 会压过 Tailwind v4 @layer utilities 的 .w-full */
+.ant-input-number.w-full,
+.ant-input-number-group-wrapper.w-full,
+.ant-picker.w-full,
+.ant-select.w-full,
+.ant-input-affix-wrapper.w-full {
+    width: 100%;
+}
+
 .agent-streamdown {
     overflow-wrap: anywhere;
 }
