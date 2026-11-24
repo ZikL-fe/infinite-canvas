@@ -113,5 +113,6 @@ if (webDistDir && existsSync(webDistDir)) {
 export default {
   port: env.PORT,
   idleTimeout: 255,
+  maxRequestBodySize: 200 * 1024 * 1024,
   fetch: app.fetch,
 };

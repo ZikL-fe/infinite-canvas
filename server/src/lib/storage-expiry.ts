@@ -322,11 +322,11 @@ async function runSweepInternal(options?: {
       .select({
         id: mediaObjects.id,
         objectKey: mediaObjects.objectKey,
-        sizeBytes: mediaObjects.sizeBytes,
+        sizeBytes: mediaObjects.bytes,
         meta: mediaObjects.meta,
       })
       .from(mediaObjects)
-      .where(and(eq(mediaObjects.userId, user.id), isNull(mediaObjects.deletedAt)))
+      .where(and(eq(mediaObjects.userId, user.id), eq(mediaObjects.status, "active")))
       .orderBy(asc(mediaObjects.createdAt));
 
     const plan = selectMediaForCleanup(activeMedia, usedBytes, summary.storageQuotaBytes);
@@ -380,13 +380,13 @@ async function runSweepInternal(options?: {
     }
 
     if (cleanedIds.length > 0) {
-      await db.update(mediaObjects).set({ deletedAt: now }).where(inArray(mediaObjects.id, cleanedIds));
+      await db.update(mediaObjects).set({ status: "deleted" }).where(inArray(mediaObjects.id, cleanedIds));
     }
 
     const [remainingRow] = await db
-      .select({ total: sql<number>`coalesce(sum(${mediaObjects.sizeBytes}), 0)::bigint` })
+      .select({ total: sql<number>`coalesce(sum(${mediaObjects.bytes}), 0)::bigint` })
       .from(mediaObjects)
-      .where(and(eq(mediaObjects.userId, user.id), isNull(mediaObjects.deletedAt)));
+      .where(and(eq(mediaObjects.userId, user.id), eq(mediaObjects.status, "active")));
     const nextUsedBytes = Math.max(0, Number(remainingRow?.total ?? 0));
 
     if (shouldCleanWorkspace) {

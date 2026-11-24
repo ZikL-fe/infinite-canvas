@@ -392,7 +392,7 @@ adminRoutes.patch("/announcements/:id", zValidator("json", announcementSchema.pa
 
 adminRoutes.delete("/announcements/:id", async (c) => {
   const id = c.req.param("id");
-  const [deleted] = await db.delete(announcements).where(eq(announcements.id, id)).returning({ id: true });
+  const [deleted] = await db.delete(announcements).where(eq(announcements.id, id)).returning({ id: announcements.id });
   if (!deleted) return c.json({ error: "公告不存在" }, 404);
   return c.json({ ok: true });
 });
@@ -589,7 +589,7 @@ adminRoutes.get("/users/:id/detail", async (c) => {
       columns: {
         id: true,
         userAgent: true,
-        ipAddress: true,
+        ip: true,
         expiresAt: true,
         revokedAt: true,
         createdAt: true,
@@ -626,12 +626,12 @@ adminRoutes.get("/users/:id/detail", async (c) => {
       activeSessionCount: sessionRows.filter((s) => !s.revokedAt && s.expiresAt.getTime() > now.getTime()).length,
     },
     consumption,
-    grants: grantRows.map((grant) => serializeStorageGrant(grant, now)),
+    grants: grantRows.map((grant) => serializeStorageGrant(grant, now.getTime())),
     recentLogs: recentLedger.items,
     sessions: sessionRows.map((s) => ({
       id: s.id,
       userAgent: s.userAgent,
-      ipAddress: s.ipAddress,
+      ipAddress: s.ip,
       expiresAt: s.expiresAt.toISOString(),
       revokedAt: s.revokedAt ? s.revokedAt.toISOString() : null,
       createdAt: s.createdAt.toISOString(),

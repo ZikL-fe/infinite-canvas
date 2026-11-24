@@ -7,6 +7,7 @@ description: Implemented changes that still need manual verification
 
 The current release needs manual verification in these areas:
 
+- 全新 PostgreSQL 空库自动建表与首次管理员引导：使用 Docker 一体化镜像连接全新的空 PostgreSQL 数据库启动后，服务应自动完成全部 17 张表及索引创建；打开注册页应正常提示「首个注册账号将自动成为管理员」，提交注册不再报 `relation "system_settings" does not exist` 且第一个注册用户自动成为管理员。
 - 系统设置「公告管理」与顶部铃铛通知：
   - 在 `/admin` 左侧导航中，「公告管理」已移至「系统设置 -> 公告管理」（旧路径 `/admin?tab=announcements` 自动映射跳转），包含「全局公告（通知）」与「时间线通知（时间线）」两块配置；
   - 时间线通知支持 5 档状态（`默认` / `进行中` / `成功` / `警告` / `错误`）在弹窗选择与表格行内快捷切换，并支持发布/编辑时自定义选择「发布时间」，按发布时间与置顶规则排序并在铃铛时间线中展示对应颜色与时间；

@@ -393,7 +393,7 @@ accountRoutes.delete("/sessions/:id", async (c) => {
     .update(userSessions)
     .set({ revokedAt: new Date() })
     .where(and(eq(userSessions.id, id), eq(userSessions.userId, authUser.id)))
-    .returning({ id: true });
+    .returning({ id: userSessions.id });
   if (!updated) return c.json({ error: "会话不存在" }, 404);
   return c.json({ ok: true });
 });
