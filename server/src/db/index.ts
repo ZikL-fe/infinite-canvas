@@ -5,7 +5,11 @@ import postgres from "postgres";
 import { env } from "../env.ts";
 import * as schema from "./schema.ts";
 
-export const sqlClient = postgres(env.DATABASE_URL);
+export const sqlClient = postgres(env.DATABASE_URL, {
+  max: env.DB_POOL_MAX,
+  idle_timeout: env.DB_IDLE_TIMEOUT_SECONDS,
+  connect_timeout: env.DB_CONNECT_TIMEOUT_SECONDS,
+});
 export const db = drizzle(sqlClient, { schema });
 export * from "./schema.ts";
 

@@ -3,9 +3,46 @@ import { eq, sql } from "drizzle-orm";
 import { nanoid } from "nanoid";
 
 import { db, mediaObjects, users, type MediaKind } from "../db/index.ts";
+import { env } from "../env.ts";
+import { createConcurrencyLimiter } from "./concurrency.ts";
 import { createMediaReadUrl, putS3Object } from "./s3.ts";
 import { getS3StorageConfig } from "./settings.ts";
 import { getUserStorageQuotaSummary } from "./storage-quota.ts";
+
+const mediaPersistLimiter = createConcurrencyLimiter({
+  maxConcurrent: env.MEDIA_PERSIST_CONCURRENCY,
+});
+
+/** 将大媒体下载/解码/上传任务排入全局信号量，防止高并发下内存峰值打爆。 */
+export function runMediaPersistTask<T>(fn: () => Promise<T>): Promise<T> {
+  return mediaPersistLimiter.run(fn);
+}
+
+/** 带超时与最大体积保护拉取远端媒体 Buffer（超限或超时返回 null，不影响上游原始响应返回前端）。 */
+export async function fetchMediaBufferWithLimits(
+  url: string,
+  init?: RequestInit,
+): Promise<{ buffer: Buffer; mimeType: string } | null> {
+  const res = await fetch(url, {
+    ...init,
+    signal: AbortSignal.timeout(env.MEDIA_FETCH_TIMEOUT_MS),
+  });
+  if (!res.ok) return null;
+  const contentLength = Number(res.headers.get("content-length") || 0);
+  if (Number.isFinite(contentLength) && contentLength > env.MEDIA_PERSIST_MAX_BYTES) {
+    console.warn(`[ai-media-persist] 跳过超大媒体自动转存: content-length=${contentLength}, limit=${env.MEDIA_PERSIST_MAX_BYTES}`);
+    return null;
+  }
+  const mimeType = res.headers.get("content-type")?.split(";")[0]?.trim() || "";
+  const buffer = Buffer.from(await res.arrayBuffer());
+  if (buffer.byteLength <= 0 || buffer.byteLength > env.MEDIA_PERSIST_MAX_BYTES) {
+    if (buffer.byteLength > env.MEDIA_PERSIST_MAX_BYTES) {
+      console.warn(`[ai-media-persist] 跳过超大媒体自动转存: actual=${buffer.byteLength}, limit=${env.MEDIA_PERSIST_MAX_BYTES}`);
+    }
+    return null;
+  }
+  return { buffer, mimeType };
+}
 
 export function checkStorageQuotaBlock(
   usedBytes: number,
@@ -137,6 +174,10 @@ export async function persistCloudMediaBuffer(params: {
 }): Promise<{ mediaId: string; objectKey: string; url: string } | null> {
   const config = await getS3StorageConfig();
   if (!config || params.buffer.byteLength <= 0) return null;
+  if (params.buffer.byteLength > env.MEDIA_PERSIST_MAX_BYTES) {
+    console.warn(`[ai-media-persist] 跳过超大媒体自动转存: bytes=${params.buffer.byteLength}, limit=${env.MEDIA_PERSIST_MAX_BYTES}`);
+    return null;
+  }
 
   const userRow = await db.query.users.findFirst({
     where: eq(users.id, params.userId),
@@ -273,44 +314,47 @@ export async function persistGeneratedImagesFromPayload(params: {
   for (let idx = 0; idx < sources.length; idx += 1) {
     const src = sources[idx];
     try {
-      let buffer: Buffer;
-      let mimeType = "image/png";
-      const fetchStartedAt = Date.now();
-      if (src.kind === "b64") {
-        buffer = Buffer.from(src.b64, "base64");
-        mimeType = src.mimeType || "image/png";
-      } else {
-        const res = await fetch(src.url);
-        if (!res.ok) {
+      const saved = await runMediaPersistTask(async () => {
+        let buffer: Buffer;
+        let mimeType = "image/png";
+        const fetchStartedAt = Date.now();
+        if (src.kind === "b64") {
+          buffer = Buffer.from(src.b64, "base64");
+          mimeType = src.mimeType || "image/png";
+        } else {
+          const fetched = await fetchMediaBufferWithLimits(src.url);
           fetchImageMs += Date.now() - fetchStartedAt;
-          mediaIds.push(null);
-          continue;
+          if (!fetched || !fetched.mimeType.startsWith("image/")) {
+            return null;
+          }
+          buffer = fetched.buffer;
+          mimeType = fetched.mimeType || "image/png";
         }
-        mimeType = res.headers.get("content-type")?.split(";")[0]?.trim() || "image/png";
-        if (!mimeType.startsWith("image/")) {
+        if (src.kind === "b64") {
           fetchImageMs += Date.now() - fetchStartedAt;
-          mediaIds.push(null);
-          continue;
         }
-        buffer = Buffer.from(await res.arrayBuffer());
-      }
-      fetchImageMs += Date.now() - fetchStartedAt;
+        if (buffer.byteLength > env.MEDIA_PERSIST_MAX_BYTES) {
+          console.warn(`[ai-media-persist] 跳过超大生图自动转存: bytes=${buffer.byteLength}, limit=${env.MEDIA_PERSIST_MAX_BYTES}`);
+          return null;
+        }
 
-      const saveStartedAt = Date.now();
-      const saved = await persistCloudMediaBuffer({
-        userId: params.userId,
-        kind: "image",
-        buffer,
-        mimeType,
-        sourceType: "ai_generated",
-        meta: {
-          model: params.model,
-          ...(params.prompt ? { prompt: params.prompt.slice(0, 500) } : {}),
-          ...(params.clientTaskId ? { clientTaskId: params.clientTaskId } : {}),
-          slotIndex: idx,
-        },
+        const saveStartedAt = Date.now();
+        const result = await persistCloudMediaBuffer({
+          userId: params.userId,
+          kind: "image",
+          buffer,
+          mimeType,
+          sourceType: "ai_generated",
+          meta: {
+            model: params.model,
+            ...(params.prompt ? { prompt: params.prompt.slice(0, 500) } : {}),
+            ...(params.clientTaskId ? { clientTaskId: params.clientTaskId } : {}),
+            slotIndex: idx,
+          },
+        });
+        cloudSaveMs += Date.now() - saveStartedAt;
+        return result;
       });
-      cloudSaveMs += Date.now() - saveStartedAt;
       mediaIds.push(saved?.mediaId ?? null);
     } catch (error) {
       console.warn("[ai-media-persist] 服务端转存生图结果失败:", error);

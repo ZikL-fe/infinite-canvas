@@ -12,6 +12,38 @@ export const WEBDAV_CONFIG_KEY = "sync.webdav";
 export const MAIL_CONFIG_KEY = "mail.smtp";
 export const STORAGE_EXPIRY_POLICY_KEY = "storage.expiry";
 
+const settingsCache = new Map<string, { value: unknown; expiresAt: number }>();
+const settingsInFlight = new Map<string, Promise<unknown>>();
+
+async function getCachedSetting<T>(key: string, loader: () => Promise<T>): Promise<T> {
+  const ttlMs = env.SETTINGS_CACHE_TTL_MS;
+  if (ttlMs <= 0) return loader();
+  const now = Date.now();
+  const hit = settingsCache.get(key);
+  if (hit && hit.expiresAt > now) {
+    return hit.value as T;
+  }
+  const existing = settingsInFlight.get(key);
+  if (existing) {
+    return existing as Promise<T>;
+  }
+  const promise = loader()
+    .then((value) => {
+      settingsCache.set(key, { value, expiresAt: Date.now() + ttlMs });
+      return value;
+    })
+    .finally(() => {
+      settingsInFlight.delete(key);
+    });
+  settingsInFlight.set(key, promise);
+  return promise;
+}
+
+function invalidateSettingCache(key: string) {
+  settingsCache.delete(key);
+  settingsInFlight.delete(key);
+}
+
 export type PlatformModelCapability = "image" | "video" | "text" | "audio";
 export type PlatformApiFormat = "openai" | "gemini";
 
@@ -118,12 +150,14 @@ export type S3StorageConfig = {
 type S3PublicSettings = Omit<S3StorageConfig, "secretAccessKey">;
 
 export async function getAuthPolicy(): Promise<AuthPolicy> {
-  const row = await db.query.systemSettings.findFirst({ where: eq(systemSettings.key, AUTH_POLICY_KEY) });
-  const raw = row?.value as Partial<AuthPolicy> | undefined;
-  return {
-    allowRegister: raw?.allowRegister ?? true,
-    requireEmailOnRegister: Boolean(raw?.requireEmailOnRegister),
-  };
+  return getCachedSetting(AUTH_POLICY_KEY, async () => {
+    const row = await db.query.systemSettings.findFirst({ where: eq(systemSettings.key, AUTH_POLICY_KEY) });
+    const raw = row?.value as Partial<AuthPolicy> | undefined;
+    return {
+      allowRegister: raw?.allowRegister ?? true,
+      requireEmailOnRegister: Boolean(raw?.requireEmailOnRegister),
+    };
+  });
 }
 
 export async function saveAuthPolicy(policy: AuthPolicy, updatedBy: string) {
@@ -134,29 +168,32 @@ export async function saveAuthPolicy(policy: AuthPolicy, updatedBy: string) {
       target: systemSettings.key,
       set: { value: policy, updatedBy, updatedAt: new Date() },
     });
+  invalidateSettingCache(AUTH_POLICY_KEY);
   return policy;
 }
 
 export async function getPlatformMailConfig(): Promise<PlatformMailConfig> {
-  const row = await db.query.systemSettings.findFirst({ where: eq(systemSettings.key, MAIL_CONFIG_KEY) });
-  const raw = (row?.value || {}) as Partial<Omit<PlatformMailConfig, "password">>;
-  const password = row?.encryptedSecret ? decryptJson<{ password?: string }>(row.encryptedSecret).password || "" : "";
-  const port = Number(raw.port);
-  const threshold = Number(raw.lowBalanceThreshold);
-  const cooldownHours = Number(raw.lowBalanceCooldownHours);
-  return {
-    enabled: Boolean(raw.enabled),
-    host: raw.host || "",
-    port: Number.isFinite(port) && port > 0 ? Math.floor(port) : 465,
-    secure: raw.secure ?? true,
-    username: raw.username || "",
-    password,
-    fromName: raw.fromName || "无限画布",
-    fromAddress: raw.fromAddress || "",
-    lowBalanceAlertEnabled: raw.lowBalanceAlertEnabled ?? true,
-    lowBalanceThreshold: Number.isFinite(threshold) && threshold >= 0 ? threshold : 10,
-    lowBalanceCooldownHours: Number.isFinite(cooldownHours) && cooldownHours >= 1 ? Math.floor(cooldownHours) : 24,
-  };
+  return getCachedSetting(MAIL_CONFIG_KEY, async () => {
+    const row = await db.query.systemSettings.findFirst({ where: eq(systemSettings.key, MAIL_CONFIG_KEY) });
+    const raw = (row?.value || {}) as Partial<Omit<PlatformMailConfig, "password">>;
+    const password = row?.encryptedSecret ? decryptJson<{ password?: string }>(row.encryptedSecret).password || "" : "";
+    const port = Number(raw.port);
+    const threshold = Number(raw.lowBalanceThreshold);
+    const cooldownHours = Number(raw.lowBalanceCooldownHours);
+    return {
+      enabled: Boolean(raw.enabled),
+      host: raw.host || "",
+      port: Number.isFinite(port) && port > 0 ? Math.floor(port) : 465,
+      secure: raw.secure ?? true,
+      username: raw.username || "",
+      password,
+      fromName: raw.fromName || "无限画布",
+      fromAddress: raw.fromAddress || "",
+      lowBalanceAlertEnabled: raw.lowBalanceAlertEnabled ?? true,
+      lowBalanceThreshold: Number.isFinite(threshold) && threshold >= 0 ? threshold : 10,
+      lowBalanceCooldownHours: Number.isFinite(cooldownHours) && cooldownHours >= 1 ? Math.floor(cooldownHours) : 24,
+    };
+  });
 }
 
 export async function savePlatformMailConfig(config: PlatformMailConfig, updatedBy: string) {
@@ -192,45 +229,48 @@ export async function savePlatformMailConfig(config: PlatformMailConfig, updated
         updatedAt: new Date(),
       },
     });
+  invalidateSettingCache(MAIL_CONFIG_KEY);
 }
 
 export async function getS3StorageConfig(): Promise<S3StorageConfig | null> {
-  const row = await db.query.systemSettings.findFirst({ where: eq(systemSettings.key, STORAGE_S3_KEY) });
-  if (row) {
-    const value = row.value as Partial<S3PublicSettings>;
-    let secretAccessKey = "";
-    if (row.encryptedSecret) {
-      const secretPayload = decryptJson<{ secretAccessKey?: string }>(row.encryptedSecret);
-      secretAccessKey = secretPayload.secretAccessKey || "";
+  return getCachedSetting(STORAGE_S3_KEY, async () => {
+    const row = await db.query.systemSettings.findFirst({ where: eq(systemSettings.key, STORAGE_S3_KEY) });
+    if (row) {
+      const value = row.value as Partial<S3PublicSettings>;
+      let secretAccessKey = "";
+      if (row.encryptedSecret) {
+        const secretPayload = decryptJson<{ secretAccessKey?: string }>(row.encryptedSecret);
+        secretAccessKey = secretPayload.secretAccessKey || "";
+      }
+      if (value.bucket && value.accessKeyId && secretAccessKey) {
+        return {
+          provider: (value.provider as S3Provider) || "s3",
+          endpoint: value.endpoint || "",
+          region: value.region || "auto",
+          bucket: value.bucket,
+          accessKeyId: value.accessKeyId,
+          secretAccessKey,
+          publicBaseUrl: value.publicBaseUrl || "",
+          forcePathStyle: Boolean(value.forcePathStyle),
+        };
+      }
     }
-    if (value.bucket && value.accessKeyId && secretAccessKey) {
+
+    if (env.S3_BUCKET && env.S3_ACCESS_KEY_ID && env.S3_SECRET_ACCESS_KEY) {
       return {
-        provider: (value.provider as S3Provider) || "s3",
-        endpoint: value.endpoint || "",
-        region: value.region || "auto",
-        bucket: value.bucket,
-        accessKeyId: value.accessKeyId,
-        secretAccessKey,
-        publicBaseUrl: value.publicBaseUrl || "",
-        forcePathStyle: Boolean(value.forcePathStyle),
+        provider: env.S3_PROVIDER,
+        endpoint: env.S3_ENDPOINT,
+        region: env.S3_REGION || "auto",
+        bucket: env.S3_BUCKET,
+        accessKeyId: env.S3_ACCESS_KEY_ID,
+        secretAccessKey: env.S3_SECRET_ACCESS_KEY,
+        publicBaseUrl: env.S3_PUBLIC_BASE_URL,
+        forcePathStyle: env.S3_FORCE_PATH_STYLE === "true",
       };
     }
-  }
 
-  if (env.S3_BUCKET && env.S3_ACCESS_KEY_ID && env.S3_SECRET_ACCESS_KEY) {
-    return {
-      provider: env.S3_PROVIDER,
-      endpoint: env.S3_ENDPOINT,
-      region: env.S3_REGION || "auto",
-      bucket: env.S3_BUCKET,
-      accessKeyId: env.S3_ACCESS_KEY_ID,
-      secretAccessKey: env.S3_SECRET_ACCESS_KEY,
-      publicBaseUrl: env.S3_PUBLIC_BASE_URL,
-      forcePathStyle: env.S3_FORCE_PATH_STYLE === "true",
-    };
-  }
-
-  return null;
+    return null;
+  });
 }
 
 export async function saveS3StorageConfig(config: S3StorageConfig, updatedBy: string) {
@@ -263,22 +303,25 @@ export async function saveS3StorageConfig(config: S3StorageConfig, updatedBy: st
         updatedAt: new Date(),
       },
     });
+  invalidateSettingCache(STORAGE_S3_KEY);
 }
 
 export async function getPlatformChannels(): Promise<PlatformChannel[]> {
-  const row = await db.query.systemSettings.findFirst({ where: eq(systemSettings.key, AI_CHANNELS_KEY) });
-  if (!row) return [];
-  const raw = row.value as { channels?: Array<Omit<PlatformChannel, "apiKey">> };
-  const keys = row.encryptedSecret ? decryptJson<{ keys?: Record<string, string> }>(row.encryptedSecret).keys || {} : {};
-  return (raw.channels || []).map((channel) => ({
-    id: channel.id,
-    name: channel.name,
-    baseUrl: channel.baseUrl || "",
-    apiFormat: channel.apiFormat === "gemini" ? "gemini" : "openai",
-    enabled: channel.enabled ?? true,
-    models: Array.isArray(channel.models) ? channel.models : [],
-    apiKey: keys[channel.id] || "",
-  }));
+  return getCachedSetting(AI_CHANNELS_KEY, async () => {
+    const row = await db.query.systemSettings.findFirst({ where: eq(systemSettings.key, AI_CHANNELS_KEY) });
+    if (!row) return [];
+    const raw = row.value as { channels?: Array<Omit<PlatformChannel, "apiKey">> };
+    const keys = row.encryptedSecret ? decryptJson<{ keys?: Record<string, string> }>(row.encryptedSecret).keys || {} : {};
+    return (raw.channels || []).map((channel) => ({
+      id: channel.id,
+      name: channel.name,
+      baseUrl: channel.baseUrl || "",
+      apiFormat: channel.apiFormat === "gemini" ? "gemini" : "openai",
+      enabled: channel.enabled ?? true,
+      models: Array.isArray(channel.models) ? channel.models : [],
+      apiKey: keys[channel.id] || "",
+    }));
+  });
 }
 
 export async function savePlatformChannels(channels: PlatformChannel[], updatedBy: string) {
@@ -304,20 +347,23 @@ export async function savePlatformChannels(channels: PlatformChannel[], updatedB
         updatedAt: new Date(),
       },
     });
+  invalidateSettingCache(AI_CHANNELS_KEY);
 }
 
 export async function getPlatformWebdavConfig(): Promise<PlatformWebdavConfig> {
-  const row = await db.query.systemSettings.findFirst({ where: eq(systemSettings.key, WEBDAV_CONFIG_KEY) });
-  const raw = (row?.value || {}) as Partial<Omit<PlatformWebdavConfig, "password">>;
-  const password = row?.encryptedSecret ? decryptJson<{ password?: string }>(row.encryptedSecret).password || "" : "";
-  return {
-    enabled: Boolean(raw.enabled),
-    url: raw.url || "",
-    username: raw.username || "",
-    password,
-    baseDirectory: raw.baseDirectory || "infinite-canvas",
-    autoAssignNewUsers: Boolean(raw.autoAssignNewUsers),
-  };
+  return getCachedSetting(WEBDAV_CONFIG_KEY, async () => {
+    const row = await db.query.systemSettings.findFirst({ where: eq(systemSettings.key, WEBDAV_CONFIG_KEY) });
+    const raw = (row?.value || {}) as Partial<Omit<PlatformWebdavConfig, "password">>;
+    const password = row?.encryptedSecret ? decryptJson<{ password?: string }>(row.encryptedSecret).password || "" : "";
+    return {
+      enabled: Boolean(raw.enabled),
+      url: raw.url || "",
+      username: raw.username || "",
+      password,
+      baseDirectory: raw.baseDirectory || "infinite-canvas",
+      autoAssignNewUsers: Boolean(raw.autoAssignNewUsers),
+    };
+  });
 }
 
 export async function savePlatformWebdavConfig(config: PlatformWebdavConfig, updatedBy: string) {
@@ -348,20 +394,23 @@ export async function savePlatformWebdavConfig(config: PlatformWebdavConfig, upd
         updatedAt: new Date(),
       },
     });
+  invalidateSettingCache(WEBDAV_CONFIG_KEY);
 }
 
 export async function getPlatformStorageExpiryPolicy(): Promise<PlatformStorageExpiryPolicy> {
-  const row = await db.query.systemSettings.findFirst({ where: eq(systemSettings.key, STORAGE_EXPIRY_POLICY_KEY) });
-  const raw = (row?.value || {}) as Partial<PlatformStorageExpiryPolicy>;
-  const graceDays = Number(raw.gracePeriodDays);
-  const preDays = Number(raw.preExpiryWarnDays);
-  return {
-    enabled: Boolean(raw.enabled),
-    gracePeriodDays: Number.isFinite(graceDays) && graceDays >= 1 ? Math.min(365, Math.floor(graceDays)) : 7,
-    preExpiryWarnDays: Number.isFinite(preDays) && preDays >= 0 ? Math.min(30, Math.floor(preDays)) : 3,
-    cleanupWorkspaceData: raw.cleanupWorkspaceData ?? true,
-    exemptAdmins: raw.exemptAdmins ?? true,
-  };
+  return getCachedSetting(STORAGE_EXPIRY_POLICY_KEY, async () => {
+    const row = await db.query.systemSettings.findFirst({ where: eq(systemSettings.key, STORAGE_EXPIRY_POLICY_KEY) });
+    const raw = (row?.value || {}) as Partial<PlatformStorageExpiryPolicy>;
+    const graceDays = Number(raw.gracePeriodDays);
+    const preDays = Number(raw.preExpiryWarnDays);
+    return {
+      enabled: Boolean(raw.enabled),
+      gracePeriodDays: Number.isFinite(graceDays) && graceDays >= 1 ? Math.min(365, Math.floor(graceDays)) : 7,
+      preExpiryWarnDays: Number.isFinite(preDays) && preDays >= 0 ? Math.min(30, Math.floor(preDays)) : 3,
+      cleanupWorkspaceData: raw.cleanupWorkspaceData ?? true,
+      exemptAdmins: raw.exemptAdmins ?? true,
+    };
+  });
 }
 
 export async function savePlatformStorageExpiryPolicy(policy: PlatformStorageExpiryPolicy, updatedBy: string) {
@@ -379,6 +428,7 @@ export async function savePlatformStorageExpiryPolicy(policy: PlatformStorageExp
       target: systemSettings.key,
       set: { value: normalized, updatedBy, updatedAt: new Date() },
     });
+  invalidateSettingCache(STORAGE_EXPIRY_POLICY_KEY);
   return normalized;
 }
 

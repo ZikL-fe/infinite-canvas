@@ -13,6 +13,21 @@ import { nanoid } from "nanoid";
 import { env } from "../env.ts";
 import type { S3StorageConfig } from "./settings.ts";
 
+let cachedS3Fingerprint = "";
+let cachedS3Client: S3Client | null = null;
+
+function s3ConfigFingerprint(config: S3StorageConfig) {
+  return JSON.stringify([
+    config.provider,
+    config.endpoint || "",
+    config.region || "auto",
+    config.bucket,
+    config.accessKeyId,
+    config.secretAccessKey,
+    Boolean(config.forcePathStyle),
+  ]);
+}
+
 /** 根据当前平台对象存储配置构造 S3 客户端。 */
 export function createS3Client(config: S3StorageConfig) {
   return new S3Client({
@@ -26,9 +41,28 @@ export function createS3Client(config: S3StorageConfig) {
   });
 }
 
+/** 按配置指纹复用进程内 S3Client 实例，避免高并发下频繁重建客户端与 TLS 连接。 */
+function getReusableS3Client(config: S3StorageConfig) {
+  const fingerprint = s3ConfigFingerprint(config);
+  if (cachedS3Client && cachedS3Fingerprint === fingerprint) {
+    return cachedS3Client;
+  }
+  const previous = cachedS3Client;
+  cachedS3Client = createS3Client(config);
+  cachedS3Fingerprint = fingerprint;
+  if (previous) {
+    try {
+      previous.destroy();
+    } catch {
+      // ignore destroy error on previous client
+    }
+  }
+  return cachedS3Client;
+}
+
 /** 生成浏览器直传对象存储的预签名 PUT URL。 */
 export async function createPresignedUploadUrl(config: S3StorageConfig, objectKey: string, contentType: string) {
-  const client = createS3Client(config);
+  const client = getReusableS3Client(config);
   const command = new PutObjectCommand({
     Bucket: config.bucket,
     Key: objectKey,
@@ -42,7 +76,7 @@ export async function createMediaReadUrl(config: S3StorageConfig, objectKey: str
   if (config.publicBaseUrl) {
     return `${config.publicBaseUrl.replace(/\/+$/, "")}/${objectKey}`;
   }
-  const client = createS3Client(config);
+  const client = getReusableS3Client(config);
   const command = new GetObjectCommand({
     Bucket: config.bucket,
     Key: objectKey,
@@ -51,7 +85,7 @@ export async function createMediaReadUrl(config: S3StorageConfig, objectKey: str
 }
 
 export async function headS3Object(config: S3StorageConfig, objectKey: string) {
-  const client = createS3Client(config);
+  const client = getReusableS3Client(config);
   return client.send(
     new HeadObjectCommand({
       Bucket: config.bucket,
@@ -62,7 +96,7 @@ export async function headS3Object(config: S3StorageConfig, objectKey: string) {
 
 /** 从对象存储读取对象流，供鉴权后的同源下载代理使用。 */
 export async function getS3Object(config: S3StorageConfig, objectKey: string) {
-  const client = createS3Client(config);
+  const client = getReusableS3Client(config);
   return client.send(
     new GetObjectCommand({
       Bucket: config.bucket,
@@ -77,7 +111,7 @@ export async function putS3Object(
   body: Uint8Array | Buffer | string,
   contentType: string,
 ) {
-  const client = createS3Client(config);
+  const client = getReusableS3Client(config);
   return client.send(
     new PutObjectCommand({
       Bucket: config.bucket,
@@ -89,7 +123,7 @@ export async function putS3Object(
 }
 
 export async function deleteS3Object(config: S3StorageConfig, objectKey: string) {
-  const client = createS3Client(config);
+  const client = getReusableS3Client(config);
   return client.send(
     new DeleteObjectCommand({
       Bucket: config.bucket,
@@ -103,15 +137,19 @@ export async function testS3Connection(config: S3StorageConfig) {
   const client = createS3Client(config);
   const probeKey = `.infinite-canvas-healthcheck-${nanoid(10)}.txt`;
 
-  await client.send(new HeadBucketCommand({ Bucket: config.bucket }));
-  await client.send(
-    new PutObjectCommand({
-      Bucket: config.bucket,
-      Key: probeKey,
-      Body: "infinite-canvas healthcheck",
-      ContentType: "text/plain",
-    }),
-  );
-  await client.send(new HeadObjectCommand({ Bucket: config.bucket, Key: probeKey }));
-  await client.send(new DeleteObjectCommand({ Bucket: config.bucket, Key: probeKey }));
+  try {
+    await client.send(new HeadBucketCommand({ Bucket: config.bucket }));
+    await client.send(
+      new PutObjectCommand({
+        Bucket: config.bucket,
+        Key: probeKey,
+        Body: "infinite-canvas healthcheck",
+        ContentType: "text/plain",
+      }),
+    );
+    await client.send(new HeadObjectCommand({ Bucket: config.bucket, Key: probeKey }));
+    await client.send(new DeleteObjectCommand({ Bucket: config.bucket, Key: probeKey }));
+  } finally {
+    client.destroy();
+  }
 }

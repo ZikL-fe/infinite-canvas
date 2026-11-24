@@ -5,7 +5,14 @@ import { parseBuffer } from "music-metadata";
 import { nanoid } from "nanoid";
 
 import { aiBillingTasks, db, mediaObjects, users } from "../db/index.ts";
-import { persistCloudMediaBuffer, persistGeneratedImagesFromPayload } from "../lib/ai-media-persist.ts";
+import { env } from "../env.ts";
+import {
+  fetchMediaBufferWithLimits,
+  persistCloudMediaBuffer,
+  persistGeneratedImagesFromPayload,
+  runMediaPersistTask,
+} from "../lib/ai-media-persist.ts";
+import { ConcurrencyLimitError, createConcurrencyLimiter } from "../lib/concurrency.ts";
 import {
   adjustWalletCredits,
   calculateAudioCredits,
@@ -29,6 +36,13 @@ import {
 } from "../lib/settings.ts";
 
 export const aiRoutes = new Hono();
+
+const aiProxyLimiter = createConcurrencyLimiter({
+  maxConcurrent: env.AI_PROXY_MAX_CONCURRENCY,
+  maxQueue: env.AI_PROXY_MAX_QUEUE,
+  queueTimeoutMs: env.AI_PROXY_QUEUE_WAIT_MS,
+});
+const videoPersistInFlight = new Map<string, Promise<string | null>>();
 
 type UsageTotals = {
   inputTokens: number;
@@ -255,65 +269,75 @@ async function persistCompletedVideoIfNeeded(params: {
   channelApiFormat: "openai" | "gemini";
   channelApiKey: string;
 }): Promise<string | null> {
-  try {
-    const existing = await db.query.mediaObjects.findFirst({
-      where: and(
-        eq(mediaObjects.userId, params.userId),
-        eq(mediaObjects.status, "active"),
-        sql`${mediaObjects.meta}->>'videoTaskId' = ${params.taskId}`,
-      ),
-      columns: { id: true },
-    });
-    if (existing) return existing.id;
+  const dedupeKey = `${params.userId}:${params.taskId}`;
+  const inFlight = videoPersistInFlight.get(dedupeKey);
+  if (inFlight) return inFlight;
 
-    const data = (params.payload.data && typeof params.payload.data === "object"
-      ? (params.payload.data as Record<string, unknown>)
-      : params.payload) as Record<string, unknown>;
-    const contentObj = data.content && typeof data.content === "object" ? (data.content as Record<string, unknown>) : undefined;
-    const geminiSamples = (
-      (data.response as Record<string, unknown> | undefined)?.generateVideoResponse as Record<string, unknown> | undefined
-    )?.generatedSamples as Array<{ video?: { uri?: string } }> | undefined;
-    const geminiUri = geminiSamples?.[0]?.video?.uri;
-    const directUrl = [data.video_url, data.result_url, data.url, contentObj?.video_url, contentObj?.url, geminiUri].find(
-      (v): v is string => typeof v === "string" && /^https?:\/\//i.test(v),
-    );
-
-    let videoRes: Response | null = null;
-    if (directUrl) {
-      const target =
-        params.channelApiFormat === "gemini" && !directUrl.includes("key=")
-          ? `${directUrl}${directUrl.includes("?") ? "&" : "?"}key=${encodeURIComponent(params.channelApiKey)}`
-          : directUrl;
-      videoRes = await fetch(target);
-    } else if (params.channelApiFormat === "openai") {
-      const contentUrl = buildUpstreamUrl(params.channelBaseUrl, `/v1/videos/${encodeURIComponent(params.taskId)}/content`, "", "openai", params.channelApiKey);
-      videoRes = await fetch(contentUrl, {
-        headers: { Authorization: `Bearer ${params.channelApiKey}` },
+  const job = runMediaPersistTask(async () => {
+    try {
+      const existing = await db.query.mediaObjects.findFirst({
+        where: and(
+          eq(mediaObjects.userId, params.userId),
+          eq(mediaObjects.status, "active"),
+          sql`${mediaObjects.meta}->>'videoTaskId' = ${params.taskId}`,
+        ),
+        columns: { id: true },
       });
+      if (existing) return existing.id;
+
+      const data = (params.payload.data && typeof params.payload.data === "object"
+        ? (params.payload.data as Record<string, unknown>)
+        : params.payload) as Record<string, unknown>;
+      const contentObj = data.content && typeof data.content === "object" ? (data.content as Record<string, unknown>) : undefined;
+      const geminiSamples = (
+        (data.response as Record<string, unknown> | undefined)?.generateVideoResponse as Record<string, unknown> | undefined
+      )?.generatedSamples as Array<{ video?: { uri?: string } }> | undefined;
+      const geminiUri = geminiSamples?.[0]?.video?.uri;
+      const directUrl = [data.video_url, data.result_url, data.url, contentObj?.video_url, contentObj?.url, geminiUri].find(
+        (v): v is string => typeof v === "string" && /^https?:\/\//i.test(v),
+      );
+
+      let fetched: { buffer: Buffer; mimeType: string } | null = null;
+      if (directUrl) {
+        const target =
+          params.channelApiFormat === "gemini" && !directUrl.includes("key=")
+            ? `${directUrl}${directUrl.includes("?") ? "&" : "?"}key=${encodeURIComponent(params.channelApiKey)}`
+            : directUrl;
+        fetched = await fetchMediaBufferWithLimits(target);
+      } else if (params.channelApiFormat === "openai") {
+        const contentUrl = buildUpstreamUrl(params.channelBaseUrl, `/v1/videos/${encodeURIComponent(params.taskId)}/content`, "", "openai", params.channelApiKey);
+        fetched = await fetchMediaBufferWithLimits(contentUrl, {
+          headers: { Authorization: `Bearer ${params.channelApiKey}` },
+        });
+      }
+
+      if (!fetched) return null;
+      const mimeType = fetched.mimeType || "video/mp4";
+      if (mimeType.includes("application/json")) return null;
+
+      const saved = await persistCloudMediaBuffer({
+        userId: params.userId,
+        kind: "video",
+        buffer: fetched.buffer,
+        mimeType: mimeType.startsWith("video/") ? mimeType : "video/mp4",
+        sourceType: "ai_generated",
+        meta: {
+          model: params.model,
+          videoTaskId: params.taskId,
+          clientTaskId: params.taskId,
+        },
+      });
+      return saved?.mediaId ?? null;
+    } catch (error) {
+      console.warn("[ai-media-persist] 服务端转存完成视频失败:", error);
+      return null;
     }
+  }).finally(() => {
+    videoPersistInFlight.delete(dedupeKey);
+  });
 
-    if (!videoRes || !videoRes.ok) return null;
-    const mimeType = videoRes.headers.get("content-type")?.split(";")[0]?.trim() || "video/mp4";
-    if (mimeType.includes("application/json")) return null;
-
-    const buffer = Buffer.from(await videoRes.arrayBuffer());
-    const saved = await persistCloudMediaBuffer({
-      userId: params.userId,
-      kind: "video",
-      buffer,
-      mimeType: mimeType.startsWith("video/") ? mimeType : "video/mp4",
-      sourceType: "ai_generated",
-      meta: {
-        model: params.model,
-        videoTaskId: params.taskId,
-        clientTaskId: params.taskId,
-      },
-    });
-    return saved?.mediaId ?? null;
-  } catch (error) {
-    console.warn("[ai-media-persist] 服务端转存完成视频失败:", error);
-    return null;
-  }
+  videoPersistInFlight.set(dedupeKey, job);
+  return job;
 }
 
 async function handleVideoPollTaskState(userId: string, taskId: string, payload: unknown) {
@@ -486,6 +510,24 @@ aiRoutes.all("/proxy/:channelId/*", async (c) => {
     forwardHeaders.set("Authorization", `Bearer ${channel.apiKey}`);
   }
 
+  // 非轮询生成请求先申请全局并发槽位，排队满或超时快速返回 429 且不预扣积分
+  let releaseProxySlot: (() => void) | null = null;
+  let slotTransferredToStream = false;
+  if (!isPolling) {
+    try {
+      releaseProxySlot = await aiProxyLimiter.acquire(c.req.raw.signal);
+    } catch (error) {
+      if (error instanceof ConcurrencyLimitError) {
+        if (error.code === "ABORTED") {
+          return c.json({ error: "请求已取消", message: "请求已取消" }, 499);
+        }
+        return c.json({ error: error.message, message: error.message }, 429);
+      }
+      throw error;
+    }
+  }
+
+  try {
   // 预检查与预扣费
   let preCharged = 0;
   let preChargedLedgerId = "";
@@ -571,17 +613,22 @@ aiRoutes.all("/proxy/:channelId/*", async (c) => {
   };
   c.req.raw.signal?.addEventListener("abort", handleAbort, { once: true });
 
+  const upstreamTimeoutMs = isPolling ? env.AI_POLL_TIMEOUT_MS : env.AI_UPSTREAM_TIMEOUT_MS;
   let upstream: Response;
   try {
     upstream = await fetch(targetUrl, {
       method,
       headers: forwardHeaders,
       body: rawBody,
+      signal: AbortSignal.timeout(upstreamTimeoutMs),
     });
   } catch (error) {
     c.req.raw.signal?.removeEventListener("abort", handleAbort);
     const elapsedMs = Math.max(1, Date.now() - startedAt);
-    const errorMessage = truncateErrorText(error instanceof Error ? error.message : String(error || "上游连接失败")) || "上游连接失败";
+    const isTimeout = error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError");
+    const errorMessage = isTimeout
+      ? `上游请求超时（超过 ${Math.round(upstreamTimeoutMs / 1000)} 秒）`
+      : truncateErrorText(error instanceof Error ? error.message : String(error || "上游连接失败")) || "上游连接失败";
     if (preChargedLedgerId) {
       await patchLedgerMeta(preChargedLedgerId, {
         taskStatus: "failed",
@@ -596,8 +643,11 @@ aiRoutes.all("/proxy/:channelId/*", async (c) => {
         userId: user.id,
         delta: preCharged,
         reason: "refund",
-        meta: { model: modelName, taskStatus: "refunded", detail: "上游连接失败自动退回", errorMessage },
+        meta: { model: modelName, taskStatus: "refunded", detail: isTimeout ? "上游请求超时自动退回" : "上游连接失败自动退回", errorMessage },
       });
+    }
+    if (isTimeout) {
+      return c.json({ error: errorMessage, message: errorMessage }, 504);
     }
     throw error;
   }
@@ -913,33 +963,42 @@ aiRoutes.all("/proxy/:channelId/*", async (c) => {
           }
         },
         async flush() {
-          if (sseBuffer.trim().startsWith("data:")) {
-            inspectSseLine(sseBuffer.trim());
+          try {
+            if (sseBuffer.trim().startsWith("data:")) {
+              inspectSseLine(sseBuffer.trim());
+            }
+            const durationMs = Math.max(1, Date.now() - startedAt);
+            const firstTokenMs = Math.min(durationMs, Math.max(1, firstContentMs ?? firstChunkMs ?? durationMs));
+            const usageMeta = latestUsage ?? {};
+            const tokensPerSecond = latestUsage ? calcTokensPerSecond(latestUsage.outputTokens, durationMs, firstTokenMs) : undefined;
+            const credits = latestUsage && textPricing ? calculateTextCredits(textPricing, latestUsage) : 0;
+            await adjustWalletCredits({
+              userId: user.id,
+              delta: -credits,
+              reason: "text_gen",
+              allowNegative: true,
+              forceLedger: true,
+              meta: {
+                model: modelName,
+                ...usageMeta,
+                isStream: true,
+                durationMs,
+                firstTokenMs,
+                ...(tokensPerSecond !== undefined ? { tokensPerSecond } : {}),
+                taskStatus: "completed",
+              },
+            });
+          } finally {
+            releaseProxySlot?.();
           }
-          const durationMs = Math.max(1, Date.now() - startedAt);
-          const firstTokenMs = Math.min(durationMs, Math.max(1, firstContentMs ?? firstChunkMs ?? durationMs));
-          const usageMeta = latestUsage ?? {};
-          const tokensPerSecond = latestUsage ? calcTokensPerSecond(latestUsage.outputTokens, durationMs, firstTokenMs) : undefined;
-          const credits = latestUsage && textPricing ? calculateTextCredits(textPricing, latestUsage) : 0;
-          await adjustWalletCredits({
-            userId: user.id,
-            delta: -credits,
-            reason: "text_gen",
-            allowNegative: true,
-            forceLedger: true,
-            meta: {
-              model: modelName,
-              ...usageMeta,
-              isStream: true,
-              durationMs,
-              firstTokenMs,
-              ...(tokensPerSecond !== undefined ? { tokensPerSecond } : {}),
-              taskStatus: "completed",
-            },
-          });
+        },
+        cancel() {
+          releaseProxySlot?.();
         },
       });
 
+      slotTransferredToStream = true;
+      c.req.raw.signal?.addEventListener("abort", () => releaseProxySlot?.(), { once: true });
       return new Response(upstream.body.pipeThrough(tapStream), {
         status: upstream.status,
         headers: responseHeaders,
@@ -977,4 +1036,9 @@ aiRoutes.all("/proxy/:channelId/*", async (c) => {
   }
 
   return new Response(upstream.body, { status: upstream.status, headers: responseHeaders });
+  } finally {
+    if (!slotTransferredToStream) {
+      releaseProxySlot?.();
+    }
+  }
 });

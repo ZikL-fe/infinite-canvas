@@ -207,9 +207,9 @@ export async function queryConsumptionMetrics(daysInput: number, userId?: string
   const [totalsRows, dailyRows, modelRows] = await Promise.all([
     db.execute(sql`
       SELECT
-        COALESCE(SUM(CASE WHEN delta < 0 THEN -delta ELSE 0 END), 0)::double precision AS total_consumed,
-        COALESCE(SUM(CASE WHEN delta < 0 AND created_at >= ${todayStartIso}::timestamptz THEN -delta ELSE 0 END), 0)::double precision AS today_consumed,
-        COALESCE(SUM(CASE WHEN delta < 0 AND created_at >= ${rangeStartIso}::timestamptz THEN -delta ELSE 0 END), 0)::double precision AS range_consumed,
+        GREATEST(0, COALESCE(SUM(CASE WHEN delta < 0 THEN -delta WHEN reason = 'refund' THEN -delta ELSE 0 END), 0))::double precision AS total_consumed,
+        GREATEST(0, COALESCE(SUM(CASE WHEN created_at >= ${todayStartIso}::timestamptz THEN (CASE WHEN delta < 0 THEN -delta WHEN reason = 'refund' THEN -delta ELSE 0 END) ELSE 0 END), 0))::double precision AS today_consumed,
+        GREATEST(0, COALESCE(SUM(CASE WHEN created_at >= ${rangeStartIso}::timestamptz THEN (CASE WHEN delta < 0 THEN -delta WHEN reason = 'refund' THEN -delta ELSE 0 END) ELSE 0 END), 0))::double precision AS range_consumed,
         COUNT(*) FILTER (WHERE reason IN ('text_gen', 'image_gen', 'video_gen', 'audio_gen') AND created_at >= ${rangeStartIso}::timestamptz)::int AS range_calls
       FROM credit_ledger
       WHERE 1 = 1 ${userFilter}
@@ -217,21 +217,22 @@ export async function queryConsumptionMetrics(daysInput: number, userId?: string
     db.execute(sql`
       SELECT
         TO_CHAR((created_at AT TIME ZONE 'UTC') + (${localOffsetMinutes} * INTERVAL '1 minute'), 'YYYY-MM-DD') AS day,
-        COALESCE(SUM(CASE WHEN delta < 0 THEN -delta ELSE 0 END), 0)::double precision AS credits,
-        COUNT(*)::int AS calls
+        GREATEST(0, COALESCE(SUM(-delta), 0))::double precision AS credits,
+        COUNT(*) FILTER (WHERE reason IN ('text_gen', 'image_gen', 'video_gen', 'audio_gen'))::int AS calls
       FROM credit_ledger
-      WHERE reason IN ('text_gen', 'image_gen', 'video_gen', 'audio_gen') AND created_at >= ${rangeStartIso}::timestamptz ${userFilter}
+      WHERE reason IN ('text_gen', 'image_gen', 'video_gen', 'audio_gen', 'refund') AND created_at >= ${rangeStartIso}::timestamptz ${userFilter}
       GROUP BY 1
       ORDER BY 1 ASC
     `),
     db.execute(sql`
       SELECT
         COALESCE(NULLIF(meta->>'model', ''), reason) AS model,
-        COALESCE(SUM(CASE WHEN delta < 0 THEN -delta ELSE 0 END), 0)::double precision AS credits,
-        COUNT(*)::int AS calls
+        GREATEST(0, COALESCE(SUM(-delta), 0))::double precision AS credits,
+        COUNT(*) FILTER (WHERE reason IN ('text_gen', 'image_gen', 'video_gen', 'audio_gen'))::int AS calls
       FROM credit_ledger
-      WHERE reason IN ('text_gen', 'image_gen', 'video_gen', 'audio_gen') AND created_at >= ${rangeStartIso}::timestamptz ${userFilter}
+      WHERE reason IN ('text_gen', 'image_gen', 'video_gen', 'audio_gen', 'refund') AND created_at >= ${rangeStartIso}::timestamptz ${userFilter}
       GROUP BY 1
+      HAVING COUNT(*) FILTER (WHERE reason IN ('text_gen', 'image_gen', 'video_gen', 'audio_gen')) > 0
       ORDER BY credits DESC, calls DESC
       LIMIT 8
     `),
@@ -356,6 +357,10 @@ export async function queryCreditLedger(params: QueryCreditLedgerParams) {
   }
 
   const whereClause = filters.length ? and(...filters) : undefined;
+  const excludesRefundRows = Boolean((reason && reason !== "refund") || (taskStatus && taskStatus !== "refunded"));
+  const totalConsumedExpr = excludesRefundRows
+    ? sql<number>`COALESCE(SUM(CASE WHEN ${creditLedger.delta} < 0 AND COALESCE(${creditLedger.meta}->>'taskStatus', '') != 'failed' THEN -${creditLedger.delta} ELSE 0 END), 0)::double precision`
+    : sql<number>`GREATEST(0, COALESCE(SUM(CASE WHEN ${creditLedger.delta} < 0 THEN -${creditLedger.delta} WHEN ${creditLedger.reason} = 'refund' THEN -${creditLedger.delta} ELSE 0 END), 0))::double precision`;
 
   const [items, [{ total }], [summaryRow], peakRows] = await Promise.all([
     db
@@ -384,7 +389,7 @@ export async function queryCreditLedger(params: QueryCreditLedgerParams) {
       .where(whereClause),
     db
       .select({
-        totalConsumed: sql<number>`COALESCE(SUM(CASE WHEN ${creditLedger.delta} < 0 THEN -${creditLedger.delta} ELSE 0 END), 0)::double precision`,
+        totalConsumed: totalConsumedExpr,
         totalRecharged: sql<number>`COALESCE(SUM(CASE WHEN ${creditLedger.delta} > 0 THEN ${creditLedger.delta} ELSE 0 END), 0)::double precision`,
         // 统计调用次数与用量时同时包含 0 积分调用（免费模型或极低消耗四舍五入为 0 的请求）
         consumeCalls: sql<number>`COUNT(*) FILTER (WHERE ${creditLedger.reason} IN ('text_gen', 'image_gen', 'video_gen', 'audio_gen'))::int`,
