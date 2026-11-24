@@ -601,11 +601,30 @@ storageRoutes.get("/by-tasks", async (c) => {
       ),
       orderBy: [desc(mediaObjects.createdAt)],
     }),
-    db.execute<{ client_task_id: string; task_status: string }>(
-      sql`SELECT meta->>'clientTaskId' AS client_task_id, meta->>'taskStatus' AS task_status FROM credit_ledger WHERE user_id = ${user.id} AND meta->>'clientTaskId' IN (${sql.join(
-        taskIds.map((id) => sql`${id}`),
-        sql`, `,
-      )}) ORDER BY created_at DESC`,
+    db.execute<{
+      client_task_id: string;
+      task_status: string;
+      result_text: string | null;
+      error_message: string | null;
+      upstream_task_id: string | null;
+      provider: string | null;
+      model: string | null;
+    }>(
+      sql`SELECT
+        meta->>'clientTaskId' AS client_task_id,
+        meta->>'taskStatus' AS task_status,
+        meta->>'resultText' AS result_text,
+        meta->>'errorMessage' AS error_message,
+        meta->>'taskId' AS upstream_task_id,
+        meta->>'provider' AS provider,
+        meta->>'model' AS model
+      FROM credit_ledger
+      WHERE user_id = ${user.id}
+        AND meta->>'clientTaskId' IN (${sql.join(
+          taskIds.map((id) => sql`${id}`),
+          sql`, `,
+        )})
+      ORDER BY created_at DESC`,
     ),
   ]);
 
@@ -625,15 +644,47 @@ storageRoutes.get("/by-tasks", async (c) => {
   );
 
   const processingSet = new Set<string>();
+  const textByTask: Record<string, string> = {};
+  const videoTaskByClientTask: Record<string, { taskId: string; provider?: string; model?: string; status?: string }> = {};
+  const errorByTask: Record<string, string> = {};
+  const seenLedgerTasks = new Set<string>();
+
   for (const row of ledgerRows) {
-    if (row.client_task_id && row.task_status === "processing" && !itemsByTask[row.client_task_id]?.length) {
-      processingSet.add(row.client_task_id);
+    const cid = row.client_task_id;
+    if (!cid || seenLedgerTasks.has(cid)) continue;
+    seenLedgerTasks.add(cid);
+
+    const status = row.task_status || "";
+    const hasMedia = Boolean(itemsByTask[cid]?.length);
+    if (status === "completed" && typeof row.result_text === "string" && row.result_text) {
+      textByTask[cid] = row.result_text;
+      continue;
+    }
+    if (status === "failed") {
+      if (!hasMedia) {
+        errorByTask[cid] = row.error_message || "任务执行失败";
+      }
+      continue;
+    }
+    if (row.upstream_task_id && !hasMedia) {
+      videoTaskByClientTask[cid] = {
+        taskId: row.upstream_task_id,
+        ...(row.provider ? { provider: row.provider } : {}),
+        ...(row.model ? { model: row.model } : {}),
+        ...(status ? { status } : {}),
+      };
+    }
+    if ((status === "processing" || status === "not_started") && !hasMedia && !textByTask[cid]) {
+      processingSet.add(cid);
     }
   }
 
   return c.json({
     itemsByTask,
     processingTaskIds: [...processingSet],
+    textByTask,
+    videoTaskByClientTask,
+    errorByTask,
   });
 });
 

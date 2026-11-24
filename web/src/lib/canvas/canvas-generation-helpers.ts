@@ -162,12 +162,24 @@ export function hasResumableVideoTask(node: CanvasNodeData) {
 export function collectInterruptedImageTaskIds(nodes: CanvasNodeData[], activeNodeIds?: Set<string>) {
     const taskIds: string[] = [];
     for (const node of nodes) {
-        if (node.type !== CanvasNodeType.Image || node.metadata?.status !== "loading" || activeNodeIds?.has(node.id)) continue;
-        const slotIds = (node.metadata.images || []).filter((img) => img.status === "loading").map((img) => img.id);
-        if (slotIds.length) {
-            taskIds.push(...slotIds);
-        } else {
-            if (node.metadata.primaryImageId) taskIds.push(node.metadata.primaryImageId);
+        if (node.metadata?.status !== "loading" || activeNodeIds?.has(node.id)) continue;
+        if (node.type === CanvasNodeType.Image) {
+            const slotIds = (node.metadata.images || []).filter((img) => img.status === "loading").map((img) => img.id);
+            if (slotIds.length) {
+                taskIds.push(...slotIds);
+            } else {
+                if (node.metadata.primaryImageId) taskIds.push(node.metadata.primaryImageId);
+                taskIds.push(node.id);
+            }
+        } else if (node.type === CanvasNodeType.Text) {
+            const slotIds = (node.metadata.texts || []).filter((text) => text.status === "loading").map((text) => text.id);
+            if (slotIds.length) {
+                taskIds.push(...slotIds);
+            } else {
+                if (node.metadata.primaryTextId) taskIds.push(node.metadata.primaryTextId);
+                taskIds.push(node.id);
+            }
+        } else if (node.type === CanvasNodeType.Video || node.type === CanvasNodeType.Audio) {
             taskIds.push(node.id);
         }
     }
@@ -203,10 +215,173 @@ export async function recoverCloudInterruptedImages(
     try {
         const res = await storageApi.getByTasks(candidateIds);
         const processingSet = new Set(res.processingTaskIds);
+        const textByTask = res.textByTask || {};
+        const videoTaskByClientTask = res.videoTaskByClientTask || {};
+        const errorByTask = res.errorByTask || {};
         let anyChanged = false;
         const nextNodes = await Promise.all(
             nodes.map(async (node) => {
-                if (node.type !== CanvasNodeType.Image || node.metadata?.status !== "loading" || activeNodeIds?.has(node.id)) return node;
+                if (node.metadata?.status !== "loading" || activeNodeIds?.has(node.id)) return node;
+
+                if (node.type === CanvasNodeType.Text) {
+                    const texts = node.metadata.texts;
+                    if (texts?.length) {
+                        let changed = false;
+                        const nextTexts = texts.map((item) => {
+                            if (item.status !== "loading") return item;
+                            const recoveredText = textByTask[item.id];
+                            if (recoveredText) {
+                                changed = true;
+                                return { id: item.id, status: "success" as const, content: recoveredText };
+                            }
+                            const failedMsg = errorByTask[item.id];
+                            if (failedMsg) {
+                                changed = true;
+                                return { id: item.id, status: "error" as const, content: "", errorDetails: failedMsg };
+                            }
+                            return item;
+                        });
+                        if (!changed) return node;
+                        anyChanged = true;
+                        const stillLoading = nextTexts.some((item) => item.status === "loading" && processingSet.has(item.id));
+                        const hasLoadingSlot = nextTexts.some((item) => item.status === "loading");
+                        const successTexts = nextTexts.filter((item) => item.status === "success");
+                        const primaryText =
+                            (node.metadata.primaryTextId ? successTexts.find((item) => item.id === node.metadata?.primaryTextId) : undefined) ||
+                            successTexts[0];
+                        return {
+                            ...node,
+                            metadata: {
+                                ...node.metadata,
+                                content: primaryText?.content || node.metadata.content || "",
+                                primaryTextId: primaryText?.id || node.metadata.primaryTextId,
+                                texts: nextTexts,
+                                status: stillLoading || hasLoadingSlot ? ("loading" as const) : successTexts.length ? ("success" as const) : ("error" as const),
+                                errorDetails: successTexts.length ? undefined : nextTexts.find((item) => item.errorDetails)?.errorDetails,
+                            },
+                        };
+                    }
+
+                    const singleTaskId = node.metadata.primaryTextId || node.id;
+                    const singleText = textByTask[singleTaskId] ?? textByTask[node.id];
+                    if (singleText) {
+                        anyChanged = true;
+                        return {
+                            ...node,
+                            metadata: {
+                                ...node.metadata,
+                                content: singleText,
+                                status: "success" as const,
+                                errorDetails: undefined,
+                            },
+                        };
+                    }
+                    const singleErr = errorByTask[singleTaskId] ?? errorByTask[node.id];
+                    if (singleErr) {
+                        anyChanged = true;
+                        return {
+                            ...node,
+                            metadata: {
+                                ...node.metadata,
+                                status: "error" as const,
+                                errorDetails: singleErr,
+                            },
+                        };
+                    }
+                    return node;
+                }
+
+                if (node.type === CanvasNodeType.Video) {
+                    const media = res.itemsByTask[node.id]?.[0];
+                    if (media) {
+                        const url = await resolveMediaUrl(media.id, media.url || "");
+                        if (url) {
+                            anyChanged = true;
+                            const videoSize = fitNodeSize(media.width || node.width, media.height || node.height, 420, 420);
+                            return {
+                                ...node,
+                                width: videoSize.width,
+                                height: videoSize.height,
+                                metadata: {
+                                    ...node.metadata,
+                                    content: url,
+                                    storageKey: media.id,
+                                    naturalWidth: media.width || undefined,
+                                    naturalHeight: media.height || undefined,
+                                    bytes: media.bytes || 0,
+                                    mimeType: media.mimeType || "video/mp4",
+                                    durationMs: media.durationMs || undefined,
+                                    status: "success" as const,
+                                    errorDetails: undefined,
+                                },
+                            };
+                        }
+                    }
+                    const upstreamVideo = videoTaskByClientTask[node.id];
+                    if (upstreamVideo?.taskId && !node.metadata.videoTaskId) {
+                        anyChanged = true;
+                        return {
+                            ...node,
+                            metadata: {
+                                ...node.metadata,
+                                videoTaskId: upstreamVideo.taskId,
+                                videoTaskProvider: upstreamVideo.provider === "gemini" ? ("gemini" as const) : ("openai" as const),
+                                ...(upstreamVideo.model ? { model: upstreamVideo.model } : {}),
+                            },
+                        };
+                    }
+                    const videoErr = errorByTask[node.id];
+                    if (videoErr) {
+                        anyChanged = true;
+                        return {
+                            ...node,
+                            metadata: {
+                                ...node.metadata,
+                                status: "error" as const,
+                                errorDetails: videoErr,
+                            },
+                        };
+                    }
+                    return node;
+                }
+
+                if (node.type === CanvasNodeType.Audio) {
+                    const media = res.itemsByTask[node.id]?.[0];
+                    if (media) {
+                        const url = await resolveMediaUrl(media.id, media.url || "");
+                        if (url) {
+                            anyChanged = true;
+                            return {
+                                ...node,
+                                metadata: {
+                                    ...node.metadata,
+                                    content: url,
+                                    storageKey: media.id,
+                                    bytes: media.bytes || 0,
+                                    mimeType: media.mimeType || "audio/mpeg",
+                                    durationMs: media.durationMs || undefined,
+                                    status: "success" as const,
+                                    errorDetails: undefined,
+                                },
+                            };
+                        }
+                    }
+                    const audioErr = errorByTask[node.id];
+                    if (audioErr) {
+                        anyChanged = true;
+                        return {
+                            ...node,
+                            metadata: {
+                                ...node.metadata,
+                                status: "error" as const,
+                                errorDetails: audioErr,
+                            },
+                        };
+                    }
+                    return node;
+                }
+
+                if (node.type !== CanvasNodeType.Image) return node;
 
                 const images = node.metadata.images;
                 if (images?.length) {
@@ -315,26 +490,39 @@ export function resetInterruptedGeneration(nodes: CanvasNodeData[], activeNodeId
                 },
             };
         }
-        const slotStillProcessing =
+        const imageStillProcessing =
             node.type === CanvasNodeType.Image &&
             (processingSet.has(node.id) ||
                 Boolean(node.metadata.primaryImageId && processingSet.has(node.metadata.primaryImageId)) ||
                 Boolean(node.metadata.images?.some((img) => img.status === "loading" && processingSet.has(img.id))));
-        if (slotStillProcessing) return node;
+        const textStillProcessing =
+            node.type === CanvasNodeType.Text &&
+            (processingSet.has(node.id) ||
+                Boolean(node.metadata.primaryTextId && processingSet.has(node.metadata.primaryTextId)) ||
+                Boolean(node.metadata.texts?.some((text) => text.status === "loading" && processingSet.has(text.id))));
+        const mediaStillProcessing =
+            (node.type === CanvasNodeType.Video || node.type === CanvasNodeType.Audio) && processingSet.has(node.id);
+        if (imageStillProcessing || textStillProcessing || mediaStillProcessing) return node;
+
+        const nextTexts = node.metadata.texts?.map((text) =>
+            text.status === "loading" && !processingSet.has(text.id)
+                ? { ...text, status: "error" as const, errorDetails: i18n.t("canvas.generation.interrupted") }
+                : text,
+        );
+        const hasSuccessText = Boolean(nextTexts?.some((text) => text.status === "success"));
+
         return {
             ...node,
             metadata: {
                 ...node.metadata,
-                status: "error" as const,
-                errorDetails: i18n.t("canvas.generation.interrupted"),
+                status: hasSuccessText ? ("success" as const) : ("error" as const),
+                errorDetails: hasSuccessText ? undefined : i18n.t("canvas.generation.interrupted"),
                 images: node.metadata.images?.map((image) =>
                     image.status === "loading" && !processingSet.has(image.id)
                         ? { ...image, status: "error" as const, errorDetails: i18n.t("canvas.generation.interrupted") }
                         : image,
                 ),
-                texts: node.metadata.texts?.map((text) =>
-                    text.status === "loading" ? { ...text, status: "error" as const, errorDetails: i18n.t("canvas.generation.interrupted") } : text,
-                ),
+                texts: nextTexts,
             },
         };
     });

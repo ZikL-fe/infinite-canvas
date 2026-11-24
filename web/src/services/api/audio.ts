@@ -8,7 +8,7 @@ import { scheduleRefreshUserBalance } from "@/services/api/server";
 import { buildApiUrl, resolveModelRequestConfig, resolveModelScript, withLocalProxy, type AiConfig } from "@/stores/use-config-store";
 import { runModelPlugin } from "./model-plugin";
 
-type RequestOptions = { signal?: AbortSignal };
+type RequestOptions = { signal?: AbortSignal; clientTaskId?: string };
 const apiText = (key: string, options?: Record<string, unknown>) => i18n.t(`apiErrors.${key}`, options);
 
 function aiApiUrl(config: AiConfig, path: string) {
@@ -61,7 +61,14 @@ export async function requestAudioGeneration(config: AiConfig, prompt: string, o
                 speed: Number(normalizeAudioSpeedValue(config.audioSpeed)),
                 ...(instructions ? { instructions } : {}),
             },
-            { headers: aiHeaders(requestConfig), responseType: "blob", signal: options?.signal },
+            {
+                headers: {
+                    ...aiHeaders(requestConfig),
+                    ...(options?.clientTaskId ? { "X-Client-Task-Id": options.clientTaskId } : {}),
+                },
+                responseType: "blob",
+                signal: options?.signal,
+            },
         );
         await assertAudioBlob(response.data);
         return response.data.type.startsWith("audio/") ? response.data : new Blob([response.data], { type: audioMimeType(format) });

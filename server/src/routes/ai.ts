@@ -24,6 +24,7 @@ import {
   patchLedgerMeta,
   patchLedgerMetaByTaskId,
   roundCredits,
+  settleProcessingLedger,
 } from "../lib/billing.ts";
 import { verifyAccessToken } from "../lib/jwt.ts";
 import {
@@ -142,6 +143,72 @@ function calcTokensPerSecond(outputTokens: number, durationMs: number, firstToke
   if (outputTokens <= 0 || durationMs <= 0) return 0;
   const genMs = firstTokenMs !== undefined && durationMs > firstTokenMs ? durationMs - firstTokenMs : durationMs;
   return Math.round((outputTokens / Math.max(0.001, genMs / 1000)) * 10) / 10;
+}
+
+const MAX_STORED_RESULT_TEXT = 200_000;
+
+function appendCappedText(current: string, chunk: string) {
+  if (!chunk || current.length >= MAX_STORED_RESULT_TEXT) return current;
+  const remaining = MAX_STORED_RESULT_TEXT - current.length;
+  return current + (chunk.length > remaining ? chunk.slice(0, remaining) : chunk);
+}
+
+function extractStreamTextDelta(obj: unknown): string {
+  if (!obj || typeof obj !== "object") return "";
+  const rec = obj as Record<string, unknown>;
+  if (rec.type === "response.output_text.delta" && typeof rec.delta === "string") {
+    return rec.delta;
+  }
+  if (Array.isArray(rec.choices)) {
+    let out = "";
+    for (const ch of rec.choices) {
+      const delta = (ch as { delta?: Record<string, unknown> })?.delta;
+      if (delta && typeof delta.content === "string") out += delta.content;
+    }
+    if (out) return out;
+  }
+  if (Array.isArray(rec.candidates)) {
+    let out = "";
+    for (const cand of rec.candidates) {
+      const parts = (cand as { content?: { parts?: Array<Record<string, unknown>> } })?.content?.parts;
+      if (Array.isArray(parts)) {
+        for (const part of parts) {
+          if (typeof part.text === "string") out += part.text;
+        }
+      }
+    }
+    if (out) return out;
+  }
+  return "";
+}
+
+function extractFinalTextFromPayload(obj: unknown): string {
+  if (!obj || typeof obj !== "object") return "";
+  const rec = obj as Record<string, unknown>;
+  if (rec.type === "response.output_text.done" && typeof rec.text === "string") return rec.text;
+  const target = rec.type === "response.completed" && rec.response && typeof rec.response === "object"
+    ? (rec.response as Record<string, unknown>)
+    : rec;
+  if (typeof target.output_text === "string" && target.output_text) return target.output_text;
+  if (Array.isArray(target.output)) {
+    let out = "";
+    for (const item of target.output as Array<Record<string, unknown>>) {
+      if (item.type === "message" && Array.isArray(item.content)) {
+        for (const part of item.content as Array<Record<string, unknown>>) {
+          if (typeof part.text === "string") out += part.text;
+        }
+      }
+    }
+    if (out) return out;
+  }
+  if (Array.isArray(target.choices)) {
+    let out = "";
+    for (const ch of target.choices as Array<{ message?: { content?: unknown } }>) {
+      if (typeof ch.message?.content === "string") out += ch.message.content;
+    }
+    if (out) return out;
+  }
+  return extractStreamTextDelta(target);
 }
 
 function countReturnedImages(payload: unknown): number | null {
@@ -315,6 +382,15 @@ async function persistCompletedVideoIfNeeded(params: {
       const mimeType = fetched.mimeType || "video/mp4";
       if (mimeType.includes("application/json")) return null;
 
+      const ledgerRow = await db.query.creditLedger.findFirst({
+        where: and(eq(creditLedger.userId, params.userId), sql`${creditLedger.meta}->>'taskId' = ${params.taskId}`),
+        columns: { meta: true },
+      });
+      const mappedClientTaskId =
+        typeof ledgerRow?.meta?.clientTaskId === "string" && ledgerRow.meta.clientTaskId.trim()
+          ? ledgerRow.meta.clientTaskId.trim()
+          : params.taskId;
+
       const saved = await persistCloudMediaBuffer({
         userId: params.userId,
         kind: "video",
@@ -324,7 +400,7 @@ async function persistCompletedVideoIfNeeded(params: {
         meta: {
           model: params.model,
           videoTaskId: params.taskId,
-          clientTaskId: params.taskId,
+          clientTaskId: mappedClientTaskId,
         },
       });
       return saved?.mediaId ?? null;
@@ -590,13 +666,45 @@ aiRoutes.all("/proxy/:channelId/*", async (c) => {
         delta: -preCharged,
         reason: "video_gen",
         forceLedger: true,
-        meta: { model: modelName, seconds, hasReferenceVideo, isStream: false, taskStatus: "not_started" },
+        meta: {
+          model: modelName,
+          seconds,
+          hasReferenceVideo,
+          isStream: false,
+          taskStatus: "not_started",
+          provider: channel.apiFormat,
+          ...(clientTaskId ? { clientTaskId } : {}),
+        },
       });
       if (!deduct.ok) {
         const msg = `积分不足（当前余额 ${deduct.balance}，本次需要 ${preCharged}）`;
         return c.json({ error: msg, message: msg }, 402);
       }
       preChargedLedgerId = deduct.ledgerId;
+    } else if (channelModel.capability === "text" || channelModel.capability === "audio") {
+      if (shouldBill) {
+        const balance = await getWalletBalance(user.id);
+        if (balance <= 0) {
+          const msg = "积分余额不足，请先充值或联系管理员";
+          return c.json({ error: msg, message: msg }, 402);
+        }
+      }
+      const placeholder = await adjustWalletCredits({
+        userId: user.id,
+        delta: 0,
+        reason: channelModel.capability === "audio" ? "audio_gen" : "text_gen",
+        allowNegative: true,
+        forceLedger: true,
+        meta: {
+          model: modelName,
+          isStream: false,
+          taskStatus: "processing",
+          ...(clientTaskId ? { clientTaskId } : {}),
+        },
+      });
+      if (placeholder.ok) {
+        preChargedLedgerId = placeholder.ledgerId;
+      }
     } else if (shouldBill) {
       const balance = await getWalletBalance(user.id);
       if (balance <= 0) {
@@ -890,6 +998,7 @@ aiRoutes.all("/proxy/:channelId/*", async (c) => {
   // 语音模型：使用 music-metadata 读取真实音频秒数并记录日志/扣费，同时自动转存云端
   if (channelModel.capability === "audio") {
     const buffer = await upstream.arrayBuffer();
+    c.req.raw.signal?.removeEventListener("abort", handleAbort);
     const durationMs = Math.max(1, Date.now() - startedAt);
     let duration = 0;
     try {
@@ -899,14 +1008,6 @@ aiRoutes.all("/proxy/:channelId/*", async (c) => {
       console.warn("[billing] 解析音频时长失败:", error);
     }
     const credits = pricing ? calculateAudioCredits(pricing as AudioModelPricing, duration) : 0;
-    await adjustWalletCredits({
-      userId: user.id,
-      delta: -credits,
-      reason: "audio_gen",
-      allowNegative: true,
-      forceLedger: true,
-      meta: { model: modelName, durationSeconds: Math.round(duration * 100) / 100, isStream: false, durationMs, taskStatus: "completed" },
-    }).catch(() => undefined);
     const savedAudio = await persistCloudMediaBuffer({
       userId: user.id,
       kind: "audio",
@@ -919,13 +1020,34 @@ aiRoutes.all("/proxy/:channelId/*", async (c) => {
         ...(clientTaskId ? { clientTaskId } : {}),
       },
     }).catch(() => null);
+    const audioMeta = {
+      model: modelName,
+      durationSeconds: Math.round(duration * 100) / 100,
+      isStream: false,
+      durationMs,
+      taskStatus: "completed",
+      ...(clientAborted ? { clientAborted: true } : {}),
+      ...(savedAudio?.mediaId ? { mediaIds: [savedAudio.mediaId] } : {}),
+    };
+    if (preChargedLedgerId) {
+      await settleProcessingLedger({ ledgerId: preChargedLedgerId, userId: user.id, credits, metaPatch: audioMeta }).catch(() => undefined);
+    } else {
+      await adjustWalletCredits({
+        userId: user.id,
+        delta: -credits,
+        reason: "audio_gen",
+        allowNegative: true,
+        forceLedger: true,
+        meta: audioMeta,
+      }).catch(() => undefined);
+    }
     if (savedAudio?.mediaId) {
       responseHeaders.set("X-Cloud-Media-Ids", JSON.stringify([savedAudio.mediaId]));
     }
     return new Response(buffer, { status: upstream.status, headers: responseHeaders });
   }
 
-  // 文本对话模型：按 Token (M) 与缓存输入/输出结算，即使为 0 积分或无 usage 亦留存使用日志
+  // 文本对话模型：即使前端刷新/退登断连，服务端仍在后台协程读完上游完整结果并写入账本以便回看恢复
   if (channelModel.capability === "text") {
     if (respType.includes("text/event-stream") && upstream.body) {
       const decoder = new TextDecoder();
@@ -933,6 +1055,8 @@ aiRoutes.all("/proxy/:channelId/*", async (c) => {
       let latestUsage: UsageTotals | null = null;
       let firstChunkMs: number | undefined;
       let firstContentMs: number | undefined;
+      let accumulatedText = "";
+      let fallbackFinalText = "";
       const textPricing = pricing as TextModelPricing | undefined;
 
       const inspectSseLine = (line: string) => {
@@ -945,6 +1069,13 @@ aiRoutes.all("/proxy/:channelId/*", async (c) => {
           if (firstContentMs === undefined && hasStreamContentToken(parsed)) {
             firstContentMs = Math.max(1, Date.now() - startedAt);
           }
+          const delta = extractStreamTextDelta(parsed);
+          if (delta) {
+            accumulatedText = appendCappedText(accumulatedText, delta);
+          } else if (!accumulatedText) {
+            const finalCandidate = extractFinalTextFromPayload(parsed);
+            if (finalCandidate) fallbackFinalText = appendCappedText("", finalCandidate);
+          }
           const u = extractUsageFromObject(parsed);
           if (u) latestUsage = u;
         } catch {
@@ -952,54 +1083,106 @@ aiRoutes.all("/proxy/:channelId/*", async (c) => {
         }
       };
 
-      const tapStream = new TransformStream<Uint8Array, Uint8Array>({
-        transform(chunk, controller) {
-          controller.enqueue(chunk);
-          sseBuffer += decoder.decode(chunk, { stream: true });
-          const lines = sseBuffer.split(/\r?\n/);
-          sseBuffer = lines.pop() || "";
-          for (const line of lines) {
-            inspectSseLine(line);
-          }
+      const reader = upstream.body.getReader();
+      let clientClosed = clientAborted;
+      let streamController: ReadableStreamDefaultController<Uint8Array> | null = null;
+
+      const clientStream = new ReadableStream<Uint8Array>({
+        start(controller) {
+          streamController = controller;
         },
-        async flush() {
-          try {
-            if (sseBuffer.trim().startsWith("data:")) {
-              inspectSseLine(sseBuffer.trim());
+        cancel() {
+          clientClosed = true;
+          clientAborted = true;
+        },
+      });
+
+      slotTransferredToStream = true;
+      void (async () => {
+        try {
+          for (;;) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            if (!clientClosed && streamController) {
+              try {
+                streamController.enqueue(value);
+              } catch {
+                clientClosed = true;
+                clientAborted = true;
+              }
             }
-            const durationMs = Math.max(1, Date.now() - startedAt);
-            const firstTokenMs = Math.min(durationMs, Math.max(1, firstContentMs ?? firstChunkMs ?? durationMs));
-            const usageMeta = latestUsage ?? {};
-            const tokensPerSecond = latestUsage ? calcTokensPerSecond(latestUsage.outputTokens, durationMs, firstTokenMs) : undefined;
-            const credits = latestUsage && textPricing ? calculateTextCredits(textPricing, latestUsage) : 0;
+            sseBuffer += decoder.decode(value, { stream: true });
+            const lines = sseBuffer.split(/\r?\n/);
+            sseBuffer = lines.pop() || "";
+            for (const line of lines) {
+              inspectSseLine(line);
+            }
+          }
+          if (sseBuffer.trim().startsWith("data:")) {
+            inspectSseLine(sseBuffer.trim());
+          }
+          if (!clientClosed && streamController) {
+            try {
+              streamController.close();
+            } catch {
+              // ignore already closed stream
+            }
+          }
+
+          const durationMs = Math.max(1, Date.now() - startedAt);
+          const firstTokenMs = Math.min(durationMs, Math.max(1, firstContentMs ?? firstChunkMs ?? durationMs));
+          const usageMeta = latestUsage ?? {};
+          const tokensPerSecond = latestUsage ? calcTokensPerSecond(latestUsage.outputTokens, durationMs, firstTokenMs) : undefined;
+          const credits = latestUsage && textPricing ? calculateTextCredits(textPricing, latestUsage) : 0;
+          const resultText = accumulatedText || fallbackFinalText;
+          const textMeta = {
+            model: modelName,
+            ...usageMeta,
+            isStream: true,
+            durationMs,
+            firstTokenMs,
+            ...(tokensPerSecond !== undefined ? { tokensPerSecond } : {}),
+            ...(clientAborted ? { clientAborted: true } : {}),
+            ...(resultText ? { resultText } : {}),
+            taskStatus: "completed",
+          };
+          if (preChargedLedgerId) {
+            await settleProcessingLedger({ ledgerId: preChargedLedgerId, userId: user.id, credits, metaPatch: textMeta }).catch(() => undefined);
+          } else {
             await adjustWalletCredits({
               userId: user.id,
               delta: -credits,
               reason: "text_gen",
               allowNegative: true,
               forceLedger: true,
-              meta: {
-                model: modelName,
-                ...usageMeta,
-                isStream: true,
-                durationMs,
-                firstTokenMs,
-                ...(tokensPerSecond !== undefined ? { tokensPerSecond } : {}),
-                taskStatus: "completed",
-              },
-            });
-          } finally {
-            releaseProxySlot?.();
+              meta: textMeta,
+            }).catch(() => undefined);
           }
-        },
-        cancel() {
+        } catch (streamError) {
+          if (!clientClosed && streamController) {
+            try {
+              streamController.error(streamError);
+            } catch {
+              // ignore
+            }
+          }
+          if (preChargedLedgerId) {
+            const errorMessage = streamError instanceof Error ? streamError.message : "上游流式响应中断";
+            await patchLedgerMeta(preChargedLedgerId, {
+              durationMs: Math.max(1, Date.now() - startedAt),
+              isStream: true,
+              taskStatus: "failed",
+              errorMessage,
+              ...(clientAborted ? { clientAborted: true } : {}),
+            }).catch(() => undefined);
+          }
+        } finally {
+          c.req.raw.signal?.removeEventListener("abort", handleAbort);
           releaseProxySlot?.();
-        },
-      });
+        }
+      })();
 
-      slotTransferredToStream = true;
-      c.req.raw.signal?.addEventListener("abort", () => releaseProxySlot?.(), { once: true });
-      return new Response(upstream.body.pipeThrough(tapStream), {
+      return new Response(clientStream, {
         status: upstream.status,
         headers: responseHeaders,
       });
@@ -1007,30 +1190,41 @@ aiRoutes.all("/proxy/:channelId/*", async (c) => {
 
     if (respType.includes("application/json")) {
       const text = await upstream.text();
+      c.req.raw.signal?.removeEventListener("abort", handleAbort);
       const durationMs = Math.max(1, Date.now() - startedAt);
       let usage: UsageTotals | null = null;
+      let resultText = "";
       try {
-        usage = extractUsageFromObject(JSON.parse(text));
+        const parsed = JSON.parse(text);
+        usage = extractUsageFromObject(parsed);
+        resultText = appendCappedText("", extractFinalTextFromPayload(parsed));
       } catch {
         // ignore parse failure
       }
       const tokensPerSecond = usage ? calcTokensPerSecond(usage.outputTokens, durationMs) : undefined;
       const credits = usage && pricing ? calculateTextCredits(pricing as TextModelPricing, usage) : 0;
-      await adjustWalletCredits({
-        userId: user.id,
-        delta: -credits,
-        reason: "text_gen",
-        allowNegative: true,
-        forceLedger: true,
-        meta: {
-          model: modelName,
-          ...(usage ?? {}),
-          isStream: false,
-          durationMs,
-          ...(tokensPerSecond !== undefined ? { tokensPerSecond } : {}),
-          taskStatus: "completed",
-        },
-      });
+      const jsonMeta = {
+        model: modelName,
+        ...(usage ?? {}),
+        isStream: false,
+        durationMs,
+        ...(tokensPerSecond !== undefined ? { tokensPerSecond } : {}),
+        ...(clientAborted ? { clientAborted: true } : {}),
+        ...(resultText ? { resultText } : {}),
+        taskStatus: "completed",
+      };
+      if (preChargedLedgerId) {
+        await settleProcessingLedger({ ledgerId: preChargedLedgerId, userId: user.id, credits, metaPatch: jsonMeta }).catch(() => undefined);
+      } else {
+        await adjustWalletCredits({
+          userId: user.id,
+          delta: -credits,
+          reason: "text_gen",
+          allowNegative: true,
+          forceLedger: true,
+          meta: jsonMeta,
+        }).catch(() => undefined);
+      }
       return new Response(text, { status: upstream.status, headers: responseHeaders });
     }
   }

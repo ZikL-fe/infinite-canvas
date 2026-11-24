@@ -644,10 +644,22 @@ export const storageApi = {
     },
     getByTasks: (taskIds: string[]) => {
         const clean = Array.from(new Set(taskIds.map((id) => id.trim()).filter(Boolean)));
-        if (!clean.length) return Promise.resolve({ itemsByTask: {} as Record<string, MediaItem[]>, processingTaskIds: [] as string[] });
-        return requestServer<{ itemsByTask: Record<string, MediaItem[]>; processingTaskIds: string[] }>(
-            `/storage/by-tasks?taskIds=${encodeURIComponent(clean.join(","))}`,
-        );
+        if (!clean.length) {
+            return Promise.resolve({
+                itemsByTask: {} as Record<string, MediaItem[]>,
+                processingTaskIds: [] as string[],
+                textByTask: {} as Record<string, string>,
+                videoTaskByClientTask: {} as Record<string, { taskId: string; provider?: string; model?: string; status?: string }>,
+                errorByTask: {} as Record<string, string>,
+            });
+        }
+        return requestServer<{
+            itemsByTask: Record<string, MediaItem[]>;
+            processingTaskIds: string[];
+            textByTask?: Record<string, string>;
+            videoTaskByClientTask?: Record<string, { taskId: string; provider?: string; model?: string; status?: string }>;
+            errorByTask?: Record<string, string>;
+        }>(`/storage/by-tasks?taskIds=${encodeURIComponent(clean.join(","))}`);
     },
     getUrl: (mediaId: string) => requestServer<{ mediaId: string; url: string; expiresIn: number }>(`/storage/url/${encodeURIComponent(mediaId)}`),
     downloadBlob: async (mediaId: string) => {

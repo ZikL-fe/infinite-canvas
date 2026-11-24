@@ -16,7 +16,7 @@ import type { ReferenceAudio, ReferenceVideo } from "@/types/media";
 type VideoResponse = { id: string; status?: string; error?: { message?: string }; url?: string; result_url?: string; video_url?: string; content?: { video_url?: string; url?: string } | null };
 type ApiVideoResponse = VideoResponse | { code?: number | string; data?: VideoResponse | null; msg?: string; message?: string; error?: { message?: string } };
 type ApiEnvelope<T> = T | { code?: number | string; data?: T | null; msg?: string; message?: string; error?: { message?: string } };
-type RequestOptions = { signal?: AbortSignal };
+type RequestOptions = { signal?: AbortSignal; clientTaskId?: string };
 type VideoMediaOptions = RequestOptions & { videos?: ReferenceVideo[]; audios?: ReferenceAudio[] };
 const apiText = (key: string, options?: Record<string, unknown>) => i18n.t(`apiErrors.${key}`, options);
 
@@ -192,6 +192,7 @@ async function createOpenAIVideoTask(config: AiConfig, model: string, prompt: st
         const created = unwrapVideoResponse((await aiAxios.post<ApiVideoResponse>(aiApiUrl(config, "/videos"), body, {
             headers: {
                 ...aiHeaders(config),
+                ...(options?.clientTaskId ? { "X-Client-Task-Id": options.clientTaskId } : {}),
                 ...(refVideoSeconds > 0 ? { "X-Billing-Ref-Video-Seconds": String(Math.ceil(refVideoSeconds)) } : {}),
             },
             signal: options?.signal,
@@ -269,6 +270,7 @@ async function createGeminiVideoTask(config: AiConfig, model: string, prompt: st
         }, {
             headers: {
                 ...geminiVideoHeaders(config),
+                ...(options?.clientTaskId ? { "X-Client-Task-Id": options.clientTaskId } : {}),
                 ...(refVideoSeconds > 0 ? { "X-Billing-Ref-Video-Seconds": String(Math.ceil(refVideoSeconds)) } : {}),
             },
             signal: options?.signal,

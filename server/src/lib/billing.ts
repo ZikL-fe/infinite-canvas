@@ -226,6 +226,45 @@ export async function patchLedgerMetaByTaskId(userId: string, taskId: string, pa
     .where(and(eq(creditLedger.userId, userId), sql`${creditLedger.meta}->>'taskId' = ${taskId}`));
 }
 
+/** 在同一数据库事务内结算一条 processing 占位账本：扣减积分并合并写入最终元数据。 */
+export async function settleProcessingLedger(params: {
+  ledgerId: string;
+  userId: string;
+  credits: number;
+  metaPatch: Record<string, unknown>;
+}) {
+  const charge = Math.max(0, roundCredits(params.credits));
+  const settled = await db.transaction(async (tx) => {
+    await tx.insert(creditWallets).values({ userId: params.userId, balance: 0 }).onConflictDoNothing();
+    const rows = await tx.execute(
+      sql`SELECT balance FROM credit_wallets WHERE user_id = ${params.userId} FOR UPDATE`,
+    );
+    const current = roundCredits(Number((rows[0] as { balance?: number } | undefined)?.balance ?? 0));
+    const nextBalance = charge > 0 ? roundCredits(current - charge) : current;
+    if (charge > 0) {
+      await tx
+        .update(creditWallets)
+        .set({ balance: nextBalance, updatedAt: new Date() })
+        .where(eq(creditWallets.userId, params.userId));
+    }
+    if (params.ledgerId) {
+      await tx
+        .update(creditLedger)
+        .set({
+          delta: charge > 0 ? -charge : 0,
+          balanceAfter: nextBalance,
+          meta: sql`COALESCE(${creditLedger.meta}, '{}'::jsonb) || ${JSON.stringify(params.metaPatch)}::jsonb`,
+        })
+        .where(eq(creditLedger.id, params.ledgerId));
+    }
+    return { balance: nextBalance };
+  });
+  if (charge > 0) {
+    scheduleWalletBalanceAlertCheck(params.userId, -charge, settled.balance);
+  }
+  return settled;
+}
+
 /** 聚合指定周期（7/14/30 天）内的积分消耗总量、每日趋势与热门消耗模型排行。 */
 export async function queryConsumptionMetrics(daysInput: number, userId?: string) {
   const days = [7, 14, 30].includes(daysInput) ? daysInput : 7;

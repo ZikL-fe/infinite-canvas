@@ -350,7 +350,7 @@ function InfiniteCanvasPage() {
 
     const completeVideoNodeTask = useCallback(
         async (nodeId: string, config: Parameters<typeof buildGenerationConfig>[0], prompt: string, images: Parameters<typeof createVideoGenerationTask>[2], signal: AbortSignal, extra: CanvasNodeData["metadata"] = {}, videos: ReferenceVideo[] = [], audios: ReferenceAudio[] = []) => {
-            const task = await createVideoGenerationTask(config, prompt, images, { signal, videos, audios });
+            const task = await createVideoGenerationTask(config, prompt, images, { signal, clientTaskId: nodeId, videos, audios });
             if (task.provider !== "plugin") {
                 commitNodes((prev) => prev.map((item) => (item.id === nodeId ? { ...item, metadata: { ...item.metadata, videoTaskId: task.id, videoTaskProvider: task.provider === "gemini" ? "gemini" : "openai", model: config.model } } : item)));
             }
@@ -505,10 +505,11 @@ function InfiniteCanvasPage() {
                 const result = await recoverCloudInterruptedImages(nodesRef.current, activeNow);
                 if (cancelled) return;
                 if (result.nodes !== nodesRef.current) {
-                    const updated = attempts >= 24 && result.processingTaskIds.length > 0 ? resetInterruptedGeneration(result.nodes, activeNow) : result.nodes;
+                    const updated = attempts >= 120 && result.processingTaskIds.length > 0 ? resetInterruptedGeneration(result.nodes, activeNow) : result.nodes;
                     setNodes(updated);
+                    updated.filter(hasResumableVideoTask).forEach((n) => void pollVideoNodeTask(n, true));
                 }
-                if (result.processingTaskIds.length > 0 && attempts < 24) {
+                if (result.processingTaskIds.length > 0 && attempts < 120) {
                     recoveryTimer = setTimeout(() => void pollPendingImages(), 2500);
                 } else if (result.processingTaskIds.length > 0) {
                     setNodes((prev) => resetInterruptedGeneration(prev, getActiveGenerationNodeIds(projectId)));
@@ -560,6 +561,7 @@ function InfiniteCanvasPage() {
             };
             setHistoryState({ canUndo: false, canRedo: false });
             setProjectLoaded(true);
+            finalNodes.filter(hasResumableVideoTask).forEach((node) => void pollVideoNodeTask(node, true));
             startPolling(processingTaskIds);
         };
         const onCloudSynced = () => {
@@ -2736,7 +2738,7 @@ function InfiniteCanvasPage() {
                     if (!reuseAudioNode) commitConnections((prev) => [...prev, { id: nanoid(), fromNodeId: nodeId, toNodeId: audioId }]);
                     const controller = startGenerationRequest(audioId, nodeId, nodeId, runController);
                     try {
-                        const audio = await storeGeneratedAudio(await requestAudioGeneration(generationConfig, effectivePrompt, { signal: controller.signal }), generationConfig.audioFormat);
+                        const audio = await storeGeneratedAudio(await requestAudioGeneration(generationConfig, effectivePrompt, { signal: controller.signal, clientTaskId: audioId }), generationConfig.audioFormat);
                         commitNodes((prev) => prev.map((node) => (node.id === audioId ? { ...node, metadata: { ...node.metadata, ...audioMetadata(audio), prompt: effectivePrompt, ...buildAudioGenerationMetadata(generationConfig) } } : node)));
                     } finally {
                         finishGenerationRequest(audioId, controller);
@@ -2807,7 +2809,7 @@ function InfiniteCanvasPage() {
                                         ),
                                     );
                                 },
-                                { signal: controller.signal },
+                                { signal: controller.signal, clientTaskId: textId },
                             );
                             const content = answer || streamed;
                             commitNodes((prev) =>
@@ -2952,7 +2954,7 @@ function InfiniteCanvasPage() {
                             streamed = text;
                             commitNodes((prev) => prev.map((item) => (item.id === node.id ? { ...item, type: CanvasNodeType.Text, metadata: { ...item.metadata, content: text, status: NODE_STATUS_LOADING } } : item)));
                         },
-                        { signal: controller.signal },
+                        { signal: controller.signal, clientTaskId: node.metadata?.primaryTextId || node.id },
                     );
                     commitNodes((prev) => prev.map((item) => (item.id === node.id ? { ...item, type: CanvasNodeType.Text, metadata: { ...item.metadata, content: answer || streamed, prompt, status: NODE_STATUS_SUCCESS } } : item)));
                     return;
@@ -2969,7 +2971,7 @@ function InfiniteCanvasPage() {
                     return;
                 }
                 if (node.type === CanvasNodeType.Audio) {
-                    const audio = await storeGeneratedAudio(await requestAudioGeneration(generationConfig, prompt, { signal: controller.signal }), generationConfig.audioFormat);
+                    const audio = await storeGeneratedAudio(await requestAudioGeneration(generationConfig, prompt, { signal: controller.signal, clientTaskId: node.id }), generationConfig.audioFormat);
                     commitNodes((prev) => prev.map((item) => (item.id === node.id ? { ...item, metadata: { ...item.metadata, ...audioMetadata(audio), prompt, ...buildAudioGenerationMetadata(generationConfig) } } : item)));
                     return;
                 }

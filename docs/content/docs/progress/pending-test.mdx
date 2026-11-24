@@ -7,6 +7,9 @@ description: Implemented changes that still need manual verification
 
 The current release needs manual verification in these areas:
 
+- 文本 / 视频 / 音频生成刷新或退登重登不中断恢复：
+  - 在画布中发起文本对话生成、视频生成或音频生成，在返回结果前立即刷新页面或点击退出登录后重新登录回到画布；
+  - 验证节点保持生成中（不再误报「页面刷新后生成已中断」），待后台完成后自动回填文本内容、继续轮询并展示生成的视频或恢复音频文件。
 - 全新 PostgreSQL 空库自动建表与首次管理员引导：使用 Docker 一体化镜像连接全新的空 PostgreSQL 数据库启动后，服务应自动完成全部 17 张表及索引创建；打开注册页应正常提示「首个注册账号将自动成为管理员」，提交注册不再报 `relation "system_settings" does not exist` 且第一个注册用户自动成为管理员。
 - 系统设置「公告管理」与顶部铃铛通知：
   - 在 `/admin` 左侧导航中，「公告管理」已移至「系统设置 -> 公告管理」（旧路径 `/admin?tab=announcements` 自动映射跳转），包含「全局公告（通知）」与「时间线通知（时间线）」两块配置；

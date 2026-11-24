@@ -258,9 +258,10 @@ export default function VideoPage() {
         setPreviewLog(null);
         setResults([{ id: nanoid(), status: "pending" }]);
         const batchStartedAt = performance.now();
+        const clientTaskId = nanoid();
         setStartedAt(batchStartedAt);
         try {
-            const task = await createVideoGenerationTask(snapshot.config, snapshot.text, snapshot.references);
+            const task = await createVideoGenerationTask(snapshot.config, snapshot.text, snapshot.references, { clientTaskId });
             const log = buildLog({ prompt: snapshot.text, model, config: snapshot.config, references: snapshot.references, durationMs: 0, status: "pending", task });
             await saveLog(log, false);
             void pollGenerationLog(log, snapshot.config, agentTaskId);

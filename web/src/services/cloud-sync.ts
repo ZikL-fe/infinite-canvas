@@ -30,6 +30,7 @@ let syncInFlight: Promise<void> | null = null;
 let syncQueued = false;
 let runtimeSyncInFlight: Promise<boolean> | null = null;
 const projectSaveTimers = new Map<string, ReturnType<typeof setTimeout>>();
+const pendingProjectsToSync = new Map<string, CanvasProject>();
 const deletedProjectIds = new Set<string>();
 const cloudDeletedProjectIds = new Set<string>();
 const cloudDeletedAssetIds = new Set<string>();
@@ -370,13 +371,30 @@ export async function syncCloudWorkspace() {
 }
 
 function scheduleProjectSync(project: CanvasProject) {
+    pendingProjectsToSync.set(project.id, project);
     const existingTimer = projectSaveTimers.get(project.id);
     if (existingTimer) clearTimeout(existingTimer);
     const timer = setTimeout(() => {
         projectSaveTimers.delete(project.id);
+        pendingProjectsToSync.delete(project.id);
         void pushProjectToCloud(project).catch((err) => console.warn("[cloud-sync] 同步画布失败:", err));
     }, PROJECT_SYNC_DEBOUNCE_MS);
     projectSaveTimers.set(project.id, timer);
+}
+
+/** 立即冲刷待推送的画布变更（用于退出登录前避免 800ms 防抖丢失最新节点）。 */
+export async function flushPendingCanvasSyncs() {
+    for (const timer of projectSaveTimers.values()) {
+        clearTimeout(timer);
+    }
+    projectSaveTimers.clear();
+    if (!pendingProjectsToSync.size || !isCloudAuthenticated()) {
+        pendingProjectsToSync.clear();
+        return;
+    }
+    const items = Array.from(pendingProjectsToSync.values());
+    pendingProjectsToSync.clear();
+    await Promise.allSettled(items.map((project) => pushProjectToCloud(project)));
 }
 
 export function initCloudSyncListeners() {

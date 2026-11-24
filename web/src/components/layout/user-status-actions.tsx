@@ -13,6 +13,7 @@ import { formatStoragePair } from "@/lib/image-utils";
 import { canvasThemes } from "@/lib/canvas-theme";
 import { MyWalletPanel } from "@/pages/admin/user-panels";
 import { authApi } from "@/services/api/server";
+import { flushPendingCanvasSyncs } from "@/services/cloud-sync";
 import { useConfigStore } from "@/stores/use-config-store";
 import { useThemeStore } from "@/stores/use-theme-store";
 import { useUserStore } from "@/stores/use-user-store";
@@ -74,7 +75,9 @@ export function UserStatusActions({ showConfig = true, variant = "default", onOp
                   icon: <LogOut className="size-4" />,
                   label: t("topNav.logout"),
                   onClick: () => {
-                      void authApi.logout().finally(() => clearSession());
+                      void flushPendingCanvasSyncs()
+                          .catch(() => undefined)
+                          .finally(() => authApi.logout().finally(() => clearSession()));
                   },
               },
           ]

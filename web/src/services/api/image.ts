@@ -478,7 +478,11 @@ function consumeResponseStreamText(state: ResponseStreamState, text: string, onD
 async function requestStreamingResponse(config: AiConfig, body: Record<string, unknown>, onDelta?: (text: string) => void, options?: RequestOptions): Promise<ToolResponseResult> {
     const response = await fetchAiWithRefresh(aiApiUrl(config, "/responses"), {
         method: "POST",
-        headers: { ...aiHeaders(config, "application/json"), Accept: "text/event-stream" },
+        headers: {
+            ...aiHeaders(config, "application/json"),
+            Accept: "text/event-stream",
+            ...(options?.clientTaskId ? { "X-Client-Task-Id": options.clientTaskId } : {}),
+        },
         body: JSON.stringify({ ...body, stream: true }),
         signal: options?.signal,
     });
@@ -585,7 +589,10 @@ function toGeminiToolOptions(tools: ResponseFunctionTool[], toolChoice: ToolChoi
 async function requestGeminiStreamingResponse(config: AiConfig, body: Record<string, unknown>, onDelta?: (text: string) => void, options?: RequestOptions): Promise<ToolResponseResult> {
     const response = await fetchAiWithRefresh(`${geminiApiUrl(config, "streamGenerateContent")}?alt=sse`, {
         method: "POST",
-        headers: geminiHeaders(config),
+        headers: {
+            ...geminiHeaders(config),
+            ...(options?.clientTaskId ? { "X-Client-Task-Id": options.clientTaskId } : {}),
+        },
         body: JSON.stringify(body),
         signal: options?.signal,
     });
