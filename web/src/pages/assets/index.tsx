@@ -272,12 +272,20 @@ export default function AssetsPage() {
                                                 />
                                             </div>
                                             {expired ? (
-                                                <Tag color="red" className="m-0">
-                                                    配额已过期，请联系管理员续期
+                                                <Tag
+                                                    color="red"
+                                                    className="m-0 cursor-pointer"
+                                                    onClick={() => navigate(user.role === "admin" ? "/admin?tab=my-media" : "/console?tab=my-media")}
+                                                >
+                                                    配额已过期，去兑换扩容
                                                 </Tag>
                                             ) : exceeded ? (
-                                                <Tag color="red" className="m-0">
-                                                    配额不足，请联系管理员扩容
+                                                <Tag
+                                                    color="red"
+                                                    className="m-0 cursor-pointer"
+                                                    onClick={() => navigate(user.role === "admin" ? "/admin?tab=my-media" : "/console?tab=my-media")}
+                                                >
+                                                    配额不足，去兑换扩容
                                                 </Tag>
                                             ) : null}
                                             <Button

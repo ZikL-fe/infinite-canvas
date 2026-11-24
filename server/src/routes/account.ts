@@ -8,6 +8,7 @@ import { announcements, canvasProjects, db, mediaObjects, userAssets, userSessio
 import { getWalletBalance, queryConsumptionMetrics } from "../lib/billing.ts";
 import { hashPassword, sha256Hex, verifyPassword } from "../lib/crypto.ts";
 import { getPlatformWebdavConfig, resolveEffectiveUserWebdav } from "../lib/settings.ts";
+import { getUserStorageQuotaSummary, serializeStorageGrant } from "../lib/storage-quota.ts";
 import { requireAuth, type AppEnv } from "../middleware/auth.ts";
 
 const updateProfileSchema = z.object({
@@ -35,17 +36,13 @@ accountRoutes.get("/overview", async (c) => {
   const authUser = c.get("user");
   const days = Number(c.req.query("days") || 7);
 
-  const [creditBalance, consumption, announcementList, userRow, [projectStats], [assetStats]] = await Promise.all([
+  const [creditBalance, consumption, announcementList, [projectStats], [assetStats]] = await Promise.all([
     getWalletBalance(authUser.id),
     queryConsumptionMetrics(days, authUser.id),
     db.query.announcements.findMany({
       where: eq(announcements.isPublished, true),
       orderBy: [desc(announcements.isPinned), desc(announcements.createdAt)],
       limit: 10,
-    }),
-    db.query.users.findFirst({
-      where: eq(users.id, authUser.id),
-      columns: { storageUsedBytes: true, storageQuotaBytes: true, storageQuotaExpiresAt: true },
     }),
     db
       .select({ count: count() })
@@ -59,9 +56,9 @@ accountRoutes.get("/overview", async (c) => {
 
   return c.json({
     creditBalance,
-    storageUsedBytes: userRow?.storageUsedBytes ?? 0,
-    storageQuotaBytes: userRow?.storageQuotaBytes ?? 0,
-    storageQuotaExpiresAt: userRow?.storageQuotaExpiresAt ? userRow.storageQuotaExpiresAt.toISOString() : null,
+    storageUsedBytes: authUser.storageUsedBytes ?? 0,
+    storageQuotaBytes: authUser.storageQuotaBytes ?? 0,
+    storageQuotaExpiresAt: authUser.storageQuotaExpiresAt ? authUser.storageQuotaExpiresAt.toISOString() : null,
     canvasProjectCount: Number(projectStats?.count ?? 0),
     assetCount: Number(assetStats?.count ?? 0),
     ...consumption,
@@ -98,6 +95,7 @@ accountRoutes.get("/profile", async (c) => {
     return c.json({ error: "账号不存在" }, 404);
   }
 
+  const quotaSummary = await getUserStorageQuotaSummary(userRow);
   const effectiveWebdav = authUser.role === "admin" ? resolveEffectiveUserWebdav(platformWebdav, userRow.webdavConfig) : null;
 
   return c.json({
@@ -110,11 +108,17 @@ accountRoutes.get("/profile", async (c) => {
       role: userRow.role,
       status: userRow.status,
       storageUsedBytes: userRow.storageUsedBytes,
-      storageQuotaBytes: userRow.storageQuotaBytes ?? 0,
-      storageQuotaExpiresAt: userRow.storageQuotaExpiresAt ? userRow.storageQuotaExpiresAt.toISOString() : null,
+      storageQuotaBytes: quotaSummary.storageQuotaBytes,
+      storageQuotaExpiresAt: quotaSummary.storageQuotaExpiresAt ? quotaSummary.storageQuotaExpiresAt.toISOString() : null,
       creditBalance,
       lastLoginAt: userRow.lastLoginAt,
       createdAt: userRow.createdAt,
+    },
+    storageQuotaDetail: {
+      baseQuotaBytes: quotaSummary.baseStorageQuotaBytes,
+      baseExpiresAt: quotaSummary.baseStorageQuotaExpiresAt ? quotaSummary.baseStorageQuotaExpiresAt.toISOString() : null,
+      grantsQuotaBytes: quotaSummary.storageGrantsQuotaBytes,
+      grants: quotaSummary.grants.map((grant) => serializeStorageGrant(grant)),
     },
     stats: {
       canvasProjectCount: Number(projectStats?.count ?? 0),
@@ -167,7 +171,10 @@ accountRoutes.patch("/profile", zValidator("json", updateProfileSchema), async (
     .where(eq(users.id, authUser.id))
     .returning();
 
-  const creditBalance = await getWalletBalance(authUser.id);
+  const [creditBalance, quotaSummary] = await Promise.all([
+    getWalletBalance(authUser.id),
+    getUserStorageQuotaSummary(updated),
+  ]);
 
   return c.json({
     user: {
@@ -179,8 +186,8 @@ accountRoutes.patch("/profile", zValidator("json", updateProfileSchema), async (
       role: updated.role,
       status: updated.status,
       storageUsedBytes: updated.storageUsedBytes,
-      storageQuotaBytes: updated.storageQuotaBytes ?? 0,
-      storageQuotaExpiresAt: updated.storageQuotaExpiresAt ? updated.storageQuotaExpiresAt.toISOString() : null,
+      storageQuotaBytes: quotaSummary.storageQuotaBytes,
+      storageQuotaExpiresAt: quotaSummary.storageQuotaExpiresAt ? quotaSummary.storageQuotaExpiresAt.toISOString() : null,
       creditBalance,
       lastLoginAt: updated.lastLoginAt,
       createdAt: updated.createdAt,

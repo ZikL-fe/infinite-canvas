@@ -5,6 +5,7 @@ import { nanoid } from "nanoid";
 import { db, mediaObjects, users, type MediaKind } from "../db/index.ts";
 import { createMediaReadUrl, putS3Object } from "./s3.ts";
 import { getS3StorageConfig } from "./settings.ts";
+import { getUserStorageQuotaSummary } from "./storage-quota.ts";
 
 export function checkStorageQuotaBlock(
   usedBytes: number,
@@ -139,14 +140,15 @@ export async function persistCloudMediaBuffer(params: {
 
   const userRow = await db.query.users.findFirst({
     where: eq(users.id, params.userId),
-    columns: { storageUsedBytes: true, storageQuotaBytes: true, storageQuotaExpiresAt: true },
+    columns: { id: true, storageUsedBytes: true, storageQuotaBytes: true, storageQuotaExpiresAt: true },
   });
   if (!userRow) return null;
 
+  const quotaSummary = await getUserStorageQuotaSummary(userRow);
   const block = checkStorageQuotaBlock(
     userRow.storageUsedBytes,
-    userRow.storageQuotaBytes,
-    userRow.storageQuotaExpiresAt,
+    quotaSummary.storageQuotaBytes,
+    quotaSummary.storageQuotaExpiresAt,
     params.buffer.byteLength,
   );
   if (block.blocked) return null;

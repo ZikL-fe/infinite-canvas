@@ -153,7 +153,32 @@ export type UserWebdavView = {
     expiresAt?: string | null;
 };
 
+export type StorageGrantItem = {
+    id: string;
+    quotaBytes: number;
+    durationDays: number | null;
+    expiresAt: string | null;
+    source: "redeem_code" | "admin_grant" | "plan_grant";
+    refId: string | null;
+    note: string;
+    status: "active" | "revoked";
+    isExpired: boolean;
+    isEffective: boolean;
+    createdAt: string;
+};
+
+export type StorageQuotaDetail = {
+    baseQuotaBytes: number;
+    baseExpiresAt: string | null;
+    grantsQuotaBytes: number;
+    grants: StorageGrantItem[];
+};
+
 export type AdminUserItem = LocalUser & {
+    baseStorageQuotaBytes?: number;
+    baseStorageQuotaExpiresAt?: string | null;
+    storageGrantsQuotaBytes?: number;
+    activeGrantCount?: number;
     webdavConfig?: UserWebdavView | null;
     mediaCount?: number;
     projectCount?: number;
@@ -191,10 +216,15 @@ export type CreditLedgerSummary = {
     recentRpm: number;
 };
 
+export type RedeemCodeKind = "credits" | "storage";
+
 export type RedeemCodeItem = {
     id: string;
     code: string;
+    kind: RedeemCodeKind;
     credits: number;
+    storageQuotaBytes: number;
+    storageDurationDays?: number | null;
     maxUses: number;
     usedCount: number;
     note: string;
@@ -323,6 +353,7 @@ export async function requestServer<T>(path: string, init: RequestInit = {}, aut
 
 export type AccountProfileResponse = {
     user: LocalUser & { lastLoginAt?: string | null; createdAt: string };
+    storageQuotaDetail?: StorageQuotaDetail;
     stats: {
         canvasProjectCount: number;
         assetCount: number;
@@ -442,6 +473,30 @@ export const storageApi = {
     },
     getUrls: (mediaIds: string[]) => requestServer<{ urls: Record<string, string> }>("/storage/urls", { method: "POST", body: JSON.stringify({ mediaIds }) }),
     remove: (mediaId: string) => requestServer<{ ok: boolean }>(`/storage/${encodeURIComponent(mediaId)}`, { method: "DELETE" }),
+    getGrants: () =>
+        requestServer<{
+            storageUsedBytes: number;
+            storageQuotaBytes: number;
+            storageQuotaExpiresAt: string | null;
+            baseQuotaBytes: number;
+            baseExpiresAt: string | null;
+            grantsQuotaBytes: number;
+            grants: StorageGrantItem[];
+        }>("/storage/grants"),
+    redeem: (code: string) =>
+        requestServer<{
+            ok: boolean;
+            kind: "storage";
+            storageBytesAdded: number;
+            storageDurationDays: number | null;
+            expiresAt: string | null;
+            storageQuotaBytes: number;
+            storageQuotaExpiresAt: string | null;
+            baseQuotaBytes: number;
+            baseExpiresAt: string | null;
+            grantsQuotaBytes: number;
+            grants: StorageGrantItem[];
+        }>("/storage/redeem", { method: "POST", body: JSON.stringify({ code }) }),
     /** 通过鉴权下载接口拉取文件 Blob 并触发本地保存，避免直接打开跨域 S3 预签名链接。 */
     async downloadFile(record: Pick<MediaItem, "id" | "objectKey" | "mimeType" | "kind">, filename?: string) {
         const blob = await storageApi.downloadBlob(record.id);
@@ -627,7 +682,30 @@ export const adminApi = {
     adjustUserCredits: (id: string, payload: { delta: number; note?: string }) =>
         requestServer<{ ok: boolean; balance: number }>(`/admin/users/${encodeURIComponent(id)}/credits`, { method: "POST", body: JSON.stringify(payload) }),
     updateUserStorageQuota: (id: string, payload: { storageQuotaBytes: number; storageQuotaExpiresAt?: string | null; recalculateUsedBytes?: boolean }) =>
-        requestServer<{ ok: boolean; storageQuotaBytes: number; storageQuotaExpiresAt: string | null; storageUsedBytes: number }>(`/admin/users/${encodeURIComponent(id)}/storage-quota`, { method: "PUT", body: JSON.stringify(payload) }),
+        requestServer<{
+            ok: boolean;
+            storageQuotaBytes: number;
+            storageQuotaExpiresAt: string | null;
+            baseStorageQuotaBytes: number;
+            baseStorageQuotaExpiresAt: string | null;
+            storageGrantsQuotaBytes: number;
+            storageUsedBytes: number;
+        }>(`/admin/users/${encodeURIComponent(id)}/storage-quota`, { method: "PUT", body: JSON.stringify(payload) }),
+    getUserStorageGrants: (id: string) =>
+        requestServer<{
+            storageUsedBytes: number;
+            storageQuotaBytes: number;
+            storageQuotaExpiresAt: string | null;
+            baseStorageQuotaBytes: number;
+            baseStorageQuotaExpiresAt: string | null;
+            storageGrantsQuotaBytes: number;
+            grants: StorageGrantItem[];
+        }>(`/admin/users/${encodeURIComponent(id)}/storage-grants`),
+    updateStorageGrantStatus: (grantId: string, status: "active" | "revoked") =>
+        requestServer<{ ok: boolean; grant: StorageGrantItem }>(`/admin/storage-grants/${encodeURIComponent(grantId)}`, {
+            method: "PATCH",
+            body: JSON.stringify({ status }),
+        }),
     getStorageSettings: () => requestServer<S3StorageSettingsResponse>("/admin/settings/storage"),
     saveStorageSettings: (payload: S3StorageConfigForm) =>
         requestServer<{ ok: boolean; secretAccessKeyPreview: string }>("/admin/settings/storage", { method: "PUT", body: JSON.stringify(payload) }),
@@ -686,16 +764,28 @@ export const adminApi = {
     },
     deleteWorkspaceData: (kind: "canvas" | "image_workbench" | "video_workbench", id: string) =>
         requestServer<{ ok: boolean; deletedMediaCount?: number }>(`/admin/workspace-data/${encodeURIComponent(kind)}/${encodeURIComponent(id)}`, { method: "DELETE" }),
-    listRedeemCodes: (params?: { q?: string; status?: string; page?: number; pageSize?: number }) => {
+    listRedeemCodes: (params?: { q?: string; status?: string; kind?: RedeemCodeKind | ""; page?: number; pageSize?: number }) => {
         const query = new URLSearchParams();
         if (params?.q) query.set("q", params.q);
         if (params?.status) query.set("status", params.status);
+        if (params?.kind) query.set("kind", params.kind);
         if (params?.page) query.set("page", String(params.page));
         if (params?.pageSize) query.set("pageSize", String(params.pageSize));
         const suffix = query.size ? `?${query.toString()}` : "";
         return requestServer<{ items: RedeemCodeItem[]; total: number; page: number; pageSize: number }>(`/admin/redeem-codes${suffix}`);
     },
-    createRedeemCodes: (payload: { count: number; credits: number; maxUses: number; prefix?: string; customCode?: string; expiresAt?: string | null; note?: string }) =>
+    createRedeemCodes: (payload: {
+        kind: RedeemCodeKind;
+        count: number;
+        credits?: number;
+        storageQuotaBytes?: number;
+        storageDurationDays?: number | null;
+        maxUses: number;
+        prefix?: string;
+        customCode?: string;
+        expiresAt?: string | null;
+        note?: string;
+    }) =>
         requestServer<{ items: RedeemCodeItem[] }>("/admin/redeem-codes", { method: "POST", body: JSON.stringify(payload) }),
     updateRedeemCode: (id: string, payload: { status: "active" | "disabled" }) =>
         requestServer<{ item: RedeemCodeItem }>(`/admin/redeem-codes/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(payload) }),

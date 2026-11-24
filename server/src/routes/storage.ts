@@ -5,10 +5,11 @@ import { Hono } from "hono";
 import { nanoid } from "nanoid";
 import { z } from "zod";
 
-import { canvasProjects, creditLedger, db, mediaObjects, userAssets, users, workbenchLogs, type MediaKind } from "../db/index.ts";
+import { canvasProjects, creditLedger, db, mediaObjects, userAssets, userStorageGrants, users, workbenchLogs, type MediaKind } from "../db/index.ts";
 import { env } from "../env.ts";
 import { buildThumbnailObjectKey, checkStorageQuotaBlock } from "../lib/ai-media-persist.ts";
 import { collectUserMediaReferences, type MediaSourceModule } from "../lib/media-cleanup.ts";
+import { claimRedeemCodeInTx } from "../lib/redeem.ts";
 import {
   createMediaReadUrl,
   createPresignedUploadUrl,
@@ -18,6 +19,7 @@ import {
   putS3Object,
 } from "../lib/s3.ts";
 import { getPlatformWebdavConfig, getS3StorageConfig, resolveEffectiveUserWebdav } from "../lib/settings.ts";
+import { getUserStorageQuotaSummary, serializeStorageGrant } from "../lib/storage-quota.ts";
 import { uploadFileToWebdav } from "../lib/webdav.ts";
 import { requireAuth, type AppEnv } from "../middleware/auth.ts";
 
@@ -57,6 +59,10 @@ const batchUrlsSchema = z.object({
   mediaIds: z.array(z.string().min(1)).max(100),
 });
 
+const storageRedeemSchema = z.object({
+  code: z.string().trim().min(1, "请输入云端存储兑换码").max(64),
+});
+
 function inferExtension(filename: string | undefined, mimeType: string) {
   const fromName = filename?.split(".").pop()?.toLowerCase().replace(/[^a-z0-9]/g, "");
   if (fromName && fromName.length <= 10) return `.${fromName}`;
@@ -92,6 +98,81 @@ function inferKindFromMime(mimeType: string, fallback: MediaKind = "file"): Medi
 export const storageRoutes = new Hono<AppEnv>();
 
 storageRoutes.use("*", requireAuth);
+
+storageRoutes.get("/grants", async (c) => {
+  const user = c.get("user");
+  const summary = await getUserStorageQuotaSummary({
+    id: user.id,
+    storageQuotaBytes: user.baseStorageQuotaBytes,
+    storageQuotaExpiresAt: user.baseStorageQuotaExpiresAt,
+  });
+  return c.json({
+    storageUsedBytes: user.storageUsedBytes,
+    storageQuotaBytes: summary.storageQuotaBytes,
+    storageQuotaExpiresAt: summary.storageQuotaExpiresAt ? summary.storageQuotaExpiresAt.toISOString() : null,
+    baseQuotaBytes: summary.baseStorageQuotaBytes,
+    baseExpiresAt: summary.baseStorageQuotaExpiresAt ? summary.baseStorageQuotaExpiresAt.toISOString() : null,
+    grantsQuotaBytes: summary.storageGrantsQuotaBytes,
+    grants: summary.grants.map((grant) => serializeStorageGrant(grant)),
+  });
+});
+
+storageRoutes.post("/redeem", zValidator("json", storageRedeemSchema), async (c) => {
+  const user = c.get("user");
+  const code = c.req.valid("json").code;
+
+  const result = await db.transaction(async (tx) => {
+    const claimed = await claimRedeemCodeInTx(tx, {
+      code,
+      userId: user.id,
+      expectedKind: "storage",
+    });
+    if ("error" in claimed) return claimed;
+
+    const { codeRow } = claimed;
+    await tx.insert(userStorageGrants).values({
+      id: nanoid(),
+      userId: user.id,
+      quotaBytes: codeRow.storageQuotaBytes,
+      durationDays: codeRow.storageDurationDays,
+      expiresAt: codeRow.storageExpiresAt,
+      source: "redeem_code",
+      refId: codeRow.code,
+      codeId: codeRow.id,
+      note: codeRow.note,
+      status: "active",
+    });
+
+    const summary = await getUserStorageQuotaSummary(
+      {
+        id: user.id,
+        storageQuotaBytes: user.baseStorageQuotaBytes,
+        storageQuotaExpiresAt: user.baseStorageQuotaExpiresAt,
+      },
+      tx,
+    );
+
+    return {
+      ok: true as const,
+      kind: "storage" as const,
+      storageBytesAdded: codeRow.storageQuotaBytes,
+      storageDurationDays: codeRow.storageDurationDays,
+      expiresAt: codeRow.storageExpiresAt ? codeRow.storageExpiresAt.toISOString() : null,
+      storageQuotaBytes: summary.storageQuotaBytes,
+      storageQuotaExpiresAt: summary.storageQuotaExpiresAt ? summary.storageQuotaExpiresAt.toISOString() : null,
+      baseQuotaBytes: summary.baseStorageQuotaBytes,
+      baseExpiresAt: summary.baseStorageQuotaExpiresAt ? summary.baseStorageQuotaExpiresAt.toISOString() : null,
+      grantsQuotaBytes: summary.storageGrantsQuotaBytes,
+      grants: summary.grants.map((grant) => serializeStorageGrant(grant)),
+    };
+  });
+
+  if ("error" in result) {
+    return c.json({ error: result.error }, result.status);
+  }
+
+  return c.json(result);
+});
 
 storageRoutes.post("/presign-upload", zValidator("json", presignUploadSchema), async (c) => {
   const config = await getS3StorageConfig();

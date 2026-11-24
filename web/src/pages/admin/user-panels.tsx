@@ -32,6 +32,7 @@ import {
     type DailyTrendItem,
     type MediaItem,
     type MediaSourceModule,
+    type StorageGrantItem,
     type TopModelUsageItem,
 } from "@/services/api/server";
 import { useUserStore } from "@/stores/use-user-store";
@@ -1836,6 +1837,11 @@ export function MyMediaPanel() {
     const [usedBytes, setUsedBytes] = useState(user?.storageUsedBytes ?? 0);
     const [quotaBytes, setQuotaBytes] = useState(user?.storageQuotaBytes ?? 0);
     const [quotaExpiresAt, setQuotaExpiresAt] = useState<string | null>(user?.storageQuotaExpiresAt ?? null);
+    const [baseQuotaBytes, setBaseQuotaBytes] = useState(0);
+    const [baseQuotaExpiresAt, setBaseQuotaExpiresAt] = useState<string | null>(null);
+    const [storageGrants, setStorageGrants] = useState<StorageGrantItem[]>([]);
+    const [storageRedeemCode, setStorageRedeemCode] = useState("");
+    const [redeemingStorage, setRedeemingStorage] = useState(false);
     const [workspaceStats, setWorkspaceStats] = useState({ canvasProjects: 0, imageLogs: 0, videoLogs: 0, assets: 0 });
     const [cloudProjects, setCloudProjects] = useState<Array<{ id: string; title: string; nodes?: unknown[]; mediaCount?: number; mediaBytes?: number; dataBytes?: number; updatedAt: string }>>([]);
     const [cloudImageLogs, setCloudImageLogs] = useState<Array<{ id: string; title?: string; prompt?: string; model?: string; status?: string; mediaCount?: number; mediaBytes?: number; dataBytes?: number; createdAt?: number }>>([]);
@@ -1858,6 +1864,9 @@ export function MyMediaPanel() {
             setUsedBytes(profileRes.user.storageUsedBytes);
             setQuotaBytes(profileRes.user.storageQuotaBytes ?? 0);
             setQuotaExpiresAt(profileRes.user.storageQuotaExpiresAt ?? null);
+            setBaseQuotaBytes(profileRes.storageQuotaDetail?.baseQuotaBytes ?? 0);
+            setBaseQuotaExpiresAt(profileRes.storageQuotaDetail?.baseExpiresAt ?? null);
+            setStorageGrants(profileRes.storageQuotaDetail?.grants ?? []);
             setUser(profileRes.user);
         } catch (error) {
             message.error(error instanceof Error ? error.message : "加载媒体列表失败");
@@ -2003,9 +2012,43 @@ export function MyMediaPanel() {
         }
     };
 
+    const handleRedeemStorage = async () => {
+        const code = storageRedeemCode.trim();
+        if (!code) {
+            message.warning("请输入云端存储兑换码");
+            return;
+        }
+        setRedeemingStorage(true);
+        try {
+            const res = await storageApi.redeem(code);
+            message.success(
+                `兑换成功！新增 ${formatBytes(res.storageBytesAdded)}（${res.storageDurationDays ? `有效期 ${res.storageDurationDays} 天` : "永久有效"}），当前总配额 ${formatBytes(res.storageQuotaBytes)}`,
+            );
+            setStorageRedeemCode("");
+            setQuotaBytes(res.storageQuotaBytes);
+            setQuotaExpiresAt(res.storageQuotaExpiresAt);
+            setBaseQuotaBytes(res.baseQuotaBytes);
+            setBaseQuotaExpiresAt(res.baseExpiresAt);
+            setStorageGrants(res.grants);
+            const latestUser = useUserStore.getState().user;
+            if (latestUser) {
+                setUser({
+                    ...latestUser,
+                    storageQuotaBytes: res.storageQuotaBytes,
+                    storageQuotaExpiresAt: res.storageQuotaExpiresAt,
+                });
+            }
+        } catch (error) {
+            message.error(error instanceof Error ? error.message : "兑换失败");
+        } finally {
+            setRedeemingStorage(false);
+        }
+    };
+
     const quotaExpired = Boolean(quotaExpiresAt && new Date(quotaExpiresAt).getTime() <= Date.now());
     const quotaExceeded = quotaExpired || quotaBytes <= 0 || usedBytes >= quotaBytes;
     const quotaPercent = quotaBytes > 0 ? Math.min(100, Math.round((usedBytes / quotaBytes) * 100)) : 100;
+    const baseQuotaExpired = Boolean(baseQuotaExpiresAt && new Date(baseQuotaExpiresAt).getTime() <= Date.now());
 
     return (
         <div className="flex flex-col gap-5">
@@ -2013,15 +2056,66 @@ export function MyMediaPanel() {
                 title={`我的云端存储配额（已用 ${formatBytes(usedBytes)} / 总配额 ${formatBytes(quotaBytes)}${quotaExpiresAt ? ` · 有效期至 ${new Date(quotaExpiresAt).toLocaleString("zh-CN")}` : " · 不限期"}）`}
                 extra={
                     quotaExpired ? (
-                        <Tag color="red">配额已过期，请联系管理员续期</Tag>
+                        <Tag color="red">配额已过期，请兑换扩容或联系管理员续期</Tag>
                     ) : quotaExceeded ? (
-                        <Tag color="red">配额不足，请删除闲置媒体或联系管理员扩容</Tag>
+                        <Tag color="red">配额不足，请删除闲置媒体或兑换扩容</Tag>
                     ) : (
                         <Tag color="green">剩余可用 {formatBytes(Math.max(0, quotaBytes - usedBytes))}</Tag>
                     )
                 }
             >
-                <Progress percent={quotaPercent} status={quotaExceeded ? "exception" : "active"} />
+                <div className="flex flex-col gap-3">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                        <div className="min-w-[220px] flex-1">
+                            <Progress percent={quotaPercent} status={quotaExceeded ? "exception" : "active"} />
+                        </div>
+                        <Space.Compact style={{ width: 340 }}>
+                            <Input
+                                value={storageRedeemCode}
+                                placeholder="输入云端存储兑换码，如 ST-XXXX-XXXX-XXXX"
+                                onChange={(e) => setStorageRedeemCode(e.target.value)}
+                                onPressEnter={() => void handleRedeemStorage()}
+                            />
+                            <Button type="primary" icon={<Gift className="size-4" />} loading={redeemingStorage} onClick={() => void handleRedeemStorage()}>
+                                兑换扩容
+                            </Button>
+                        </Space.Compact>
+                    </div>
+
+                    {baseQuotaBytes > 0 || storageGrants.length > 0 ? (
+                        <div className="flex flex-wrap items-center gap-2 pt-1 text-xs">
+                            <Typography.Text type="secondary">配额明细（资源包各自独立计算到期时间，到期后自动回落）：</Typography.Text>
+                            {baseQuotaBytes > 0 ? (
+                                <Tag color={baseQuotaExpired ? "default" : "blue"} style={{ marginInlineEnd: 0 }}>
+                                    基础配额 {formatBytes(baseQuotaBytes)} ·{" "}
+                                    {baseQuotaExpiresAt
+                                        ? baseQuotaExpired
+                                            ? "已过期"
+                                            : `至 ${new Date(baseQuotaExpiresAt).toLocaleDateString("zh-CN")}`
+                                        : "永久"}
+                                </Tag>
+                            ) : null}
+                            {storageGrants.map((grant) => (
+                                <Tag
+                                    key={grant.id}
+                                    color={grant.isEffective ? "cyan" : "default"}
+                                    style={{ marginInlineEnd: 0 }}
+                                >
+                                    +{formatBytes(grant.quotaBytes)}
+                                    {grant.refId ? ` (${grant.refId})` : ""}
+                                    {" · "}
+                                    {grant.status === "revoked"
+                                        ? "已停用"
+                                        : grant.expiresAt
+                                          ? grant.isExpired
+                                              ? "已过期"
+                                              : `至 ${new Date(grant.expiresAt).toLocaleDateString("zh-CN")}`
+                                          : "永久"}
+                                </Tag>
+                            ))}
+                        </div>
+                    ) : null}
+                </div>
             </Card>
 
             <Card>

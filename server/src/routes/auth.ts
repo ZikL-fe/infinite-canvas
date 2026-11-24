@@ -11,6 +11,7 @@ import { getWalletBalance } from "../lib/billing.ts";
 import { generateRandomToken, hashPassword, sha256Hex, verifyPassword } from "../lib/crypto.ts";
 import { signAccessToken } from "../lib/jwt.ts";
 import { getAuthPolicy, getPlatformWebdavConfig } from "../lib/settings.ts";
+import { getUserStorageQuotaSummary } from "../lib/storage-quota.ts";
 import { requireAuth, type AppEnv } from "../middleware/auth.ts";
 
 const registerSchema = z.object({
@@ -169,8 +170,22 @@ authRoutes.post("/login", zValidator("json", loginSchema), async (c) => {
   }
 
   await db.update(users).set({ lastLoginAt: new Date(), updatedAt: new Date() }).where(eq(users.id, user.id));
-  const [tokens, creditBalance] = await Promise.all([createSessionTokens(user.id, user.role, c), getWalletBalance(user.id)]);
-  return c.json({ user: { ...sanitizeUser(user), creditBalance }, ...tokens });
+  const [tokens, creditBalance, quotaSummary] = await Promise.all([
+    createSessionTokens(user.id, user.role, c),
+    getWalletBalance(user.id),
+    getUserStorageQuotaSummary(user),
+  ]);
+  return c.json({
+    user: {
+      ...sanitizeUser({
+        ...user,
+        storageQuotaBytes: quotaSummary.storageQuotaBytes,
+        storageQuotaExpiresAt: quotaSummary.storageQuotaExpiresAt,
+      }),
+      creditBalance,
+    },
+    ...tokens,
+  });
 });
 
 authRoutes.post("/refresh", zValidator("json", refreshSchema), async (c) => {
@@ -200,9 +215,16 @@ authRoutes.post("/refresh", zValidator("json", refreshSchema), async (c) => {
     .set({ refreshTokenHash: sha256Hex(nextRefreshToken), expiresAt: nextExpiresAt })
     .where(eq(userSessions.id, session.id));
 
-  const accessToken = await signAccessToken(user.id, user.role);
+  const [accessToken, quotaSummary] = await Promise.all([
+    signAccessToken(user.id, user.role),
+    getUserStorageQuotaSummary(user),
+  ]);
   return c.json({
-    user: sanitizeUser(user),
+    user: sanitizeUser({
+      ...user,
+      storageQuotaBytes: quotaSummary.storageQuotaBytes,
+      storageQuotaExpiresAt: quotaSummary.storageQuotaExpiresAt,
+    }),
     accessToken,
     refreshToken: nextRefreshToken,
   });

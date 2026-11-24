@@ -19,8 +19,10 @@ import {
     type AnnouncementItem,
     type MediaItem,
     type RedeemCodeItem,
+    type RedeemCodeKind,
     type S3Provider,
     type S3StorageConfigForm,
+    type StorageGrantItem,
     type WorkspaceDataItem,
 } from "@/services/api/server";
 import { notifyCloudWorkspaceChanged, WORKSPACE_CHANGED_EVENT } from "@/services/cloud-media";
@@ -83,8 +85,11 @@ type UserStorageQuotaForm = {
 };
 
 type CreateRedeemForm = {
+    kind: RedeemCodeKind;
     count: number;
     credits: number;
+    storageQuotaMb: number;
+    storageDurationDays: number | null;
     maxUses: number;
     prefix: string;
     customCode: string;
@@ -164,6 +169,9 @@ export default function AdminPage() {
     const [storageQuotaUser, setStorageQuotaUser] = useState<AdminUserItem | null>(null);
     const [userStorageQuotaForm] = Form.useForm<UserStorageQuotaForm>();
     const [userStorageQuotaSaving, setUserStorageQuotaSaving] = useState(false);
+    const [storageQuotaGrants, setStorageQuotaGrants] = useState<StorageGrantItem[]>([]);
+    const [storageQuotaGrantsLoading, setStorageQuotaGrantsLoading] = useState(false);
+    const [updatingGrantId, setUpdatingGrantId] = useState<string | null>(null);
 
     const [storageForm] = Form.useForm<S3StorageConfigForm>();
     const [storagePreview, setStoragePreview] = useState("");
@@ -210,12 +218,14 @@ export default function AdminPage() {
     const [redeemPage, setRedeemPage] = useState(1);
     const [redeemQuery, setRedeemQuery] = useState("");
     const [redeemStatusFilter, setRedeemStatusFilter] = useState("");
+    const [redeemKindFilter, setRedeemKindFilter] = useState<RedeemCodeKind | "">("");
     const [redeemLoading, setRedeemLoading] = useState(false);
     const [createRedeemOpen, setCreateRedeemOpen] = useState(false);
     const [createRedeemForm] = Form.useForm<CreateRedeemForm>();
     const [creatingRedeem, setCreatingRedeem] = useState(false);
     const [generatedCodes, setGeneratedCodes] = useState<string[]>([]);
     const redeemCountWatch = Form.useWatch("count", createRedeemForm) ?? 1;
+    const redeemKindWatch = Form.useWatch("kind", createRedeemForm) ?? "credits";
 
     const [announcements, setAnnouncements] = useState<AnnouncementItem[]>([]);
     const [announcementsLoading, setAnnouncementsLoading] = useState(false);
@@ -341,10 +351,10 @@ export default function AdminPage() {
     }, [message, webdavForm]);
 
     const loadRedeemCodes = useCallback(
-        async (page = redeemPage, q = redeemQuery, status = redeemStatusFilter) => {
+        async (page = redeemPage, q = redeemQuery, status = redeemStatusFilter, kind = redeemKindFilter) => {
             setRedeemLoading(true);
             try {
-                const res = await adminApi.listRedeemCodes({ page, pageSize: 15, q, status });
+                const res = await adminApi.listRedeemCodes({ page, pageSize: 15, q, status, kind });
                 setRedeemItems(res.items);
                 setRedeemTotal(res.total);
             } catch (error) {
@@ -353,7 +363,7 @@ export default function AdminPage() {
                 setRedeemLoading(false);
             }
         },
-        [message, redeemPage, redeemQuery, redeemStatusFilter],
+        [message, redeemKindFilter, redeemPage, redeemQuery, redeemStatusFilter],
     );
 
     const loadAnnouncements = useCallback(async () => {
@@ -414,8 +424,8 @@ export default function AdminPage() {
 
     useEffect(() => {
         if (!isAdmin || activeTab !== "redeem-codes") return;
-        void loadRedeemCodes(redeemPage, redeemQuery, redeemStatusFilter);
-    }, [activeTab, isAdmin, loadRedeemCodes, redeemPage, redeemQuery, redeemStatusFilter]);
+        void loadRedeemCodes(redeemPage, redeemQuery, redeemStatusFilter, redeemKindFilter);
+    }, [activeTab, isAdmin, loadRedeemCodes, redeemKindFilter, redeemPage, redeemQuery, redeemStatusFilter]);
 
     useEffect(() => {
         if (!isAdmin || activeTab !== "announcements") return;
@@ -619,14 +629,54 @@ export default function AdminPage() {
         userCreditForm.setFieldsValue({ mode: "add", amount: 100, note: "" });
     };
 
+    const loadUserStorageGrants = async (userId: string) => {
+        setStorageQuotaGrantsLoading(true);
+        try {
+            const res = await adminApi.getUserStorageGrants(userId);
+            setStorageQuotaGrants(res.grants);
+        } catch (error) {
+            message.error(error instanceof Error ? error.message : "加载存储资源包失败");
+        } finally {
+            setStorageQuotaGrantsLoading(false);
+        }
+    };
+
     const openConfigStorageQuota = (record: AdminUserItem) => {
         setStorageQuotaUser(record);
-        const quotaBytes = record.storageQuotaBytes ?? 0;
+        setStorageQuotaGrants([]);
+        const baseQuotaBytes = record.baseStorageQuotaBytes ?? record.storageQuotaBytes ?? 0;
+        const baseExpiresAt = record.baseStorageQuotaExpiresAt !== undefined ? record.baseStorageQuotaExpiresAt : record.storageQuotaExpiresAt;
         userStorageQuotaForm.setFieldsValue({
-            quotaMb: quotaBytes > 0 ? Math.round((quotaBytes / (1024 * 1024)) * 100) / 100 : 0,
-            expiresAt: record.storageQuotaExpiresAt ? dayjs(record.storageQuotaExpiresAt) : null,
+            quotaMb: baseQuotaBytes > 0 ? Math.round((baseQuotaBytes / (1024 * 1024)) * 100) / 100 : 0,
+            expiresAt: baseExpiresAt ? dayjs(baseExpiresAt) : null,
             recalculateUsedBytes: false,
         });
+        void loadUserStorageGrants(record.id);
+    };
+
+    const handleToggleStorageGrant = async (grant: StorageGrantItem) => {
+        if (!storageQuotaUser) return;
+        setUpdatingGrantId(grant.id);
+        try {
+            const nextStatus = grant.status === "active" ? "revoked" : "active";
+            await adminApi.updateStorageGrantStatus(grant.id, nextStatus);
+            message.success(nextStatus === "revoked" ? "已停用该存储资源包" : "已恢复该存储资源包");
+            await loadUserStorageGrants(storageQuotaUser.id);
+            void loadUsers();
+            if (storageQuotaUser.id === user.id) {
+                const refreshed = await adminApi.getUserStorageGrants(storageQuotaUser.id);
+                useUserStore.getState().setUser({
+                    ...user,
+                    storageQuotaBytes: refreshed.storageQuotaBytes,
+                    storageQuotaExpiresAt: refreshed.storageQuotaExpiresAt,
+                    storageUsedBytes: refreshed.storageUsedBytes,
+                });
+            }
+        } catch (error) {
+            message.error(error instanceof Error ? error.message : "更新资源包状态失败");
+        } finally {
+            setUpdatingGrantId(null);
+        }
     };
 
     const handleSaveUserStorageQuota = async (values: UserStorageQuotaForm) => {
@@ -683,11 +733,21 @@ export default function AdminPage() {
     const handleCreateRedeemCodes = async (values: CreateRedeemForm) => {
         setCreatingRedeem(true);
         try {
+            const kind = values.kind || "credits";
             const res = await adminApi.createRedeemCodes({
+                kind,
                 count: Number(values.count || 1),
-                credits: Number(values.credits),
+                ...(kind === "credits"
+                    ? { credits: Number(values.credits) }
+                    : {
+                          storageQuotaBytes: Math.round(Number(values.storageQuotaMb || 0) * 1024 * 1024),
+                          storageDurationDays:
+                              typeof values.storageDurationDays === "number" && values.storageDurationDays > 0
+                                  ? Math.round(values.storageDurationDays)
+                                  : null,
+                      }),
                 maxUses: Number(values.maxUses || 1),
-                prefix: values.prefix?.trim() || "IC",
+                prefix: values.prefix?.trim() || (kind === "storage" ? "ST" : "IC"),
                 customCode: values.count === 1 ? values.customCode?.trim() : undefined,
                 expiresAt: values.expiresAt ? values.expiresAt.toISOString() : null,
                 note: values.note?.trim() || "",
@@ -696,7 +756,7 @@ export default function AdminPage() {
             setCreateRedeemOpen(false);
             createRedeemForm.resetFields();
             message.success(`已生成 ${res.items.length} 个兑换码`);
-            void loadRedeemCodes(1, redeemQuery, redeemStatusFilter);
+            void loadRedeemCodes(1, redeemQuery, redeemStatusFilter, redeemKindFilter);
         } catch (error) {
             message.error(error instanceof Error ? error.message : "生成兑换码失败");
         } finally {
@@ -1442,6 +1502,7 @@ export default function AdminPage() {
                                                                 {record.storageQuotaExpiresAt
                                                                     ? `至 ${new Date(record.storageQuotaExpiresAt).toLocaleDateString("zh-CN")}`
                                                                     : "永久有效"}
+                                                                {record.activeGrantCount ? ` · ${record.activeGrantCount} 个资源包` : ""}
                                                             </Typography.Text>
                                                         </div>
                                                     );
@@ -1493,7 +1554,7 @@ export default function AdminPage() {
                             label: (
                                 <span className="inline-flex items-center gap-1.5">
                                     <Gift className="size-4" />
-                                    积分兑换码
+                                    兑换码管理
                                 </span>
                             ),
                             children: (
@@ -1519,9 +1580,22 @@ export default function AdminPage() {
                                     ) : null}
 
                                     <Card
-                                        title="积分兑换码管理"
+                                        title="兑换码管理（积分兑换码 / 云端存储兑换码）"
                                         extra={
                                             <Space wrap>
+                                                <Select
+                                                    value={redeemKindFilter}
+                                                    style={{ width: 135 }}
+                                                    onChange={(value) => {
+                                                        setRedeemPage(1);
+                                                        setRedeemKindFilter(value as RedeemCodeKind | "");
+                                                    }}
+                                                    options={[
+                                                        { value: "", label: "全部类型" },
+                                                        { value: "credits", label: "积分兑换码" },
+                                                        { value: "storage", label: "云端存储码" },
+                                                    ]}
+                                                />
                                                 <Select
                                                     value={redeemStatusFilter}
                                                     style={{ width: 115 }}
@@ -1548,7 +1622,19 @@ export default function AdminPage() {
                                                     type="primary"
                                                     icon={<Plus className="size-4" />}
                                                     onClick={() => {
-                                                        createRedeemForm.setFieldsValue({ count: 1, credits: 100, maxUses: 1, prefix: "IC", customCode: "", expiresAt: null, note: "" });
+                                                        const nextKind: RedeemCodeKind = redeemKindFilter === "storage" ? "storage" : "credits";
+                                                        createRedeemForm.setFieldsValue({
+                                                            kind: nextKind,
+                                                            count: 1,
+                                                            credits: 100,
+                                                            storageQuotaMb: 1024,
+                                                            storageDurationDays: 30,
+                                                            maxUses: 1,
+                                                            prefix: nextKind === "storage" ? "ST" : "IC",
+                                                            customCode: "",
+                                                            expiresAt: null,
+                                                            note: "",
+                                                        });
                                                         setCreateRedeemOpen(true);
                                                     }}
                                                 >
@@ -1582,10 +1668,25 @@ export default function AdminPage() {
                                                     ),
                                                 },
                                                 {
-                                                    title: "面值积分",
-                                                    dataIndex: "credits",
-                                                    width: 95,
-                                                    render: (credits: number) => <Tag color="gold">+{credits}</Tag>,
+                                                    title: "类型",
+                                                    dataIndex: "kind",
+                                                    width: 100,
+                                                    render: (kind?: RedeemCodeKind) =>
+                                                        kind === "storage" ? <Tag color="blue">云端存储</Tag> : <Tag color="gold">积分</Tag>,
+                                                },
+                                                {
+                                                    title: "兑换内容",
+                                                    key: "reward",
+                                                    width: 185,
+                                                    render: (_, record) =>
+                                                        record.kind === "storage" ? (
+                                                            <Tag color="cyan">
+                                                                +{formatBytes(record.storageQuotaBytes)}
+                                                                {record.storageDurationDays ? ` · ${record.storageDurationDays} 天` : " · 永久"}
+                                                            </Tag>
+                                                        ) : (
+                                                            <Tag color="gold">+{record.credits} 积分</Tag>
+                                                        ),
                                                 },
                                                 {
                                                     title: "已兑 / 上限",
@@ -2293,6 +2394,7 @@ export default function AdminPage() {
                         ? `配置 ${storageQuotaUser.displayName || storageQuotaUser.username} 的云端存储配额`
                         : "配置云端存储配额"
                 }
+                width={620}
                 onCancel={() => setStorageQuotaUser(null)}
                 onOk={() => userStorageQuotaForm.submit()}
                 confirmLoading={userStorageQuotaSaving}
@@ -2302,12 +2404,12 @@ export default function AdminPage() {
                         type="info"
                         showIcon
                         className="mb-4"
-                        message={`当前已用空间：${formatBytes(storageQuotaUser?.storageUsedBytes ?? 0)} / 当前配额：${formatBytes(storageQuotaUser?.storageQuotaBytes ?? 0)}`}
-                        description="新注册用户默认配额为 0 MB。当已用空间达到或超过配额时，画布生图、生图工作台及我的资产将提示用户扩容并停止上传到云端对象存储。"
+                        message={`已用 ${formatBytes(storageQuotaUser?.storageUsedBytes ?? 0)} / 当前有效总配额 ${formatBytes(storageQuotaUser?.storageQuotaBytes ?? 0)}`}
+                        description={`总配额 = 管理员基础配额（${formatBytes(storageQuotaUser?.baseStorageQuotaBytes ?? storageQuotaUser?.storageQuotaBytes ?? 0)}）+ 有效独立存储资源包（${formatBytes(storageQuotaUser?.storageGrantsQuotaBytes ?? 0)}）。资源包到期后将自动扣减并回落到剩余有效配额。`}
                     />
                     <Form.Item
                         name="quotaMb"
-                        label="云端对象存储配额上限（MB，设为 0 表示禁止上传云端）"
+                        label="管理员基础配额上限（MB，设为 0 则仅依赖存储资源包）"
                         rules={[{ required: true, message: "请输入配额大小（MB）" }]}
                     >
                         <InputNumber min={0} step={100} className="w-full" placeholder="例如：500（表示 500 MB）" />
@@ -2319,13 +2421,83 @@ export default function AdminPage() {
                             </Button>
                         ))}
                     </div>
-                    <Form.Item name="expiresAt" label="有效期限（可选，不填写则不限制时间）">
+                    <Form.Item name="expiresAt" label="基础配额有效期限（可选，不填写则不限制时间）">
                         <DatePicker showTime allowClear className="w-full" placeholder="不填写表示永久有效" />
                     </Form.Item>
                     <Form.Item name="recalculateUsedBytes" label="根据当前云端有效媒体重新核算已用空间" valuePropName="checked">
                         <Switch />
                     </Form.Item>
                 </Form>
+
+                <div className="mt-2 border-t pt-3" style={{ borderColor: token.colorBorderSecondary }}>
+                    <div className="mb-2 flex items-center justify-between">
+                        <Typography.Text strong className="text-xs">
+                            独立存储资源包记录（{storageQuotaGrants.length}）
+                        </Typography.Text>
+                        <Typography.Text type="secondary" className="text-xs">
+                            每个资源包独立计算过期时间
+                        </Typography.Text>
+                    </div>
+                    {storageQuotaGrantsLoading ? (
+                        <Typography.Text type="secondary" className="text-xs">
+                            正在加载资源包记录...
+                        </Typography.Text>
+                    ) : storageQuotaGrants.length ? (
+                        <div className="flex max-h-48 flex-col gap-2 overflow-y-auto pr-1">
+                            {storageQuotaGrants.map((grant) => (
+                                <div
+                                    key={grant.id}
+                                    className="flex items-center justify-between gap-2 rounded-lg border px-3 py-2 text-xs"
+                                    style={{ borderColor: token.colorBorderSecondary }}
+                                >
+                                    <div className="min-w-0 flex-1">
+                                        <div className="flex flex-wrap items-center gap-1.5">
+                                            <span className="font-medium">+{formatBytes(grant.quotaBytes)}</span>
+                                            {grant.status === "revoked" ? (
+                                                <Tag color="default" style={{ marginInlineEnd: 0 }}>
+                                                    已停用
+                                                </Tag>
+                                            ) : grant.isExpired ? (
+                                                <Tag color="red" style={{ marginInlineEnd: 0 }}>
+                                                    已过期
+                                                </Tag>
+                                            ) : (
+                                                <Tag color="green" style={{ marginInlineEnd: 0 }}>
+                                                    生效中
+                                                </Tag>
+                                            )}
+                                            {grant.refId ? (
+                                                <Typography.Text code className="text-[11px]">
+                                                    {grant.refId}
+                                                </Typography.Text>
+                                            ) : null}
+                                        </div>
+                                        <Typography.Text type="secondary" className="mt-0.5 block text-[11px]">
+                                            {grant.expiresAt
+                                                ? `到期：${new Date(grant.expiresAt).toLocaleString("zh-CN")}`
+                                                : "永久有效"}
+                                            {grant.durationDays ? `（${grant.durationDays} 天）` : ""}
+                                            {grant.note ? ` · ${grant.note}` : ""}
+                                        </Typography.Text>
+                                    </div>
+                                    <Button
+                                        size="small"
+                                        type="link"
+                                        danger={grant.status === "active"}
+                                        loading={updatingGrantId === grant.id}
+                                        onClick={() => void handleToggleStorageGrant(grant)}
+                                    >
+                                        {grant.status === "active" ? "停用" : "恢复"}
+                                    </Button>
+                                </div>
+                            ))}
+                        </div>
+                    ) : (
+                        <Typography.Text type="secondary" className="text-xs">
+                            暂无存储资源包兑换记录
+                        </Typography.Text>
+                    )}
+                </div>
             </Modal>
 
             <Modal
@@ -2357,23 +2529,74 @@ export default function AdminPage() {
 
             <Modal
                 open={createRedeemOpen}
-                title="批量生成积分兑换码"
+                title="批量生成兑换码"
                 onCancel={() => setCreateRedeemOpen(false)}
                 onOk={() => createRedeemForm.submit()}
                 confirmLoading={creatingRedeem}
             >
                 <Form form={createRedeemForm} layout="vertical" onFinish={handleCreateRedeemCodes}>
+                    <Form.Item name="kind" label="兑换码类型" rules={[{ required: true }]}>
+                        <Radio.Group
+                            optionType="button"
+                            buttonStyle="solid"
+                            onChange={(e) => {
+                                const nextKind = e.target.value as RedeemCodeKind;
+                                const currentPrefix = String(createRedeemForm.getFieldValue("prefix") || "").trim().toUpperCase();
+                                if (!currentPrefix || currentPrefix === "IC" || currentPrefix === "ST") {
+                                    createRedeemForm.setFieldValue("prefix", nextKind === "storage" ? "ST" : "IC");
+                                }
+                            }}
+                            options={[
+                                { label: "积分兑换码", value: "credits" },
+                                { label: "云端存储兑换码", value: "storage" },
+                            ]}
+                        />
+                    </Form.Item>
                     <Row gutter={12}>
                         <Col span={12}>
                             <Form.Item name="count" label="生成数量（1 ~ 100）" rules={[{ required: true, message: "请输入数量" }]}>
                                 <InputNumber className="w-full" min={1} max={100} />
                             </Form.Item>
                         </Col>
-                        <Col span={12}>
-                            <Form.Item name="credits" label="单个面值（积分）" rules={[{ required: true, message: "请输入积分面值" }]}>
-                                <InputNumber className="w-full" min={0.01} step={10} />
+                        {redeemKindWatch === "credits" ? (
+                            <Col span={12}>
+                                <Form.Item name="credits" label="单个面值（积分）" rules={[{ required: true, message: "请输入积分面值" }]}>
+                                    <InputNumber className="w-full" min={0.01} step={10} />
+                                </Form.Item>
+                            </Col>
+                        ) : (
+                            <Col span={12}>
+                                <Form.Item name="storageQuotaMb" label="存储容量（MB）" rules={[{ required: true, message: "请输入存储容量（MB）" }]}>
+                                    <InputNumber className="w-full" min={1} step={100} />
+                                </Form.Item>
+                            </Col>
+                        )}
+                    </Row>
+                    {redeemKindWatch === "storage" ? (
+                        <>
+                            <div className="mb-3 flex flex-wrap gap-1.5">
+                                {[100, 500, 1024, 5120, 10240].map((mb) => (
+                                    <Button key={mb} size="small" onClick={() => createRedeemForm.setFieldValue("storageQuotaMb", mb)}>
+                                        {mb >= 1024 ? `${mb / 1024} GB` : `${mb} MB`}
+                                    </Button>
+                                ))}
+                            </div>
+                            <Form.Item name="storageDurationDays" label="资源包有效天数（留空表示永久有效，到期后自动回落）">
+                                <InputNumber className="w-full" min={1} max={36500} placeholder="例如：30（留空为永久）" />
                             </Form.Item>
-                        </Col>
+                            <div className="mb-4 flex flex-wrap gap-1.5">
+                                {[7, 30, 90, 365].map((d) => (
+                                    <Button key={d} size="small" onClick={() => createRedeemForm.setFieldValue("storageDurationDays", d)}>
+                                        {d} 天
+                                    </Button>
+                                ))}
+                                <Button size="small" onClick={() => createRedeemForm.setFieldValue("storageDurationDays", null)}>
+                                    永久
+                                </Button>
+                            </div>
+                        </>
+                    ) : null}
+                    <Row gutter={12}>
                         <Col span={12}>
                             <Form.Item name="maxUses" label="单个码最多可被多少人兑换" rules={[{ required: true, message: "请输入可用次数" }]}>
                                 <InputNumber className="w-full" min={1} />
@@ -2381,16 +2604,16 @@ export default function AdminPage() {
                         </Col>
                         <Col span={12}>
                             <Form.Item name="prefix" label="兑换码前缀">
-                                <Input placeholder="IC" maxLength={16} />
+                                <Input placeholder={redeemKindWatch === "storage" ? "ST" : "IC"} maxLength={16} />
                             </Form.Item>
                         </Col>
                     </Row>
                     {redeemCountWatch === 1 ? (
                         <Form.Item name="customCode" label="自定义兑换码（可选，留空自动随机生成）">
-                            <Input placeholder="例如：VIP-2026-GIFT" maxLength={64} />
+                            <Input placeholder={redeemKindWatch === "storage" ? "例如：ST-2026-2GB" : "例如：VIP-2026-GIFT"} maxLength={64} />
                         </Form.Item>
                     ) : null}
-                    <Form.Item name="expiresAt" label="过期时间（可选，留空永不过期）">
+                    <Form.Item name="expiresAt" label="兑换码本身过期时间（可选，留空永不过期）">
                         <DatePicker showTime className="w-full" placeholder="选择过期时间" />
                     </Form.Item>
                     <Form.Item name="note" label="备注（可选）">

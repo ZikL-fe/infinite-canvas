@@ -3307,7 +3307,6 @@ function InfiniteCanvasPage() {
                     onOpenPlugins={() => setPluginManagerOpen(true)}
                     onUndo={undoCanvas}
                     onRedo={redoCanvas}
-                    agentOpen={agentPanelOpen}
                     compactAgentStatus={{ connected: localAgentConnected, enabled: localAgentEnabled, activity: localAgentActivity }}
                     onToggleAgent={toggleAgentPanel}
                 />

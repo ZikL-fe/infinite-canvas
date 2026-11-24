@@ -2,6 +2,7 @@
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 
+import { ensureSchemaReady } from "./db/index.ts";
 import { env } from "./env.ts";
 import { accountRoutes } from "./routes/account.ts";
 import { adminRoutes } from "./routes/admin.ts";
@@ -13,6 +14,8 @@ import { canvasRoutes } from "./routes/canvas.ts";
 import { runtimeRoutes } from "./routes/runtime.ts";
 import { storageRoutes } from "./routes/storage.ts";
 import { workbenchRoutes } from "./routes/workbench.ts";
+
+await ensureSchemaReady();
 
 const app = new Hono();
 

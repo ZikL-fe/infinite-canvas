@@ -197,10 +197,33 @@ export const aiBillingTasks = pgTable("ai_billing_tasks", {
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
+export type RedeemCodeKind = "credits" | "storage";
+export type StorageGrantSource = "redeem_code" | "admin_grant" | "plan_grant";
+export type StorageGrantStatus = "active" | "revoked";
+
+export const userStorageGrants = pgTable("user_storage_grants", {
+  id: text("id").primaryKey(),
+  userId: text("user_id")
+    .notNull()
+    .references(() => users.id, { onDelete: "cascade" }),
+  quotaBytes: bigint("quota_bytes", { mode: "number" }).notNull().default(0),
+  durationDays: integer("duration_days"),
+  expiresAt: timestamp("expires_at", { withTimezone: true }),
+  source: text("source").$type<StorageGrantSource>().notNull().default("redeem_code"),
+  refId: text("ref_id"),
+  codeId: text("code_id").references(() => redeemCodes.id, { onDelete: "set null" }),
+  note: text("note").notNull().default(""),
+  status: text("status").$type<StorageGrantStatus>().notNull().default("active"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
 export const redeemCodes = pgTable("redeem_codes", {
   id: text("id").primaryKey(),
   code: text("code").notNull().unique(),
-  credits: doublePrecision("credits").notNull(),
+  kind: text("kind").$type<RedeemCodeKind>().notNull().default("credits"),
+  credits: doublePrecision("credits").notNull().default(0),
+  storageQuotaBytes: bigint("storage_quota_bytes", { mode: "number" }).notNull().default(0),
+  storageDurationDays: integer("storage_duration_days"),
   maxUses: integer("max_uses").notNull().default(1),
   usedCount: integer("used_count").notNull().default(0),
   note: text("note").notNull().default(""),
@@ -220,7 +243,11 @@ export const redeemRecords = pgTable(
     userId: text("user_id")
       .notNull()
       .references(() => users.id, { onDelete: "cascade" }),
-    credits: doublePrecision("credits").notNull(),
+    kind: text("kind").$type<RedeemCodeKind>().notNull().default("credits"),
+    credits: doublePrecision("credits").notNull().default(0),
+    storageQuotaBytes: bigint("storage_quota_bytes", { mode: "number" }).notNull().default(0),
+    storageDurationDays: integer("storage_duration_days"),
+    storageExpiresAtAfter: timestamp("storage_expires_at_after", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [uniqueIndex("redeem_records_code_user_idx").on(table.codeId, table.userId)],

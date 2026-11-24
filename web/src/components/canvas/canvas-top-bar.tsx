@@ -1,9 +1,8 @@
 import { useEffect, useRef, useState } from "react";
-import { BookOpen, Bot, Download, Home, Images, Menu, PanelLeftClose, PanelLeftOpen, Plus, Redo2, Trash2, Undo2, Upload } from "lucide-react";
-import { Button, Dropdown, Modal, Tooltip } from "antd";
+import { BookOpen, Download, Home, Images, Keyboard, Menu, PanelLeftClose, PanelLeftOpen, Plus, Puzzle, Redo2, Trash2, Undo2, Upload } from "lucide-react";
+import { Dropdown, Modal, Tooltip } from "antd";
 import { useTranslation } from "react-i18next";
 
-import { UserStatusActions } from "@/components/layout/user-status-actions";
 import { canvasThemes } from "@/lib/canvas-theme";
 import { useCanvasSidePanelStore } from "@/stores/use-canvas-side-panel-store";
 import { useThemeStore } from "@/stores/use-theme-store";
@@ -28,7 +27,6 @@ export function CanvasTopBar({
     onOpenPlugins,
     onUndo,
     onRedo,
-    agentOpen,
     compactAgentStatus,
     onToggleAgent,
 }: {
@@ -50,7 +48,6 @@ export function CanvasTopBar({
     onOpenPlugins: () => void;
     onUndo: () => void;
     onRedo: () => void;
-    agentOpen: boolean;
     compactAgentStatus: { connected: boolean; enabled: boolean; activity: string };
     onToggleAgent: () => void;
 }) {
@@ -138,18 +135,29 @@ export function CanvasTopBar({
                     <CompactAgentStatus status={compactAgentStatus} onClick={onToggleAgent} />
                 </div>
 
-                <div className="pointer-events-auto flex items-center gap-1.5">
-                    <UserStatusActions variant="canvas" onOpenShortcuts={() => setShortcutsOpen(true)} onOpenPlugins={onOpenPlugins} />
-                    <span className="h-6 w-px" style={{ background: theme.toolbar.border }} />
-                    <Button
-                        type="text"
-                        className="!h-10 !rounded-xl !px-3 !font-medium"
-                        style={{ background: agentOpen ? theme.toolbar.activeBg : theme.toolbar.panel, color: theme.node.text, boxShadow: "0 10px 30px rgba(28,25,23,.10)" }}
-                        icon={<Bot className="size-4" />}
-                        onClick={onToggleAgent}
-                    >
-                        Agent
-                    </Button>
+                <div className="pointer-events-auto flex items-center gap-1">
+                    <Tooltip title={t("topNav.plugins")}>
+                        <button
+                            type="button"
+                            onClick={onOpenPlugins}
+                            aria-label={t("topNav.plugins")}
+                            className="grid size-7 place-items-center rounded-md transition hover:bg-black/5 dark:hover:bg-white/10"
+                            style={{ color: theme.node.text }}
+                        >
+                            <Puzzle className="size-4" />
+                        </button>
+                    </Tooltip>
+                    <Tooltip title={t("topNav.shortcuts")}>
+                        <button
+                            type="button"
+                            onClick={() => setShortcutsOpen(true)}
+                            aria-label={t("topNav.shortcuts")}
+                            className="grid size-7 place-items-center rounded-md transition hover:bg-black/5 dark:hover:bg-white/10"
+                            style={{ color: theme.node.text }}
+                        >
+                            <Keyboard className="size-4" />
+                        </button>
+                    </Tooltip>
                 </div>
             </div>
             <Modal title={t("canvas.shortcuts")} open={shortcutsOpen} onCancel={() => setShortcutsOpen(false)} footer={null} centered>

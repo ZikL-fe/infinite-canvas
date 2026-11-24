@@ -4,6 +4,7 @@ import type { MiddlewareHandler } from "hono";
 
 import { db, users, type UserRole, type UserStatus } from "../db/index.ts";
 import { verifyAccessToken } from "../lib/jwt.ts";
+import { getUserStorageQuotaSummary } from "../lib/storage-quota.ts";
 
 export type AuthUser = {
   id: string;
@@ -16,6 +17,8 @@ export type AuthUser = {
   storageUsedBytes: number;
   storageQuotaBytes: number;
   storageQuotaExpiresAt: Date | null;
+  baseStorageQuotaBytes: number;
+  baseStorageQuotaExpiresAt: Date | null;
   createdAt: Date;
 };
 
@@ -65,7 +68,14 @@ export const requireAuth: MiddlewareHandler<AppEnv> = async (c, next) => {
     return c.json({ error: "当前账号已被禁用，请联系管理员" }, 403);
   }
 
-  c.set("user", user);
+  const quotaSummary = await getUserStorageQuotaSummary(user);
+  c.set("user", {
+    ...user,
+    storageQuotaBytes: quotaSummary.storageQuotaBytes,
+    storageQuotaExpiresAt: quotaSummary.storageQuotaExpiresAt,
+    baseStorageQuotaBytes: quotaSummary.baseStorageQuotaBytes,
+    baseStorageQuotaExpiresAt: quotaSummary.baseStorageQuotaExpiresAt,
+  });
   await next();
 };
 

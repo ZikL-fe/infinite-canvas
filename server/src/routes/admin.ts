@@ -6,7 +6,7 @@ import { Hono } from "hono";
 import { nanoid } from "nanoid";
 import { z } from "zod";
 
-import { announcements, canvasProjects, creditWallets, db, mediaObjects, redeemCodes, userAssets, userSessions, users, workbenchLogs } from "../db/index.ts";
+import { announcements, canvasProjects, creditWallets, db, mediaObjects, redeemCodes, userAssets, userSessions, userStorageGrants, users, workbenchLogs } from "../db/index.ts";
 import { adjustWalletCredits, queryConsumptionMetrics, queryCreditLedger, roundCredits } from "../lib/billing.ts";
 import { maskSecret } from "../lib/crypto.ts";
 import {
@@ -30,6 +30,7 @@ import {
   type PlatformChannel,
   type S3StorageConfig,
 } from "../lib/settings.ts";
+import { getUserStorageQuotaSummary, getUsersStorageQuotaMap, serializeStorageGrant } from "../lib/storage-quota.ts";
 import { requireAdmin, requireAuth, type AppEnv } from "../middleware/auth.ts";
 
 const updateUserSchema = z.object({
@@ -98,14 +99,38 @@ const adjustCreditsSchema = z.object({
   note: z.string().trim().max(200).optional(),
 });
 
-const createRedeemCodesSchema = z.object({
-  count: z.number().int().min(1).max(100).default(1),
-  credits: z.number().positive("积分面值必须大于 0"),
-  maxUses: z.number().int().min(1).default(1),
-  prefix: z.string().trim().max(16).optional().default("IC"),
-  customCode: z.string().trim().max(64).optional(),
-  expiresAt: z.string().nullable().optional(),
-  note: z.string().trim().max(200).optional().default(""),
+const createRedeemCodesSchema = z
+  .object({
+    kind: z.enum(["credits", "storage"]).default("credits"),
+    count: z.number().int().min(1).max(100).default(1),
+    credits: z.number().nonnegative().optional().default(0),
+    storageQuotaBytes: z.number().int().nonnegative().optional().default(0),
+    storageDurationDays: z.number().int().positive().max(36500).nullable().optional(),
+    maxUses: z.number().int().min(1).default(1),
+    prefix: z.string().trim().max(16).optional(),
+    customCode: z.string().trim().max(64).optional(),
+    expiresAt: z.string().nullable().optional(),
+    note: z.string().trim().max(200).optional().default(""),
+  })
+  .superRefine((data, ctx) => {
+    if (data.kind === "credits" && (!Number.isFinite(data.credits) || data.credits <= 0)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["credits"],
+        message: "积分面值必须大于 0",
+      });
+    }
+    if (data.kind === "storage" && (!Number.isFinite(data.storageQuotaBytes) || data.storageQuotaBytes <= 0)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["storageQuotaBytes"],
+        message: "云端存储容量必须大于 0",
+      });
+    }
+  });
+
+const updateStorageGrantSchema = z.object({
+  status: z.enum(["active", "revoked"]),
 });
 
 const updateRedeemCodeSchema = z.object({
@@ -211,6 +236,7 @@ adminRoutes.get("/overview", async (c) => {
         role: users.role,
         storageUsedBytes: users.storageUsedBytes,
         storageQuotaBytes: users.storageQuotaBytes,
+        storageQuotaExpiresAt: users.storageQuotaExpiresAt,
       })
       .from(users)
       .orderBy(desc(users.storageUsedBytes), desc(users.createdAt))
@@ -223,6 +249,8 @@ adminRoutes.get("/overview", async (c) => {
       limit: 5,
     }),
   ]);
+
+  const topStorageQuotaMap = await getUsersStorageQuotaMap(topStorageUsers);
 
   return c.json({
     totalUsers: Number(userStats?.totalUsers ?? 0),
@@ -237,7 +265,14 @@ adminRoutes.get("/overview", async (c) => {
       count: Number(row.count),
       bytes: Number(row.bytes),
     })),
-    topStorageUsers,
+    topStorageUsers: topStorageUsers.map((row) => ({
+      id: row.id,
+      username: row.username,
+      displayName: row.displayName,
+      role: row.role,
+      storageUsedBytes: row.storageUsedBytes,
+      storageQuotaBytes: topStorageQuotaMap.get(row.id)?.storageQuotaBytes ?? row.storageQuotaBytes,
+    })),
     storageConfigured: Boolean(storageConfig),
     storageBucket: storageConfig?.bucket || "",
     storageProvider: storageConfig?.provider || "",
@@ -333,7 +368,7 @@ adminRoutes.get("/users", async (c) => {
   ]);
 
   const userIds = rows.map((row) => row.id);
-  const [mediaCounts, projectCounts, wallets] = userIds.length
+  const [mediaCounts, projectCounts, wallets, quotaMap] = userIds.length
     ? await Promise.all([
         db
           .select({ userId: mediaObjects.userId, count: count() })
@@ -349,33 +384,46 @@ adminRoutes.get("/users", async (c) => {
           .select({ userId: creditWallets.userId, balance: creditWallets.balance })
           .from(creditWallets)
           .where(inArray(creditWallets.userId, userIds)),
+        getUsersStorageQuotaMap(rows),
       ])
-    : [[], [], []];
+    : [[], [], [], new Map()];
 
   const mediaMap = new Map(mediaCounts.map((item) => [item.userId, Number(item.count)]));
   const projectMap = new Map(projectCounts.map((item) => [item.userId, Number(item.count)]));
   const walletMap = new Map(wallets.map((item) => [item.userId, roundCredits(item.balance)]));
 
   return c.json({
-    items: rows.map((row) => ({
-      ...row,
-      storageQuotaExpiresAt: row.storageQuotaExpiresAt ? row.storageQuotaExpiresAt.toISOString() : null,
-      webdavConfig: row.webdavConfig
-        ? {
-            enabled: row.webdavConfig.enabled,
-            url: row.webdavConfig.url || "",
-            username: row.webdavConfig.username || "",
-            directory: row.webdavConfig.directory || "",
-            hasPassword: Boolean(row.webdavConfig.password),
-            quotaBytes: typeof row.webdavConfig.quotaBytes === "number" && row.webdavConfig.quotaBytes > 0 ? row.webdavConfig.quotaBytes : null,
-            usedBytes: Math.max(0, Number(row.webdavConfig.usedBytes ?? 0)),
-            expiresAt: row.webdavConfig.expiresAt || null,
-          }
-        : null,
-      mediaCount: mediaMap.get(row.id) ?? 0,
-      projectCount: projectMap.get(row.id) ?? 0,
-      creditBalance: walletMap.get(row.id) ?? 0,
-    })),
+    items: rows.map((row) => {
+      const quota = quotaMap.get(row.id);
+      return {
+        ...row,
+        storageQuotaBytes: quota?.storageQuotaBytes ?? row.storageQuotaBytes,
+        storageQuotaExpiresAt: quota?.storageQuotaExpiresAt
+          ? quota.storageQuotaExpiresAt.toISOString()
+          : null,
+        baseStorageQuotaBytes: quota?.baseStorageQuotaBytes ?? row.storageQuotaBytes,
+        baseStorageQuotaExpiresAt: quota?.baseStorageQuotaExpiresAt
+          ? quota.baseStorageQuotaExpiresAt.toISOString()
+          : null,
+        storageGrantsQuotaBytes: quota?.storageGrantsQuotaBytes ?? 0,
+        activeGrantCount: quota?.activeGrantCount ?? 0,
+        webdavConfig: row.webdavConfig
+          ? {
+              enabled: row.webdavConfig.enabled,
+              url: row.webdavConfig.url || "",
+              username: row.webdavConfig.username || "",
+              directory: row.webdavConfig.directory || "",
+              hasPassword: Boolean(row.webdavConfig.password),
+              quotaBytes: typeof row.webdavConfig.quotaBytes === "number" && row.webdavConfig.quotaBytes > 0 ? row.webdavConfig.quotaBytes : null,
+              usedBytes: Math.max(0, Number(row.webdavConfig.usedBytes ?? 0)),
+              expiresAt: row.webdavConfig.expiresAt || null,
+            }
+          : null,
+        mediaCount: mediaMap.get(row.id) ?? 0,
+        projectCount: projectMap.get(row.id) ?? 0,
+        creditBalance: walletMap.get(row.id) ?? 0,
+      };
+    }),
     total: Number(total),
     page,
     pageSize,
@@ -423,28 +471,73 @@ adminRoutes.put("/users/:id/storage-quota", zValidator("json", userStorageQuotaS
     storageUsedBytes = Number(mediaSum?.bytes ?? 0);
   }
 
-  const storageQuotaBytes = Math.max(0, Math.round(body.storageQuotaBytes));
+  const baseQuotaBytes = Math.max(0, Math.round(body.storageQuotaBytes));
   await db
     .update(users)
     .set({
-      storageQuotaBytes,
+      storageQuotaBytes: baseQuotaBytes,
       storageQuotaExpiresAt: parsedExpiresAt,
       storageUsedBytes,
       updatedAt: new Date(),
     })
     .where(eq(users.id, targetId));
 
+  const summary = await getUserStorageQuotaSummary({
+    id: targetId,
+    storageQuotaBytes: baseQuotaBytes,
+    storageQuotaExpiresAt: parsedExpiresAt,
+  });
+
   return c.json({
     ok: true,
-    storageQuotaBytes,
-    storageQuotaExpiresAt: parsedExpiresAt ? parsedExpiresAt.toISOString() : null,
+    storageQuotaBytes: summary.storageQuotaBytes,
+    storageQuotaExpiresAt: summary.storageQuotaExpiresAt ? summary.storageQuotaExpiresAt.toISOString() : null,
+    baseStorageQuotaBytes: summary.baseStorageQuotaBytes,
+    baseStorageQuotaExpiresAt: summary.baseStorageQuotaExpiresAt ? summary.baseStorageQuotaExpiresAt.toISOString() : null,
+    storageGrantsQuotaBytes: summary.storageGrantsQuotaBytes,
     storageUsedBytes,
   });
+});
+
+adminRoutes.get("/users/:id/storage-grants", async (c) => {
+  const targetId = c.req.param("id");
+  const target = await db.query.users.findFirst({
+    where: eq(users.id, targetId),
+    columns: { id: true, storageUsedBytes: true, storageQuotaBytes: true, storageQuotaExpiresAt: true },
+  });
+  if (!target) {
+    return c.json({ error: "用户不存在" }, 404);
+  }
+  const summary = await getUserStorageQuotaSummary(target);
+  return c.json({
+    storageUsedBytes: target.storageUsedBytes,
+    storageQuotaBytes: summary.storageQuotaBytes,
+    storageQuotaExpiresAt: summary.storageQuotaExpiresAt ? summary.storageQuotaExpiresAt.toISOString() : null,
+    baseStorageQuotaBytes: summary.baseStorageQuotaBytes,
+    baseStorageQuotaExpiresAt: summary.baseStorageQuotaExpiresAt ? summary.baseStorageQuotaExpiresAt.toISOString() : null,
+    storageGrantsQuotaBytes: summary.storageGrantsQuotaBytes,
+    grants: summary.grants.map((grant) => serializeStorageGrant(grant)),
+  });
+});
+
+adminRoutes.patch("/storage-grants/:grantId", zValidator("json", updateStorageGrantSchema), async (c) => {
+  const grantId = c.req.param("grantId");
+  const { status } = c.req.valid("json");
+  const [updated] = await db
+    .update(userStorageGrants)
+    .set({ status })
+    .where(eq(userStorageGrants.id, grantId))
+    .returning();
+  if (!updated) {
+    return c.json({ error: "存储资源包记录不存在" }, 404);
+  }
+  return c.json({ ok: true, grant: serializeStorageGrant(updated) });
 });
 
 adminRoutes.get("/redeem-codes", async (c) => {
   const q = c.req.query("q")?.trim() || "";
   const status = c.req.query("status")?.trim() || "";
+  const kind = c.req.query("kind")?.trim() || "";
   const page = Math.max(1, Number(c.req.query("page") || 1));
   const pageSize = Math.min(100, Math.max(1, Number(c.req.query("pageSize") || 20)));
   const offset = (page - 1) * pageSize;
@@ -456,6 +549,9 @@ adminRoutes.get("/redeem-codes", async (c) => {
   }
   if (status === "active" || status === "disabled") {
     filters.push(eq(redeemCodes.status, status));
+  }
+  if (kind === "credits" || kind === "storage") {
+    filters.push(eq(redeemCodes.kind, kind));
   }
   const whereClause = filters.length ? and(...filters) : undefined;
 
@@ -488,6 +584,15 @@ adminRoutes.post("/redeem-codes", zValidator("json", createRedeemCodesSchema), a
     }
   }
 
+  const defaultPrefix = body.kind === "storage" ? "ST" : "IC";
+  const prefix = body.prefix?.trim() || defaultPrefix;
+  const credits = body.kind === "credits" ? roundCredits(body.credits) : 0;
+  const storageQuotaBytes = body.kind === "storage" ? Math.round(body.storageQuotaBytes) : 0;
+  const storageDurationDays =
+    body.kind === "storage" && typeof body.storageDurationDays === "number" && body.storageDurationDays > 0
+      ? Math.round(body.storageDurationDays)
+      : null;
+
   // 批量生成随机兑换码时如遇极小概率碰撞，自动跳过已存在码并补齐剩余数量
   const remainingTarget = body.count;
   const created: (typeof redeemCodes.$inferSelect)[] = [];
@@ -495,8 +600,11 @@ adminRoutes.post("/redeem-codes", zValidator("json", createRedeemCodesSchema), a
     const needed = remainingTarget - created.length;
     const values = Array.from({ length: needed }, (_, idx) => ({
       id: nanoid(),
-      code: attempt === 0 && idx === 0 && custom ? custom : generateRedeemCodeString(body.prefix),
-      credits: roundCredits(body.credits),
+      code: attempt === 0 && idx === 0 && custom ? custom : generateRedeemCodeString(prefix),
+      kind: body.kind,
+      credits,
+      storageQuotaBytes,
+      storageDurationDays,
       maxUses: body.maxUses,
       usedCount: 0,
       note: body.note,
