@@ -23,6 +23,7 @@ import {
   hasNonZeroPricing,
   patchLedgerMeta,
   patchLedgerMetaByTaskId,
+  refundLedgerCharge,
   roundCredits,
   settleProcessingLedger,
 } from "../lib/billing.ts";
@@ -433,12 +434,13 @@ async function handleVideoPollTaskState(userId: string, taskId: string, payload:
       .where(and(eq(aiBillingTasks.id, task.id), eq(aiBillingTasks.status, "pending")))
       .returning();
     if (updated && updated.chargedCredits > 0) {
-      await adjustWalletCredits({
+      await refundLedgerCharge({
         userId,
-        delta: updated.chargedCredits,
-        reason: "refund",
+        taskId: task.taskId,
         refId: task.taskId,
-        meta: { model: task.model, taskStatus: "refunded", detail: "视频生成任务失败自动退回积分" },
+        refundAmount: updated.chargedCredits,
+        markFailed: true,
+        metaPatch: { refundDetail: "视频生成任务失败自动退回积分" },
       });
     }
   } else if (nextStatus === "completed") {
@@ -737,22 +739,29 @@ aiRoutes.all("/proxy/:channelId/*", async (c) => {
     const errorMessage = isTimeout
       ? `上游请求超时（超过 ${Math.round(upstreamTimeoutMs / 1000)} 秒）`
       : truncateErrorText(error instanceof Error ? error.message : String(error || "上游连接失败")) || "上游连接失败";
-    if (preChargedLedgerId) {
+    const failureMetaPatch: Record<string, unknown> = {
+      durationMs: elapsedMs,
+      upstreamMs: elapsedMs,
+      errorMessage,
+      ...(clientAborted ? { clientAborted: true } : {}),
+    };
+    if (preCharged > 0) {
+      await refundLedgerCharge({
+        userId: user.id,
+        ledgerId: preChargedLedgerId || undefined,
+        refundAmount: preCharged,
+        markFailed: true,
+        metaPatch: {
+          ...failureMetaPatch,
+          model: modelName,
+          refundDetail: isTimeout ? "上游请求超时自动退回" : "上游连接失败自动退回",
+        },
+      }).catch(() => undefined);
+    } else if (preChargedLedgerId) {
       await patchLedgerMeta(preChargedLedgerId, {
         taskStatus: "failed",
-        durationMs: elapsedMs,
-        upstreamMs: elapsedMs,
-        errorMessage,
-        ...(clientAborted ? { clientAborted: true } : {}),
+        ...failureMetaPatch,
       }).catch(() => undefined);
-    }
-    if (preCharged > 0) {
-      await adjustWalletCredits({
-        userId: user.id,
-        delta: preCharged,
-        reason: "refund",
-        meta: { model: modelName, taskStatus: "refunded", detail: isTimeout ? "上游请求超时自动退回" : "上游连接失败自动退回", errorMessage },
-      });
     }
     if (isTimeout) {
       return c.json({ error: errorMessage, message: errorMessage }, 504);
@@ -802,23 +811,30 @@ aiRoutes.all("/proxy/:channelId/*", async (c) => {
     const elapsedMs = Math.max(1, Date.now() - startedAt);
     const errorText = await upstream.text().catch(() => "");
     const errorMessage = extractUpstreamErrorMessage(errorText, upstream.status);
-    if (preChargedLedgerId) {
+    const failureMetaPatch: Record<string, unknown> = {
+      durationMs: elapsedMs,
+      upstreamMs: elapsedMs,
+      errorStatus: upstream.status,
+      errorMessage,
+      ...(clientAborted ? { clientAborted: true } : {}),
+    };
+    if (preCharged > 0) {
+      await refundLedgerCharge({
+        userId: user.id,
+        ledgerId: preChargedLedgerId || undefined,
+        refundAmount: preCharged,
+        markFailed: true,
+        metaPatch: {
+          ...failureMetaPatch,
+          model: modelName,
+          refundDetail: "请求失败自动退回",
+        },
+      }).catch(() => undefined);
+    } else if (preChargedLedgerId) {
       await patchLedgerMeta(preChargedLedgerId, {
         taskStatus: "failed",
-        durationMs: elapsedMs,
-        upstreamMs: elapsedMs,
-        errorStatus: upstream.status,
-        errorMessage,
-        ...(clientAborted ? { clientAborted: true } : {}),
+        ...failureMetaPatch,
       }).catch(() => undefined);
-    }
-    if (preCharged > 0) {
-      await adjustWalletCredits({
-        userId: user.id,
-        delta: preCharged,
-        reason: "refund",
-        meta: { model: modelName, status: upstream.status, taskStatus: "refunded", detail: "请求失败自动退回", errorStatus: upstream.status, errorMessage },
-      });
     }
     return new Response(errorText, { status: upstream.status, headers: responseHeaders });
   }
@@ -835,47 +851,36 @@ aiRoutes.all("/proxy/:channelId/*", async (c) => {
       const upstreamMs = Math.max(1, Date.now() - startedAt);
       let imageTaskStatus: "completed" | "failed" = "completed";
       let errorMessage = "";
+      let refundAmount = 0;
+      let refundDetail = "";
+      let actualReturnedCount: number | null = null;
       let savedMediaIds: string[] = [];
       let fetchImageMs = 0;
       let cloudSaveMs = 0;
       try {
         const parsed = JSON.parse(text);
         const actualCount = countReturnedImages(parsed);
+        actualReturnedCount = actualCount;
         const payloadError = extractErrorFromPayload(parsed);
         if (actualCount === null && payloadError) {
           imageTaskStatus = "failed";
           errorMessage = payloadError;
           if (preCharged > 0) {
-            await adjustWalletCredits({
-              userId: user.id,
-              delta: preCharged,
-              reason: "refund",
-              meta: { model: modelName, taskStatus: "refunded", detail: "上游返回错误信息自动退回", errorMessage },
-            });
+            refundAmount = preCharged;
+            refundDetail = "上游返回错误信息自动退回";
           }
         } else if (actualCount !== null && actualCount < requestedImageCount) {
           if (actualCount <= 0) {
             imageTaskStatus = "failed";
             errorMessage = payloadError || "上游未返回有效图片（返回数量为 0）";
           }
-          const refundAmount =
+          const partialRefund =
             actualCount <= 0
               ? preCharged
               : roundCredits((preCharged * (requestedImageCount - actualCount)) / requestedImageCount);
-          if (refundAmount > 0) {
-            await adjustWalletCredits({
-              userId: user.id,
-              delta: refundAmount,
-              reason: "refund",
-              meta: {
-                model: modelName,
-                requested: requestedImageCount,
-                actual: actualCount,
-                taskStatus: "refunded",
-                detail: "按实际出图数量退回差额",
-                ...(errorMessage ? { errorMessage } : {}),
-              },
-            });
+          if (partialRefund > 0) {
+            refundAmount = partialRefund;
+            refundDetail = actualCount <= 0 ? "未返回有效图片自动退回" : "按实际出图数量退回差额";
           }
         }
         const persisted = await persistGeneratedImagesFromPayload({
@@ -895,27 +900,34 @@ aiRoutes.all("/proxy/:channelId/*", async (c) => {
         imageTaskStatus = "failed";
         errorMessage = extractUpstreamErrorMessage(text) || (parseError instanceof Error ? parseError.message : "上游响应解析失败");
         if (preCharged > 0) {
-          await adjustWalletCredits({
-            userId: user.id,
-            delta: preCharged,
-            reason: "refund",
-            meta: { model: modelName, taskStatus: "refunded", detail: "上游响应解析失败自动退回", errorMessage },
-          });
+          refundAmount = preCharged;
+          refundDetail = "上游响应解析失败自动退回";
         }
       }
       c.req.raw.signal?.removeEventListener("abort", handleAbort);
-      if (preChargedLedgerId) {
-        await patchLedgerMeta(preChargedLedgerId, {
-          durationMs: Math.max(1, Date.now() - startedAt),
-          upstreamMs,
-          fetchImageMs,
-          cloudSaveMs,
-          isStream: false,
-          taskStatus: imageTaskStatus,
-          ...(errorMessage ? { errorMessage } : {}),
-          ...(clientAborted ? { clientAborted: true } : {}),
-          ...(savedMediaIds.length ? { mediaIds: savedMediaIds } : {}),
+      const imageMetaPatch: Record<string, unknown> = {
+        durationMs: Math.max(1, Date.now() - startedAt),
+        upstreamMs,
+        fetchImageMs,
+        cloudSaveMs,
+        isStream: false,
+        taskStatus: imageTaskStatus,
+        ...(actualReturnedCount !== null ? { requested: requestedImageCount, actual: actualReturnedCount } : {}),
+        ...(refundDetail ? { refundDetail } : {}),
+        ...(errorMessage ? { errorMessage } : {}),
+        ...(clientAborted ? { clientAborted: true } : {}),
+        ...(savedMediaIds.length ? { mediaIds: savedMediaIds } : {}),
+      };
+      if (refundAmount > 0) {
+        await refundLedgerCharge({
+          userId: user.id,
+          ledgerId: preChargedLedgerId || undefined,
+          refundAmount,
+          markFailed: imageTaskStatus === "failed",
+          metaPatch: imageMetaPatch,
         }).catch(() => undefined);
+      } else if (preChargedLedgerId) {
+        await patchLedgerMeta(preChargedLedgerId, imageMetaPatch).catch(() => undefined);
       }
       return new Response(text, { status: upstream.status, headers: responseHeaders });
     }
@@ -924,24 +936,31 @@ aiRoutes.all("/proxy/:channelId/*", async (c) => {
       c.req.raw.signal?.removeEventListener("abort", handleAbort);
       const upstreamMs = Math.max(1, Date.now() - startedAt);
       const errorMessage = extractUpstreamErrorMessage(textBody, upstream.status);
-      if (preChargedLedgerId) {
-        await patchLedgerMeta(preChargedLedgerId, {
-          durationMs: upstreamMs,
-          upstreamMs,
-          isStream: false,
-          taskStatus: "failed",
-          errorStatus: upstream.status,
-          errorMessage,
-          ...(clientAborted ? { clientAborted: true } : {}),
-        }).catch(() => undefined);
-      }
+      const failureMetaPatch: Record<string, unknown> = {
+        durationMs: upstreamMs,
+        upstreamMs,
+        isStream: false,
+        errorStatus: upstream.status,
+        errorMessage,
+        ...(clientAborted ? { clientAborted: true } : {}),
+      };
       if (preCharged > 0) {
-        await adjustWalletCredits({
+        await refundLedgerCharge({
           userId: user.id,
-          delta: preCharged,
-          reason: "refund",
-          meta: { model: modelName, status: upstream.status, taskStatus: "refunded", detail: "请求返回异常文本自动退回", errorStatus: upstream.status, errorMessage },
-        });
+          ledgerId: preChargedLedgerId || undefined,
+          refundAmount: preCharged,
+          markFailed: true,
+          metaPatch: {
+            ...failureMetaPatch,
+            model: modelName,
+            refundDetail: "请求返回异常文本自动退回",
+          },
+        }).catch(() => undefined);
+      } else if (preChargedLedgerId) {
+        await patchLedgerMeta(preChargedLedgerId, {
+          taskStatus: "failed",
+          ...failureMetaPatch,
+        }).catch(() => undefined);
       }
       return new Response(textBody, { status: upstream.status, headers: responseHeaders });
     }

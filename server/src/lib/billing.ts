@@ -265,6 +265,102 @@ export async function settleProcessingLedger(params: {
   return settled;
 }
 
+/** 退回指定消费账本的预扣积分：将退回金额、状态与说明原地合并到原请求账本中（找不到原账本时兜底写入 refund）。 */
+export async function refundLedgerCharge(params: {
+  userId: string;
+  ledgerId?: string;
+  taskId?: string;
+  refId?: string;
+  refundAmount: number;
+  markFailed?: boolean;
+  metaPatch?: Record<string, unknown>;
+}) {
+  const amount = Math.max(0, roundCredits(params.refundAmount));
+  if (amount <= 0) {
+    const balance = await getWalletBalance(params.userId);
+    return { balance, ledgerId: params.ledgerId ?? null };
+  }
+
+  return db.transaction(async (tx) => {
+    await tx.insert(creditWallets).values({ userId: params.userId, balance: 0 }).onConflictDoNothing();
+    const rows = await tx.execute(
+      sql`SELECT balance FROM credit_wallets WHERE user_id = ${params.userId} FOR UPDATE`,
+    );
+    const current = roundCredits(Number((rows[0] as { balance?: number } | undefined)?.balance ?? 0));
+    const nextBalance = roundCredits(current + amount);
+
+    await tx
+      .update(creditWallets)
+      .set({ balance: nextBalance, updatedAt: new Date() })
+      .where(eq(creditWallets.userId, params.userId));
+
+    const lookupKey = params.taskId?.trim() || params.refId?.trim() || "";
+    const existing = params.ledgerId
+      ? await tx.query.creditLedger.findFirst({ where: eq(creditLedger.id, params.ledgerId) })
+      : lookupKey
+        ? await tx.query.creditLedger.findFirst({
+            where: and(
+              eq(creditLedger.userId, params.userId),
+              inArray(creditLedger.reason, ["text_gen", "image_gen", "video_gen", "audio_gen"]),
+              or(eq(creditLedger.refId, lookupKey), sql`${creditLedger.meta}->>'taskId' = ${lookupKey}`),
+            ),
+            orderBy: [desc(creditLedger.createdAt)],
+          })
+        : undefined;
+
+    if (existing) {
+      const prevMeta = (existing.meta && typeof existing.meta === "object" ? existing.meta : {}) as Record<string, unknown>;
+      const prevCharged =
+        typeof prevMeta.chargedCredits === "number" && Number.isFinite(prevMeta.chargedCredits)
+          ? roundCredits(prevMeta.chargedCredits)
+          : roundCredits(Math.abs(Math.min(0, existing.delta)));
+      const prevRefunded =
+        typeof prevMeta.refundedCredits === "number" && Number.isFinite(prevMeta.refundedCredits)
+          ? roundCredits(prevMeta.refundedCredits)
+          : 0;
+      const nextRefunded = roundCredits(prevRefunded + amount);
+      const nextDelta = params.markFailed ? 0 : roundCredits(existing.delta + amount);
+      const mergedMeta: Record<string, unknown> = {
+        ...prevMeta,
+        ...(params.metaPatch ?? {}),
+        chargedCredits: prevCharged,
+        refundedCredits: nextRefunded,
+        refundedAt: new Date().toISOString(),
+        ...(params.markFailed ? { taskStatus: "failed_refunded" } : {}),
+      };
+
+      await tx
+        .update(creditLedger)
+        .set({
+          delta: nextDelta,
+          balanceAfter: nextBalance,
+          refId: existing.refId || params.refId || null,
+          meta: mergedMeta,
+        })
+        .where(eq(creditLedger.id, existing.id));
+
+      return { balance: nextBalance, ledgerId: existing.id };
+    }
+
+    const fallbackId = nanoid();
+    await tx.insert(creditLedger).values({
+      id: fallbackId,
+      userId: params.userId,
+      delta: amount,
+      balanceAfter: nextBalance,
+      reason: "refund",
+      refId: params.refId ?? null,
+      meta: {
+        ...(params.metaPatch ?? {}),
+        refundedCredits: amount,
+        refundedAt: new Date().toISOString(),
+        taskStatus: params.markFailed ? "failed_refunded" : "refunded",
+      },
+    });
+    return { balance: nextBalance, ledgerId: fallbackId };
+  });
+}
+
 /** 聚合指定周期（7/14/30 天）内的积分消耗总量、每日趋势与热门消耗模型排行。 */
 export async function queryConsumptionMetrics(daysInput: number, userId?: string) {
   const days = [7, 14, 30].includes(daysInput) ? daysInput : 7;
@@ -279,32 +375,32 @@ export async function queryConsumptionMetrics(daysInput: number, userId?: string
   const [totalsRows, dailyRows, modelRows] = await Promise.all([
     db.execute(sql`
       SELECT
-        GREATEST(0, COALESCE(SUM(CASE WHEN delta < 0 THEN -delta WHEN reason = 'refund' THEN -delta ELSE 0 END), 0))::double precision AS total_consumed,
-        GREATEST(0, COALESCE(SUM(CASE WHEN created_at >= ${todayStartIso}::timestamptz THEN (CASE WHEN delta < 0 THEN -delta WHEN reason = 'refund' THEN -delta ELSE 0 END) ELSE 0 END), 0))::double precision AS today_consumed,
-        GREATEST(0, COALESCE(SUM(CASE WHEN created_at >= ${rangeStartIso}::timestamptz THEN (CASE WHEN delta < 0 THEN -delta WHEN reason = 'refund' THEN -delta ELSE 0 END) ELSE 0 END), 0))::double precision AS range_consumed,
-        COUNT(*) FILTER (WHERE reason IN ('text_gen', 'image_gen', 'video_gen', 'audio_gen') AND created_at >= ${rangeStartIso}::timestamptz)::int AS range_calls
+        COALESCE(SUM(CASE WHEN delta < 0 AND COALESCE(meta->>'taskStatus', '') NOT IN ('failed', 'failed_refunded') THEN -delta ELSE 0 END), 0)::double precision AS total_consumed,
+        COALESCE(SUM(CASE WHEN created_at >= ${todayStartIso}::timestamptz AND delta < 0 AND COALESCE(meta->>'taskStatus', '') NOT IN ('failed', 'failed_refunded') THEN -delta ELSE 0 END), 0)::double precision AS today_consumed,
+        COALESCE(SUM(CASE WHEN created_at >= ${rangeStartIso}::timestamptz AND delta < 0 AND COALESCE(meta->>'taskStatus', '') NOT IN ('failed', 'failed_refunded') THEN -delta ELSE 0 END), 0)::double precision AS range_consumed,
+        COUNT(*) FILTER (WHERE created_at >= ${rangeStartIso}::timestamptz)::int AS range_calls
       FROM credit_ledger
-      WHERE 1 = 1 ${userFilter}
+      WHERE reason IN ('text_gen', 'image_gen', 'video_gen', 'audio_gen') ${userFilter}
     `),
     db.execute(sql`
       SELECT
         TO_CHAR((created_at AT TIME ZONE 'UTC') + (${localOffsetMinutes} * INTERVAL '1 minute'), 'YYYY-MM-DD') AS day,
-        GREATEST(0, COALESCE(SUM(-delta), 0))::double precision AS credits,
-        COUNT(*) FILTER (WHERE reason IN ('text_gen', 'image_gen', 'video_gen', 'audio_gen'))::int AS calls
+        COALESCE(SUM(CASE WHEN delta < 0 AND COALESCE(meta->>'taskStatus', '') NOT IN ('failed', 'failed_refunded') THEN -delta ELSE 0 END), 0)::double precision AS credits,
+        COUNT(*)::int AS calls
       FROM credit_ledger
-      WHERE reason IN ('text_gen', 'image_gen', 'video_gen', 'audio_gen', 'refund') AND created_at >= ${rangeStartIso}::timestamptz ${userFilter}
+      WHERE reason IN ('text_gen', 'image_gen', 'video_gen', 'audio_gen') AND created_at >= ${rangeStartIso}::timestamptz ${userFilter}
       GROUP BY 1
       ORDER BY 1 ASC
     `),
     db.execute(sql`
       SELECT
         COALESCE(NULLIF(meta->>'model', ''), reason) AS model,
-        GREATEST(0, COALESCE(SUM(-delta), 0))::double precision AS credits,
-        COUNT(*) FILTER (WHERE reason IN ('text_gen', 'image_gen', 'video_gen', 'audio_gen'))::int AS calls
+        COALESCE(SUM(CASE WHEN delta < 0 AND COALESCE(meta->>'taskStatus', '') NOT IN ('failed', 'failed_refunded') THEN -delta ELSE 0 END), 0)::double precision AS credits,
+        COUNT(*)::int AS calls
       FROM credit_ledger
-      WHERE reason IN ('text_gen', 'image_gen', 'video_gen', 'audio_gen', 'refund') AND created_at >= ${rangeStartIso}::timestamptz ${userFilter}
+      WHERE reason IN ('text_gen', 'image_gen', 'video_gen', 'audio_gen') AND created_at >= ${rangeStartIso}::timestamptz ${userFilter}
       GROUP BY 1
-      HAVING COUNT(*) FILTER (WHERE reason IN ('text_gen', 'image_gen', 'video_gen', 'audio_gen')) > 0
+      HAVING COUNT(*) > 0
       ORDER BY credits DESC, calls DESC
       LIMIT 8
     `),
@@ -352,7 +448,7 @@ export async function queryConsumptionMetrics(daysInput: number, userId?: string
   };
 }
 
-export const USAGE_LOG_REASONS = ["text_gen", "image_gen", "video_gen", "audio_gen", "refund"] as const;
+export const USAGE_LOG_REASONS = ["text_gen", "image_gen", "video_gen", "audio_gen"] as const;
 export const WALLET_RECHARGE_REASONS = ["redeem_code", "admin_adjust", "plan_grant"] as const;
 
 export type QueryCreditLedgerParams = {
@@ -404,11 +500,11 @@ export async function queryCreditLedger(params: QueryCreditLedgerParams) {
   }
 
   const taskStatus = params.taskStatus?.trim() || "";
-  if (taskStatus === "not_started" || taskStatus === "processing" || taskStatus === "failed") {
+  if (taskStatus === "not_started" || taskStatus === "processing" || taskStatus === "failed" || taskStatus === "failed_refunded") {
     filters.push(sql`${creditLedger.meta}->>'taskStatus' = ${taskStatus}`);
   } else if (taskStatus === "refunded") {
     filters.push(
-      sql`(${creditLedger.meta}->>'taskStatus' = 'refunded' OR (${creditLedger.meta}->>'taskStatus' IS NULL AND ${creditLedger.reason} = 'refund'))`,
+      sql`(${creditLedger.meta}->>'taskStatus' IN ('refunded', 'failed_refunded') OR COALESCE((${creditLedger.meta}->>'refundedCredits')::double precision, 0) > 0 OR (${creditLedger.meta}->>'taskStatus' IS NULL AND ${creditLedger.reason} = 'refund'))`,
     );
   } else if (taskStatus === "completed") {
     filters.push(
@@ -429,10 +525,7 @@ export async function queryCreditLedger(params: QueryCreditLedgerParams) {
   }
 
   const whereClause = filters.length ? and(...filters) : undefined;
-  const excludesRefundRows = Boolean((reason && reason !== "refund") || (taskStatus && taskStatus !== "refunded"));
-  const totalConsumedExpr = excludesRefundRows
-    ? sql<number>`COALESCE(SUM(CASE WHEN ${creditLedger.delta} < 0 AND COALESCE(${creditLedger.meta}->>'taskStatus', '') != 'failed' THEN -${creditLedger.delta} ELSE 0 END), 0)::double precision`
-    : sql<number>`GREATEST(0, COALESCE(SUM(CASE WHEN ${creditLedger.delta} < 0 THEN -${creditLedger.delta} WHEN ${creditLedger.reason} = 'refund' THEN -${creditLedger.delta} ELSE 0 END), 0))::double precision`;
+  const totalConsumedExpr = sql<number>`COALESCE(SUM(CASE WHEN ${creditLedger.reason} IN ('text_gen', 'image_gen', 'video_gen', 'audio_gen') AND ${creditLedger.delta} < 0 AND COALESCE(${creditLedger.meta}->>'taskStatus', '') NOT IN ('failed', 'failed_refunded') THEN -${creditLedger.delta} ELSE 0 END), 0)::double precision`;
 
   const [items, [{ total }], [summaryRow], peakRows] = await Promise.all([
     db
@@ -462,7 +555,7 @@ export async function queryCreditLedger(params: QueryCreditLedgerParams) {
     db
       .select({
         totalConsumed: totalConsumedExpr,
-        totalRecharged: sql<number>`COALESCE(SUM(CASE WHEN ${creditLedger.delta} > 0 THEN ${creditLedger.delta} ELSE 0 END), 0)::double precision`,
+        totalRecharged: sql<number>`COALESCE(SUM(CASE WHEN ${creditLedger.delta} > 0 THEN ${creditLedger.delta} ELSE COALESCE((${creditLedger.meta}->>'refundedCredits')::double precision, 0) END), 0)::double precision`,
         // 统计调用次数与用量时同时包含 0 积分调用（免费模型或极低消耗四舍五入为 0 的请求）
         consumeCalls: sql<number>`COUNT(*) FILTER (WHERE ${creditLedger.reason} IN ('text_gen', 'image_gen', 'video_gen', 'audio_gen'))::int`,
         totalInputTokens: sql<number>`COALESCE(SUM(CASE WHEN ${creditLedger.reason} IN ('text_gen', 'image_gen', 'video_gen', 'audio_gen') THEN COALESCE((${creditLedger.meta}->>'inputTokens')::bigint, 0) ELSE 0 END), 0)::bigint`,

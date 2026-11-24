@@ -117,7 +117,8 @@ const taskStatusMeta: Record<string, { label: string; color: string }> = {
     processing: { label: "进行中", color: "processing" },
     completed: { label: "已完成", color: "success" },
     failed: { label: "已失败", color: "error" },
-    refunded: { label: "已退回", color: "warning" },
+    failed_refunded: { label: "失败退回", color: "orange" },
+    refunded: { label: "失败退回", color: "orange" },
 };
 
 function getLedgerTaskStatus(record: CreditLedgerItem) {
@@ -1200,6 +1201,18 @@ function LedgerDetailModal({
     const timing = getLedgerTimingStats(item?.meta);
     const errorMessage = typeof item?.meta?.errorMessage === "string" ? item.meta.errorMessage.trim() : "";
     const errorStatus = typeof item?.meta?.errorStatus === "number" ? item.meta.errorStatus : undefined;
+    const refundedCredits =
+        typeof item?.meta?.refundedCredits === "number" && item.meta.refundedCredits > 0 ? item.meta.refundedCredits : 0;
+    const chargedCredits =
+        typeof item?.meta?.chargedCredits === "number"
+            ? item.meta.chargedCredits
+            : refundedCredits > 0 && item
+              ? Math.round((Math.abs(Math.min(0, item.delta)) + refundedCredits) * 10000) / 10000
+              : 0;
+    const refundDetail = typeof item?.meta?.refundDetail === "string" ? item.meta.refundDetail.trim() : "";
+    const refundedAt = typeof item?.meta?.refundedAt === "string" ? item.meta.refundedAt : "";
+    const isFailedTask = item?.meta?.taskStatus === "failed" || item?.meta?.taskStatus === "failed_refunded";
+    const displayDelta = isFailedTask ? 0 : item?.delta ?? 0;
 
     return (
         <Modal
@@ -1240,14 +1253,63 @@ function LedgerDetailModal({
                             </Typography.Text>
                         </div>
                         <div className="flex items-baseline gap-2.5">
-                            <Tag color={item.delta >= 0 ? "green" : "volcano"} style={{ marginInlineEnd: 0 }}>
-                                {item.delta >= 0 ? `+${item.delta}` : item.delta} 积分
-                            </Tag>
+                            {isFailedTask ? (
+                                <Tag color="orange" style={{ marginInlineEnd: 0 }}>
+                                    0 积分
+                                </Tag>
+                            ) : refundedCredits > 0 ? (
+                                <Tag color={displayDelta === 0 ? "orange" : "volcano"} style={{ marginInlineEnd: 0 }}>
+                                    净变动 {displayDelta} 积分（已退 +{refundedCredits}）
+                                </Tag>
+                            ) : (
+                                <Tag color={displayDelta >= 0 ? "green" : "volcano"} style={{ marginInlineEnd: 0 }}>
+                                    {displayDelta >= 0 ? `+${displayDelta}` : displayDelta} 积分
+                                </Tag>
+                            )}
                             <Typography.Text type="secondary" className="text-xs">
                                 结余 <span className="font-medium" style={{ color: token.colorText }}>{item.balanceAfter}</span>
                             </Typography.Text>
                         </div>
                     </div>
+
+                    {refundedCredits > 0 ? (
+                        <div
+                            className="grid grid-cols-2 gap-3 rounded-lg border p-3.5 sm:grid-cols-4"
+                            style={{ borderColor: token.colorBorderSecondary, backgroundColor: token.colorFillAlter }}
+                        >
+                            <div>
+                                <Typography.Text type="secondary" className="block text-xs">
+                                    原预扣积分
+                                </Typography.Text>
+                                <div className="mt-0.5 text-sm font-medium">{chargedCredits > 0 ? `-${chargedCredits}` : "—"}</div>
+                            </div>
+                            <div>
+                                <Typography.Text type="secondary" className="block text-xs">
+                                    退回积分
+                                </Typography.Text>
+                                <div className="mt-0.5 text-sm font-medium text-emerald-500">+{refundedCredits}</div>
+                            </div>
+                            <div>
+                                <Typography.Text type="secondary" className="block text-xs">
+                                    实际净扣
+                                </Typography.Text>
+                                <div className="mt-0.5 text-sm font-medium">{isFailedTask ? 0 : Math.abs(item.delta)}</div>
+                            </div>
+                            <div>
+                                <Typography.Text type="secondary" className="block text-xs">
+                                    退回时间
+                                </Typography.Text>
+                                <div className="mt-0.5 text-xs">{refundedAt ? new Date(refundedAt).toLocaleString("zh-CN") : "—"}</div>
+                            </div>
+                            {refundDetail ? (
+                                <div className="col-span-2 sm:col-span-4">
+                                    <Typography.Text type="secondary" className="text-xs">
+                                        退回原因：{refundDetail}
+                                    </Typography.Text>
+                                </div>
+                            ) : null}
+                        </div>
+                    ) : null}
 
                     {errorMessage || errorStatus !== undefined ? (
                         <Alert
@@ -1784,8 +1846,42 @@ export function MyWalletPanel({ compact = false, onOpenLogs }: { compact?: boole
                         {
                             title: "积分变动",
                             dataIndex: "delta",
-                            width: 100,
-                            render: (delta: number) => <Tag color={delta >= 0 ? "green" : "volcano"}>{delta >= 0 ? `+${delta}` : delta}</Tag>,
+                            width: 115,
+                            render: (delta: number, record: CreditLedgerItem) => {
+                                const isFailed =
+                                    record.meta?.taskStatus === "failed" || record.meta?.taskStatus === "failed_refunded";
+                                const refundedCredits =
+                                    typeof record.meta?.refundedCredits === "number" && record.meta.refundedCredits > 0
+                                        ? record.meta.refundedCredits
+                                        : 0;
+                                if (isFailed) {
+                                    const charged =
+                                        typeof record.meta?.chargedCredits === "number"
+                                            ? record.meta.chargedCredits
+                                            : refundedCredits;
+                                    const tip =
+                                        refundedCredits > 0
+                                            ? `原扣 -${charged} · 已退回 +${refundedCredits} · 实际净扣 0`
+                                            : "请求失败，未扣除积分";
+                                    return (
+                                        <Tooltip title={tip}>
+                                            <Tag color="orange">0</Tag>
+                                        </Tooltip>
+                                    );
+                                }
+                                if (refundedCredits > 0) {
+                                    const charged =
+                                        typeof record.meta?.chargedCredits === "number"
+                                            ? record.meta.chargedCredits
+                                            : Math.round((Math.abs(Math.min(0, delta)) + refundedCredits) * 10000) / 10000;
+                                    return (
+                                        <Tooltip title={`原扣 -${charged} · 已退回 +${refundedCredits} · 实际净扣 ${Math.abs(delta)}`}>
+                                            <Tag color={delta === 0 ? "orange" : "volcano"}>{delta === 0 ? "0" : delta}</Tag>
+                                        </Tooltip>
+                                    );
+                                }
+                                return <Tag color={delta >= 0 ? "green" : "volcano"}>{delta >= 0 ? `+${delta}` : delta}</Tag>;
+                            },
                         },
                         {
                             title: "结余",
@@ -1959,7 +2055,6 @@ export function UsageLogsPanel({ defaultScope = "self" }: { defaultScope?: "all"
                             { value: "image_gen", label: "图片生成" },
                             { value: "video_gen", label: "视频生成" },
                             { value: "audio_gen", label: "语音生成" },
-                            { value: "refund", label: "失败退回" },
                         ]}
                     />
                     <Select
@@ -1975,7 +2070,7 @@ export function UsageLogsPanel({ defaultScope = "self" }: { defaultScope?: "all"
                             { value: "processing", label: "进行中" },
                             { value: "completed", label: "已完成" },
                             { value: "failed", label: "已失败" },
-                            { value: "refunded", label: "已退回" },
+                            { value: "failed_refunded", label: "失败退回" },
                         ]}
                     />
                     <Input
@@ -2238,8 +2333,42 @@ export function UsageLogsPanel({ defaultScope = "self" }: { defaultScope?: "all"
                         {
                             title: "积分变动",
                             dataIndex: "delta",
-                            width: 100,
-                            render: (delta: number) => <Tag color={delta >= 0 ? "green" : "volcano"}>{delta >= 0 ? `+${delta}` : delta}</Tag>,
+                            width: 115,
+                            render: (delta: number, record: CreditLedgerItem) => {
+                                const isFailed =
+                                    record.meta?.taskStatus === "failed" || record.meta?.taskStatus === "failed_refunded";
+                                const refundedCredits =
+                                    typeof record.meta?.refundedCredits === "number" && record.meta.refundedCredits > 0
+                                        ? record.meta.refundedCredits
+                                        : 0;
+                                if (isFailed) {
+                                    const charged =
+                                        typeof record.meta?.chargedCredits === "number"
+                                            ? record.meta.chargedCredits
+                                            : refundedCredits;
+                                    const tip =
+                                        refundedCredits > 0
+                                            ? `原扣 -${charged} · 已退回 +${refundedCredits} · 实际净扣 0`
+                                            : "请求失败，未扣除积分";
+                                    return (
+                                        <Tooltip title={tip}>
+                                            <Tag color="orange">0</Tag>
+                                        </Tooltip>
+                                    );
+                                }
+                                if (refundedCredits > 0) {
+                                    const charged =
+                                        typeof record.meta?.chargedCredits === "number"
+                                            ? record.meta.chargedCredits
+                                            : Math.round((Math.abs(Math.min(0, delta)) + refundedCredits) * 10000) / 10000;
+                                    return (
+                                        <Tooltip title={`原扣 -${charged} · 已退回 +${refundedCredits} · 实际净扣 ${Math.abs(delta)}`}>
+                                            <Tag color={delta === 0 ? "orange" : "volcano"}>{delta === 0 ? "0" : delta}</Tag>
+                                        </Tooltip>
+                                    );
+                                }
+                                return <Tag color={delta >= 0 ? "green" : "volcano"}>{delta >= 0 ? `+${delta}` : delta}</Tag>;
+                            },
                         },
                         {
                             title: "结余",

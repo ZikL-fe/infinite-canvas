@@ -146,15 +146,15 @@ async function computeDashboardSnapshot(range: DashboardRange, sampleIntervalMin
     db.execute(sql`
       SELECT
         COUNT(*) FILTER (WHERE cl.reason IN ('text_gen', 'image_gen', 'video_gen', 'audio_gen'))::int AS total_calls,
-        COUNT(*) FILTER (WHERE cl.reason IN ('text_gen', 'image_gen', 'video_gen', 'audio_gen') AND COALESCE(cl.meta->>'taskStatus', '') = 'failed')::int AS failed_calls,
-        GREATEST(0, COALESCE(SUM(-cl.delta), 0))::double precision AS net_credits,
+        COUNT(*) FILTER (WHERE cl.reason IN ('text_gen', 'image_gen', 'video_gen', 'audio_gen') AND COALESCE(cl.meta->>'taskStatus', '') IN ('failed', 'failed_refunded'))::int AS failed_calls,
+        COALESCE(SUM(CASE WHEN cl.delta < 0 AND COALESCE(cl.meta->>'taskStatus', '') NOT IN ('failed', 'failed_refunded') THEN -cl.delta ELSE 0 END), 0)::double precision AS net_credits,
         COALESCE(SUM(CASE WHEN cl.reason IN ('text_gen', 'image_gen', 'video_gen', 'audio_gen') THEN COALESCE((cl.meta->>'inputTokens')::double precision, 0) ELSE 0 END), 0)::double precision AS input_tokens,
         COALESCE(SUM(CASE WHEN cl.reason IN ('text_gen', 'image_gen', 'video_gen', 'audio_gen') THEN COALESCE((cl.meta->>'outputTokens')::double precision, 0) ELSE 0 END), 0)::double precision AS output_tokens,
         COALESCE(SUM(CASE WHEN cl.reason IN ('text_gen', 'image_gen', 'video_gen', 'audio_gen') THEN COALESCE((cl.meta->>'cachedInputTokens')::double precision, 0) ELSE 0 END), 0)::double precision AS cached_tokens,
         COALESCE(AVG(CASE WHEN cl.reason IN ('text_gen', 'image_gen', 'video_gen', 'audio_gen') AND COALESCE((cl.meta->>'durationMs')::double precision, 0) > 0 THEN (cl.meta->>'durationMs')::double precision END), 0)::double precision AS avg_latency_ms,
         COALESCE(AVG(CASE WHEN cl.reason = 'text_gen' AND COALESCE((cl.meta->>'tokensPerSecond')::double precision, 0) > 0 THEN (cl.meta->>'tokensPerSecond')::double precision END), 0)::double precision AS avg_tps
       FROM credit_ledger cl
-      WHERE cl.reason IN ('text_gen', 'image_gen', 'video_gen', 'audio_gen', 'refund')
+      WHERE cl.reason IN ('text_gen', 'image_gen', 'video_gen', 'audio_gen')
         AND cl.created_at >= ${rangeStartIso}::timestamptz
         ${userFilter}
     `),
@@ -162,10 +162,10 @@ async function computeDashboardSnapshot(range: DashboardRange, sampleIntervalMin
       SELECT
         COALESCE(NULLIF(cl.meta->>'model', ''), cl.reason) AS model,
         COUNT(*) FILTER (WHERE cl.reason IN ('text_gen', 'image_gen', 'video_gen', 'audio_gen'))::int AS calls,
-        COUNT(*) FILTER (WHERE cl.reason IN ('text_gen', 'image_gen', 'video_gen', 'audio_gen') AND COALESCE(cl.meta->>'taskStatus', '') = 'failed')::int AS failed_calls,
-        GREATEST(0, COALESCE(SUM(-cl.delta), 0))::double precision AS credits
+        COUNT(*) FILTER (WHERE cl.reason IN ('text_gen', 'image_gen', 'video_gen', 'audio_gen') AND COALESCE(cl.meta->>'taskStatus', '') IN ('failed', 'failed_refunded'))::int AS failed_calls,
+        COALESCE(SUM(CASE WHEN cl.delta < 0 AND COALESCE(cl.meta->>'taskStatus', '') NOT IN ('failed', 'failed_refunded') THEN -cl.delta ELSE 0 END), 0)::double precision AS credits
       FROM credit_ledger cl
-      WHERE cl.reason IN ('text_gen', 'image_gen', 'video_gen', 'audio_gen', 'refund')
+      WHERE cl.reason IN ('text_gen', 'image_gen', 'video_gen', 'audio_gen')
         AND cl.created_at >= ${rangeStartIso}::timestamptz
         ${userFilter}
       GROUP BY 1
@@ -177,10 +177,10 @@ async function computeDashboardSnapshot(range: DashboardRange, sampleIntervalMin
       SELECT
         TO_CHAR((cl.created_at AT TIME ZONE 'UTC') + (${localOffsetMinutes} * INTERVAL '1 minute'), ${pgFormat}) AS bucket,
         COALESCE(NULLIF(cl.meta->>'model', ''), cl.reason) AS model,
-        GREATEST(0, COALESCE(SUM(-cl.delta), 0))::double precision AS credits,
+        COALESCE(SUM(CASE WHEN cl.delta < 0 AND COALESCE(cl.meta->>'taskStatus', '') NOT IN ('failed', 'failed_refunded') THEN -cl.delta ELSE 0 END), 0)::double precision AS credits,
         COUNT(*) FILTER (WHERE cl.reason IN ('text_gen', 'image_gen', 'video_gen', 'audio_gen'))::int AS calls
       FROM credit_ledger cl
-      WHERE cl.reason IN ('text_gen', 'image_gen', 'video_gen', 'audio_gen', 'refund')
+      WHERE cl.reason IN ('text_gen', 'image_gen', 'video_gen', 'audio_gen')
         AND cl.created_at >= ${rangeStartIso}::timestamptz
         ${userFilter}
       GROUP BY 1, 2
@@ -193,11 +193,11 @@ async function computeDashboardSnapshot(range: DashboardRange, sampleIntervalMin
             u.username,
             u.display_name,
             u.email,
-            GREATEST(0, COALESCE(SUM(-cl.delta), 0))::double precision AS credits,
+            COALESCE(SUM(CASE WHEN cl.delta < 0 AND COALESCE(cl.meta->>'taskStatus', '') NOT IN ('failed', 'failed_refunded') THEN -cl.delta ELSE 0 END), 0)::double precision AS credits,
             COUNT(*) FILTER (WHERE cl.reason IN ('text_gen', 'image_gen', 'video_gen', 'audio_gen'))::int AS calls
           FROM credit_ledger cl
           INNER JOIN users u ON u.id = cl.user_id
-          WHERE cl.reason IN ('text_gen', 'image_gen', 'video_gen', 'audio_gen', 'refund')
+          WHERE cl.reason IN ('text_gen', 'image_gen', 'video_gen', 'audio_gen')
             AND cl.created_at >= ${rangeStartIso}::timestamptz
           GROUP BY cl.user_id, u.username, u.display_name, u.email
           HAVING COUNT(*) FILTER (WHERE cl.reason IN ('text_gen', 'image_gen', 'video_gen', 'audio_gen')) > 0
@@ -259,9 +259,9 @@ async function computeDashboardSnapshot(range: DashboardRange, sampleIntervalMin
         SELECT
           cl.user_id,
           TO_CHAR((cl.created_at AT TIME ZONE 'UTC') + (${localOffsetMinutes} * INTERVAL '1 minute'), ${pgFormat}) AS bucket,
-          GREATEST(0, COALESCE(SUM(-cl.delta), 0))::double precision AS credits
+          COALESCE(SUM(CASE WHEN cl.delta < 0 AND COALESCE(cl.meta->>'taskStatus', '') NOT IN ('failed', 'failed_refunded') THEN -cl.delta ELSE 0 END), 0)::double precision AS credits
         FROM credit_ledger cl
-        WHERE cl.reason IN ('text_gen', 'image_gen', 'video_gen', 'audio_gen', 'refund')
+        WHERE cl.reason IN ('text_gen', 'image_gen', 'video_gen', 'audio_gen')
           AND cl.created_at >= ${rangeStartIso}::timestamptz
           AND cl.user_id IN (${sql.join(
             topIds.map((id) => sql`${id}`),
