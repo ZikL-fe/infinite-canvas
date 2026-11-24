@@ -453,8 +453,9 @@ export default function AssetsPage() {
                             current={page}
                             pageSize={pageSize}
                             total={filteredAssets.length}
+                            showTotal={(count) => `共 ${count} 条`}
                             showSizeChanger
-                            pageSizeOptions={[10, 20, 50, 100]}
+                            pageSizeOptions={[10, 20, 30, 50, 100]}
                             onChange={(nextPage, nextPageSize) => {
                                 setPage(nextPage);
                                 setPageSize(nextPageSize);

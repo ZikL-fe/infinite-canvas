@@ -171,6 +171,7 @@ export default function AdminPage() {
     const [usersList, setUsersList] = useState<AdminUserItem[]>([]);
     const [usersTotal, setUsersTotal] = useState(0);
     const [usersPage, setUsersPage] = useState(1);
+    const [usersPageSize, setUsersPageSize] = useState(20);
     const [userQuery, setUserQuery] = useState("");
     const [userRoleFilter, setUserRoleFilter] = useState("");
     const [userStatusFilter, setUserStatusFilter] = useState("");
@@ -219,6 +220,7 @@ export default function AdminPage() {
     const [mediaTotal, setMediaTotal] = useState(0);
     const [mediaFilteredBytes, setMediaFilteredBytes] = useState<number | null>(null);
     const [mediaPage, setMediaPage] = useState(1);
+    const [mediaPageSize, setMediaPageSize] = useState(20);
     const [mediaQuery, setMediaQuery] = useState("");
     const [mediaKindFilter, setMediaKindFilter] = useState("");
     const [mediaModuleFilter, setMediaModuleFilter] = useState("");
@@ -226,6 +228,7 @@ export default function AdminPage() {
     const [workspaceDataItems, setWorkspaceDataItems] = useState<WorkspaceDataItem[]>([]);
     const [workspaceDataTotal, setWorkspaceDataTotal] = useState(0);
     const [workspaceDataPage, setWorkspaceDataPage] = useState(1);
+    const [workspaceDataPageSize, setWorkspaceDataPageSize] = useState(20);
     const [workspaceDataQuery, setWorkspaceDataQuery] = useState("");
     const [workspaceDataLoading, setWorkspaceDataLoading] = useState(false);
     const [mediaLoading, setMediaLoading] = useState(false);
@@ -247,6 +250,7 @@ export default function AdminPage() {
     const [redeemItems, setRedeemItems] = useState<RedeemCodeItem[]>([]);
     const [redeemTotal, setRedeemTotal] = useState(0);
     const [redeemPage, setRedeemPage] = useState(1);
+    const [redeemPageSize, setRedeemPageSize] = useState(20);
     const [redeemQuery, setRedeemQuery] = useState("");
     const [redeemStatusFilter, setRedeemStatusFilter] = useState("");
     const [redeemActiveKind, setRedeemActiveKind] = useState<RedeemCodeKind>("credits");
@@ -295,10 +299,10 @@ export default function AdminPage() {
     }, [message]);
 
     const loadUsers = useCallback(
-        async (page = usersPage, q = userQuery, role = userRoleFilter, status = userStatusFilter, sort = userSort) => {
+        async (page = usersPage, q = userQuery, role = userRoleFilter, status = userStatusFilter, sort = userSort, pageSize = usersPageSize) => {
             setUsersLoading(true);
             try {
-                const res = await adminApi.listUsers({ page, pageSize: 15, q, role, status, sort });
+                const res = await adminApi.listUsers({ page, pageSize, q, role, status, sort });
                 setUsersList(res.items);
                 setUsersTotal(res.total);
             } catch (error) {
@@ -307,7 +311,7 @@ export default function AdminPage() {
                 setUsersLoading(false);
             }
         },
-        [message, userQuery, userRoleFilter, userSort, userStatusFilter, usersPage],
+        [message, userQuery, userRoleFilter, userSort, userStatusFilter, usersPage, usersPageSize],
     );
 
     const loadStorageSettings = useCallback(async () => {
@@ -331,10 +335,10 @@ export default function AdminPage() {
     }, [message, storageForm]);
 
     const loadMedia = useCallback(
-        async (page = mediaPage, q = mediaQuery, kind = mediaKindFilter, mod = mediaModuleFilter) => {
+        async (page = mediaPage, q = mediaQuery, kind = mediaKindFilter, mod = mediaModuleFilter, pageSize = mediaPageSize) => {
             setMediaLoading(true);
             try {
-                const res = await adminApi.listMedia({ page, pageSize: 12, q, kind, module: mod });
+                const res = await adminApi.listMedia({ page, pageSize, q, kind, module: mod });
                 setMediaItems(res.items);
                 setMediaTotal(res.total);
                 setMediaFilteredBytes(typeof res.filteredBytes === "number" ? res.filteredBytes : null);
@@ -345,15 +349,15 @@ export default function AdminPage() {
                 setMediaLoading(false);
             }
         },
-        [mediaKindFilter, mediaModuleFilter, mediaPage, mediaQuery, message],
+        [mediaKindFilter, mediaModuleFilter, mediaPage, mediaPageSize, mediaQuery, message],
     );
 
     const loadWorkspaceData = useCallback(
-        async (kind = mediaSubTab, page = workspaceDataPage, q = workspaceDataQuery) => {
+        async (kind = mediaSubTab, page = workspaceDataPage, q = workspaceDataQuery, pageSize = workspaceDataPageSize) => {
             if (kind === "media") return;
             setWorkspaceDataLoading(true);
             try {
-                const res = await adminApi.listWorkspaceData({ kind, page, pageSize: 12, q });
+                const res = await adminApi.listWorkspaceData({ kind, page, pageSize, q });
                 setWorkspaceDataItems(res.items);
                 setWorkspaceDataTotal(res.total);
             } catch (error) {
@@ -362,7 +366,7 @@ export default function AdminPage() {
                 setWorkspaceDataLoading(false);
             }
         },
-        [mediaSubTab, message, workspaceDataPage, workspaceDataQuery],
+        [mediaSubTab, message, workspaceDataPage, workspaceDataPageSize, workspaceDataQuery],
     );
 
     const loadAuthAndWebdavSettings = useCallback(async () => {
@@ -413,10 +417,10 @@ export default function AdminPage() {
     }, [mailForm, message, webdavForm]);
 
     const loadRedeemCodes = useCallback(
-        async (page = redeemPage, q = redeemQuery, status = redeemStatusFilter, kind = redeemActiveKind) => {
+        async (page = redeemPage, q = redeemQuery, status = redeemStatusFilter, kind = redeemActiveKind, pageSize = redeemPageSize) => {
             setRedeemLoading(true);
             try {
-                const res = await adminApi.listRedeemCodes({ page, pageSize: 15, q, status, kind });
+                const res = await adminApi.listRedeemCodes({ page, pageSize, q, status, kind });
                 setRedeemItems(res.items);
                 setRedeemTotal(res.total);
             } catch (error) {
@@ -425,7 +429,7 @@ export default function AdminPage() {
                 setRedeemLoading(false);
             }
         },
-        [message, redeemActiveKind, redeemPage, redeemQuery, redeemStatusFilter],
+        [message, redeemActiveKind, redeemPage, redeemPageSize, redeemQuery, redeemStatusFilter],
     );
 
     const loadAnnouncements = useCallback(async () => {
@@ -1358,7 +1362,7 @@ export default function AdminPage() {
                                         scroll={ADMIN_TABLE_SCROLL}
                                         loading={announcementsLoading}
                                         dataSource={announcements}
-                                        pagination={{ pageSize: 10 }}
+                                        pagination={{ defaultPageSize: 10, showSizeChanger: true, pageSizeOptions: [10, 20, 30, 50, 100], showTotal: (count) => `共 ${count} 条` }}
                                         columns={[
                                             {
                                                 title: "公告内容",
@@ -1617,9 +1621,19 @@ export default function AdminPage() {
                                         dataSource={usersList}
                                         pagination={{
                                             current: usersPage,
-                                            pageSize: 15,
+                                            pageSize: usersPageSize,
                                             total: usersTotal,
-                                            onChange: (page) => setUsersPage(page),
+                                            showSizeChanger: true,
+                                            pageSizeOptions: [10, 20, 30, 50, 100],
+                                            showTotal: (count) => `共 ${count} 条`,
+                                            onChange: (page, size) => {
+                                                if (size !== usersPageSize) {
+                                                    setUsersPageSize(size);
+                                                    setUsersPage(1);
+                                                } else {
+                                                    setUsersPage(page);
+                                                }
+                                            },
                                         }}
                                         columns={[
                                             {
@@ -1891,11 +1905,19 @@ export default function AdminPage() {
                                             }}
                                             pagination={{
                                                 current: redeemPage,
-                                                pageSize: 15,
+                                                pageSize: redeemPageSize,
                                                 total: redeemTotal,
-                                                onChange: (page) => {
+                                                showSizeChanger: true,
+                                                pageSizeOptions: [10, 20, 30, 50, 100],
+                                                showTotal: (count) => `共 ${count} 条`,
+                                                onChange: (page, size) => {
                                                     setSelectedRedeemIds([]);
-                                                    setRedeemPage(page);
+                                                    if (size !== redeemPageSize) {
+                                                        setRedeemPageSize(size);
+                                                        setRedeemPage(1);
+                                                    } else {
+                                                        setRedeemPage(page);
+                                                    }
                                                 },
                                             }}
                                             columns={[
@@ -2100,9 +2122,19 @@ export default function AdminPage() {
                                                         dataSource={mediaItems}
                                                         pagination={{
                                                             current: mediaPage,
-                                                            pageSize: 12,
+                                                            pageSize: mediaPageSize,
                                                             total: mediaTotal,
-                                                            onChange: (page) => setMediaPage(page),
+                                                            showSizeChanger: true,
+                                                            pageSizeOptions: [10, 20, 30, 50, 100],
+                                                            showTotal: (count) => `共 ${count} 条`,
+                                                            onChange: (page, size) => {
+                                                                if (size !== mediaPageSize) {
+                                                                    setMediaPageSize(size);
+                                                                    setMediaPage(1);
+                                                                } else {
+                                                                    setMediaPage(page);
+                                                                }
+                                                            },
                                                         }}
                                                         columns={[
                                                             {
@@ -2202,9 +2234,19 @@ export default function AdminPage() {
                                                         dataSource={workspaceDataItems}
                                                         pagination={{
                                                             current: workspaceDataPage,
-                                                            pageSize: 12,
+                                                            pageSize: workspaceDataPageSize,
                                                             total: workspaceDataTotal,
-                                                            onChange: (page) => setWorkspaceDataPage(page),
+                                                            showSizeChanger: true,
+                                                            pageSizeOptions: [10, 20, 30, 50, 100],
+                                                            showTotal: (count) => `共 ${count} 条`,
+                                                            onChange: (page, size) => {
+                                                                if (size !== workspaceDataPageSize) {
+                                                                    setWorkspaceDataPageSize(size);
+                                                                    setWorkspaceDataPage(1);
+                                                                } else {
+                                                                    setWorkspaceDataPage(page);
+                                                                }
+                                                            },
                                                         }}
                                                         columns={[
                                                             {
@@ -2742,7 +2784,7 @@ export default function AdminPage() {
                                                         className={ADMIN_TABLE_CLASS}
                                                         rowKey={(row) => `${row.userId}-${row.action}`}
                                                         dataSource={storageExpiryResult.items}
-                                                        pagination={{ pageSize: 10, hideOnSinglePage: true }}
+                                                        pagination={{ defaultPageSize: 10, showSizeChanger: true, pageSizeOptions: [10, 20, 30, 50, 100], showTotal: (count) => `共 ${count} 条` }}
                                                         scroll={{ x: 960 }}
                                                         locale={{ emptyText: "当前没有需要预警、宽限通知或清理的过期账号" }}
                                                         columns={[

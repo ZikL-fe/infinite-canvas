@@ -1569,6 +1569,7 @@ export function MyWalletPanel({ compact = false, onOpenLogs }: { compact?: boole
     const [items, setItems] = useState<CreditLedgerItem[]>([]);
     const [total, setTotal] = useState(0);
     const [page, setPage] = useState(1);
+    const [pageSize, setPageSize] = useState(compact ? 10 : 20);
     const [summary, setSummary] = useState<CreditLedgerSummary>(emptyLedgerSummary);
     const [loading, setLoading] = useState(false);
 
@@ -1580,7 +1581,7 @@ export function MyWalletPanel({ compact = false, onOpenLogs }: { compact?: boole
     const [detailItem, setDetailItem] = useState<CreditLedgerItem | null>(null);
 
     const loadLedger = useCallback(
-        async (targetPage = page, nextReason = reasonFilter, nextRange = dateRange) => {
+        async (targetPage = page, nextReason = reasonFilter, nextRange = dateRange, nextPageSize = pageSize) => {
             setLoading(true);
             try {
                 const startDate = nextRange?.[0] ? nextRange[0].startOf("day").toISOString() : undefined;
@@ -1591,7 +1592,7 @@ export function MyWalletPanel({ compact = false, onOpenLogs }: { compact?: boole
                     startDate,
                     endDate,
                     page: targetPage,
-                    pageSize: compact ? 8 : 15,
+                    pageSize: nextPageSize,
                 });
                 setBalance(res.balance);
                 setItems(res.items);
@@ -1605,7 +1606,7 @@ export function MyWalletPanel({ compact = false, onOpenLogs }: { compact?: boole
                 setLoading(false);
             }
         },
-        [compact, dateRange, message, page, reasonFilter, setUser],
+        [dateRange, message, page, pageSize, reasonFilter, setUser],
     );
 
     useEffect(() => {
@@ -1716,10 +1717,19 @@ export function MyWalletPanel({ compact = false, onOpenLogs }: { compact?: boole
                     })}
                     pagination={{
                         current: page,
-                        pageSize: compact ? 8 : 15,
+                        pageSize,
                         total,
-                        showSizeChanger: false,
-                        onChange: (p) => setPage(p),
+                        showTotal: (count) => `共 ${count} 条`,
+                        showSizeChanger: true,
+                        pageSizeOptions: [10, 20, 30, 50, 100],
+                        onChange: (p, size) => {
+                            if (size !== pageSize) {
+                                setPageSize(size);
+                                setPage(1);
+                            } else {
+                                setPage(p);
+                            }
+                        },
                     }}
                     columns={[
                         {
@@ -1797,6 +1807,7 @@ export function UsageLogsPanel({ defaultScope = "self" }: { defaultScope?: "all"
     const [items, setItems] = useState<CreditLedgerItem[]>([]);
     const [total, setTotal] = useState(0);
     const [page, setPage] = useState(1);
+    const [pageSize, setPageSize] = useState(20);
     const [summary, setSummary] = useState<CreditLedgerSummary>(emptyLedgerSummary);
     const [loading, setLoading] = useState(false);
 
@@ -1823,6 +1834,7 @@ export function UsageLogsPanel({ defaultScope = "self" }: { defaultScope?: "all"
             nextUser = userQueryFilter,
             nextLogId = logIdFilter,
             nextRange = dateRange,
+            nextPageSize = pageSize,
         ) => {
             setLoading(true);
             try {
@@ -1840,7 +1852,7 @@ export function UsageLogsPanel({ defaultScope = "self" }: { defaultScope?: "all"
                         startDate,
                         endDate,
                         page: targetPage,
-                        pageSize: 15,
+                        pageSize: nextPageSize,
                     });
                     setItems(res.items);
                     setTotal(res.total);
@@ -1855,7 +1867,7 @@ export function UsageLogsPanel({ defaultScope = "self" }: { defaultScope?: "all"
                         startDate,
                         endDate,
                         page: targetPage,
-                        pageSize: 15,
+                        pageSize: nextPageSize,
                     });
                     setItems(res.items);
                     setTotal(res.total);
@@ -1867,7 +1879,7 @@ export function UsageLogsPanel({ defaultScope = "self" }: { defaultScope?: "all"
                 setLoading(false);
             }
         },
-        [dateRange, isAdmin, logIdFilter, message, modelFilter, page, reasonFilter, scope, statusFilter, userQueryFilter],
+        [dateRange, isAdmin, logIdFilter, message, modelFilter, page, pageSize, reasonFilter, scope, statusFilter, userQueryFilter],
     );
 
     useEffect(() => {
@@ -2067,10 +2079,19 @@ export function UsageLogsPanel({ defaultScope = "self" }: { defaultScope?: "all"
                     })}
                     pagination={{
                         current: page,
-                        pageSize: 15,
+                        pageSize,
                         total,
-                        showSizeChanger: false,
-                        onChange: (p) => setPage(p),
+                        showTotal: (count) => `共 ${count} 条`,
+                        showSizeChanger: true,
+                        pageSizeOptions: [10, 20, 30, 50, 100],
+                        onChange: (p, size) => {
+                            if (size !== pageSize) {
+                                setPageSize(size);
+                                setPage(1);
+                            } else {
+                                setPage(p);
+                            }
+                        },
                     }}
                     columns={[
                         ...(showUserColumn
@@ -2241,6 +2262,7 @@ export function MyMediaPanel() {
     const [items, setItems] = useState<MediaItem[]>([]);
     const [total, setTotal] = useState(0);
     const [page, setPage] = useState(1);
+    const [pageSize, setPageSize] = useState(20);
     const [q, setQ] = useState("");
     const [kind, setKind] = useState("");
     const [moduleFilter, setModuleFilter] = useState("");
@@ -2268,7 +2290,7 @@ export function MyMediaPanel() {
         setLoading(true);
         try {
             const [listRes, profileRes] = await Promise.all([
-                storageApi.list({ page, pageSize: 12, q, kind, module: moduleFilter }),
+                storageApi.list({ page, pageSize, q, kind, module: moduleFilter }),
                 accountApi.getProfile(),
             ]);
             setItems(listRes.items);
@@ -2288,7 +2310,7 @@ export function MyMediaPanel() {
         } finally {
             setLoading(false);
         }
-    }, [kind, message, moduleFilter, page, q, setUser]);
+    }, [kind, message, moduleFilter, page, pageSize, q, setUser]);
 
     const loadWorkspaceTab = useCallback(
         async (tab: "canvas" | "image_workbench" | "video_workbench") => {
@@ -2618,9 +2640,19 @@ export function MyMediaPanel() {
                                         }}
                                         pagination={{
                                             current: page,
-                                            pageSize: 12,
+                                            pageSize,
                                             total,
-                                            onChange: (p) => setPage(p),
+                                            showSizeChanger: true,
+                                            pageSizeOptions: [10, 20, 30, 50, 100],
+                                            showTotal: (count) => `共 ${count} 条`,
+                                            onChange: (p, size) => {
+                                                if (size !== pageSize) {
+                                                    setPageSize(size);
+                                                    setPage(1);
+                                                } else {
+                                                    setPage(p);
+                                                }
+                                            },
                                         }}
                                         columns={[
                                             {
@@ -2696,7 +2728,7 @@ export function MyMediaPanel() {
                                     scroll={ADMIN_TABLE_SCROLL}
                                     loading={workspaceLoading}
                                     dataSource={cloudProjects}
-                                    pagination={{ pageSize: 12 }}
+                                    pagination={{ defaultPageSize: 20, showSizeChanger: true, pageSizeOptions: [10, 20, 30, 50, 100], showTotal: (count) => `共 ${count} 条` }}
                                     columns={[
                                         { title: "画布名称", dataIndex: "title", width: 240, ellipsis: true },
                                         { title: "节点数", key: "nodes", width: 85, render: (_, rec) => (Array.isArray(rec.nodes) ? rec.nodes.length : 0) },
@@ -2742,7 +2774,7 @@ export function MyMediaPanel() {
                                     scroll={ADMIN_TABLE_SCROLL}
                                     loading={workspaceLoading}
                                     dataSource={tabCfg.data}
-                                    pagination={{ pageSize: 12 }}
+                                    pagination={{ defaultPageSize: 20, showSizeChanger: true, pageSizeOptions: [10, 20, 30, 50, 100], showTotal: (count) => `共 ${count} 条` }}
                                     columns={[
                                         {
                                             title: "标题 / 提示词",

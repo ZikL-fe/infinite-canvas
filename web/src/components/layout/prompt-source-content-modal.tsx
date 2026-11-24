@@ -67,7 +67,7 @@ export function PromptSourceContentModal({ source, onClose }: { source: PromptSo
                     size="small"
                     loading={loading}
                     dataSource={items}
-                    pagination={{ pageSize: 10, showSizeChanger: false, size: "small" }}
+                    pagination={{ defaultPageSize: 10, showSizeChanger: true, pageSizeOptions: [10, 20, 30, 50, 100], size: "small", showTotal: (count) => `共 ${count} 条` }}
                     scroll={{ y: "56vh" }}
                     locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={t("config.promptSources.content.empty")} /> }}
                     columns={[

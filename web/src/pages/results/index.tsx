@@ -48,7 +48,7 @@ export default function ResultsPage() {
     const [items, setItems] = useState<MediaItem[]>([]);
     const [total, setTotal] = useState(0);
     const [page, setPage] = useState(1);
-    const [pageSize, setPageSize] = useState(12);
+    const [pageSize, setPageSize] = useState(20);
     const [kind, setKind] = useState("");
     const [keyword, setKeyword] = useState("");
     const [loading, setLoading] = useState(false);
@@ -548,8 +548,9 @@ export default function ResultsPage() {
                                 current={page}
                                 pageSize={pageSize}
                                 total={total}
+                                showTotal={(count) => `共 ${count} 条`}
                                 showSizeChanger
-                                pageSizeOptions={[12, 24, 48]}
+                                pageSizeOptions={[10, 20, 30, 50, 100]}
                                 onChange={(nextPage, nextPageSize) => {
                                     setPage(nextPage);
                                     setPageSize(nextPageSize);

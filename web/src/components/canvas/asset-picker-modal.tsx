@@ -78,6 +78,7 @@ function MyAssetsTab({ onInsert }: { onInsert: (payload: InsertAssetPayload) => 
     const [keyword, setKeyword] = useState("");
     const [kindFilter, setKindFilter] = useState("all");
     const [page, setPage] = useState(1);
+    const [pageSize, setPageSize] = useState(10);
     const [insertingId, setInsertingId] = useState<string | null>(null);
 
     const filtered = useMemo(() => {
@@ -88,12 +89,12 @@ function MyAssetsTab({ onInsert }: { onInsert: (payload: InsertAssetPayload) => 
             .filter((a) => !query || [a.title, ...(a.tags || [])].join(" ").toLowerCase().includes(query));
     }, [assets, keyword, kindFilter]);
 
-    const visible = useMemo(() => filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE), [filtered, page]);
+    const visible = useMemo(() => filtered.slice((page - 1) * pageSize, page * pageSize), [filtered, page, pageSize]);
 
     useEffect(() => {
-        const maxPage = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+        const maxPage = Math.max(1, Math.ceil(filtered.length / pageSize));
         setPage((v) => Math.min(v, maxPage));
-    }, [filtered.length]);
+    }, [filtered.length, pageSize]);
 
     const handleInsert = async (asset: Asset) => {
         if (insertingId) return;
@@ -159,9 +160,25 @@ function MyAssetsTab({ onInsert }: { onInsert: (payload: InsertAssetPayload) => 
                 <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={t("canvas.assetPicker.empty")} className="py-12" />
             )}
 
-            {filtered.length > PAGE_SIZE && (
+            {filtered.length > 0 && (
                 <div className="flex justify-center">
-                    <Pagination size="small" current={page} pageSize={PAGE_SIZE} total={filtered.length} onChange={setPage} showSizeChanger={false} />
+                    <Pagination
+                        size="small"
+                        current={page}
+                        pageSize={pageSize}
+                        total={filtered.length}
+                        showTotal={(count) => `共 ${count} 条`}
+                        showSizeChanger
+                        pageSizeOptions={[10, 20, 30, 50, 100]}
+                        onChange={(nextPage, nextSize) => {
+                            if (nextSize !== pageSize) {
+                                setPageSize(nextSize);
+                                setPage(1);
+                            } else {
+                                setPage(nextPage);
+                            }
+                        }}
+                    />
                 </div>
             )}
         </div>
