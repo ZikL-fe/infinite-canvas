@@ -91,7 +91,7 @@ type GeminiPart = {
 };
 type GeminiContent = { role?: "user" | "model"; parts: GeminiPart[] };
 type GeminiPayload = {
-    candidates?: Array<{ content?: { parts?: GeminiPart[] }; finishReason?: string }>;
+    candidates?: Array<{ content?: { parts?: GeminiPart[] }; finishReason?: string; finishMessage?: string }>;
     models?: Array<{ name?: string }>;
     error?: { message?: string };
     promptFeedback?: { blockReason?: string };
@@ -710,7 +710,16 @@ function parseGeminiImagePayload(payload: GeminiPayload, cloudMediaIds: Array<st
         const storageKey = cloudMediaIds[idx] || undefined;
         return { id: nanoid(), dataUrl, ...(storageKey ? { storageKey } : {}) };
     });
-    if (!images.length) throw new Error(apiText("geminiNoImage"));
+    if (!images.length) {
+        const first = payload.candidates?.[0];
+        const finishMessage = first?.finishMessage?.trim();
+        if (finishMessage) throw new Error(finishMessage);
+        const finishReason = first?.finishReason?.trim();
+        if (finishReason && finishReason.toUpperCase() !== "STOP") {
+            throw new Error(`上游生成未返回图片（finishReason: ${finishReason}）`);
+        }
+        throw new Error(apiText("geminiNoImage"));
+    }
     return images;
 }
 

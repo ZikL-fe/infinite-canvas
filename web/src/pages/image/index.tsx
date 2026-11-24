@@ -64,6 +64,7 @@ type GenerationResult = {
 type GenerationLog = {
     id: string;
     createdAt: number;
+    updatedAt?: string;
     title: string;
     prompt: string;
     time: string;
@@ -78,6 +79,8 @@ type GenerationLog = {
     quality: string;
     status: "pending" | "success" | "failed";
     slotTaskIds?: string[];
+    error?: string;
+    errors?: string[];
     images: GeneratedImage[];
 };
 
@@ -148,6 +151,7 @@ export default function ImagePage() {
     const processedCommandRef = useRef(0);
     const agentTaskIdRef = useRef<string | undefined>(undefined);
     const activeLogIdsRef = useRef<Set<string>>(new Set());
+    const backfilledErrorLogIdsRef = useRef<Set<string>>(new Set());
 
     const model = effectiveConfig.imageModel || effectiveConfig.model;
     const canGenerate = Boolean(prompt.trim());
@@ -174,10 +178,22 @@ export default function ImagePage() {
                     status: "pending" as const,
                 }));
             }
-            if (previewLog.status === "failed" && !previewLog.images.length) {
-                return [{ id: `${previewLog.id}-failed`, status: "failed" as const, error: t("workbench.generationFailed") }];
-            }
-            return previewLog.images.map((image) => ({ id: image.id, status: "success" as const, image }));
+            const successResults: GenerationResult[] = previewLog.images.map((image) => ({
+                id: image.id,
+                status: "success" as const,
+                image,
+            }));
+            const savedErrors = previewLog.errors?.filter(Boolean) || [];
+            const expectedFailCount =
+                previewLog.status === "failed" && !successResults.length
+                    ? Math.max(1, savedErrors.length, previewLog.failCount || 0)
+                    : Math.max(savedErrors.length, previewLog.failCount || 0);
+            const failedResults: GenerationResult[] = Array.from({ length: expectedFailCount }, (_, i) => ({
+                id: `${previewLog.id}-failed-${i}`,
+                status: "failed" as const,
+                error: savedErrors[i] || previewLog.error || savedErrors[0] || t("workbench.generationFailed"),
+            }));
+            return [...successResults, ...failedResults];
         }
         return [];
     })();
@@ -236,16 +252,19 @@ export default function ImagePage() {
             setActiveBatchJobId(null);
             setPreviewLog(null);
             setSelectedLogIds([]);
+            backfilledErrorLogIdsRef.current.clear();
             syncAndRefresh();
         };
         const handleCloudSynced = () => {
             void refreshLogs().then((stored) => {
                 setPreviewLog((cur) => {
-                    if (cur && !stored.some((item) => item.id === cur.id)) {
+                    if (!cur) return null;
+                    const latest = stored.find((item) => item.id === cur.id);
+                    if (!latest) {
                         setActiveSingleLogId((prev) => (prev === cur.id ? null : prev));
                         return null;
                     }
-                    return cur;
+                    return latest;
                 });
             });
         };
@@ -361,8 +380,10 @@ export default function ImagePage() {
         const successImages = result.filter((item): item is PromiseFulfilledResult<GeneratedImage> => item.status === "fulfilled").map((item) => item.value);
         const successCount = successImages.length;
         const failCount = count - successCount;
-        const failed = result.find((item): item is PromiseRejectedResult => item.status === "rejected");
-        const error = failed?.reason instanceof Error ? failed.reason.message : failCount ? t("workbench.generationFailed") : undefined;
+        const errors = result
+            .filter((item): item is PromiseRejectedResult => item.status === "rejected")
+            .map((item) => (item.reason instanceof Error ? item.reason.message : t("workbench.generationFailed")));
+        const error = errors[0] || (failCount ? t("workbench.generationFailed") : undefined);
         if (agentTaskId) updateAgentTask(agentTaskId, { status: successCount ? "succeeded" : "failed", successCount, failCount, error: successCount ? undefined : error });
 
         try {
@@ -373,9 +394,11 @@ export default function ImagePage() {
                 successCount,
                 failCount,
                 status: successCount ? "success" : "failed",
+                ...(error ? { error } : {}),
+                ...(errors.length ? { errors } : {}),
                 images: successImages,
             });
-            successCount ? message.success(t("imageWorkbench.generated")) : message.error(failed?.reason instanceof Error ? failed.reason.message : t("workbench.generationFailed"));
+            successCount ? message.success(t("imageWorkbench.generated")) : message.error(error || t("workbench.generationFailed"));
         } finally {
             activeLogIdsRef.current.delete(logId);
             setLiveSingleJobs((prev) => (prev[logId] ? { ...prev, [logId]: { ...prev[logId], running: false } } : prev));
@@ -528,7 +551,7 @@ export default function ImagePage() {
     };
 
     const saveLog = (log: GenerationLog) => {
-        const serialized = serializeLog(log);
+        const serialized = serializeLog({ ...log, updatedAt: new Date().toISOString() });
         void logStore.setItem(log.id, serialized).then(refreshLogs);
         void pushWorkbenchLogToCloud("image", serialized);
     };
@@ -560,11 +583,13 @@ export default function ImagePage() {
             try {
                 const res = await storageApi.getByTasks(taskIds);
                 if (cancelled) return;
+                const errorByTask = res.errorByTask || {};
 
                 let changed = false;
                 for (const log of pendingLogs) {
                     const slotIds = log.slotTaskIds || [];
                     const recoveredImages: GeneratedImage[] = [];
+                    const recoveredErrors: string[] = [];
                     let hasStillProcessing = false;
 
                     for (const tid of slotIds) {
@@ -586,6 +611,8 @@ export default function ImagePage() {
                                     });
                                 }
                             }
+                        } else if (errorByTask[tid]) {
+                            recoveredErrors.push(errorByTask[tid]);
                         } else if (res.processingTaskIds.includes(tid)) {
                             hasStillProcessing = true;
                         }
@@ -594,18 +621,30 @@ export default function ImagePage() {
                     if (recoveredImages.length > 0 && (!hasStillProcessing || attempt >= 20)) {
                         const updated: GenerationLog = {
                             ...log,
+                            updatedAt: new Date().toISOString(),
                             status: "success",
                             successCount: recoveredImages.length,
                             failCount: Math.max(0, slotIds.length - recoveredImages.length),
                             durationMs: Date.now() - log.createdAt,
+                            ...(recoveredErrors.length ? { error: recoveredErrors[0], errors: recoveredErrors } : {}),
                             images: recoveredImages,
                         };
-                        await logStore.setItem(log.id, serializeLog(updated));
+                        const serialized = serializeLog(updated);
+                        await logStore.setItem(log.id, serialized);
+                        void pushWorkbenchLogToCloud("image", serialized);
                         changed = true;
                         setPreviewLog((cur) => (cur?.id === log.id ? updated : cur));
-                    } else if (!hasStillProcessing && !recoveredImages.length && attempt >= 1) {
-                        const failedLog: GenerationLog = { ...log, status: "failed", failCount: slotIds.length };
-                        await logStore.setItem(log.id, serializeLog(failedLog));
+                    } else if (!hasStillProcessing && !recoveredImages.length && (recoveredErrors.length > 0 || attempt >= 1)) {
+                        const failedLog: GenerationLog = {
+                            ...log,
+                            updatedAt: new Date().toISOString(),
+                            status: "failed",
+                            failCount: slotIds.length,
+                            ...(recoveredErrors.length ? { error: recoveredErrors[0], errors: recoveredErrors } : {}),
+                        };
+                        const serialized = serializeLog(failedLog);
+                        await logStore.setItem(log.id, serialized);
+                        void pushWorkbenchLogToCloud("image", serialized);
                         changed = true;
                         setPreviewLog((cur) => (cur?.id === log.id ? failedLog : cur));
                     }
@@ -630,6 +669,69 @@ export default function ImagePage() {
         };
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [logs.map((l) => `${l.id}:${l.status}`).join(",")]);
+
+    useEffect(() => {
+        if (!isCloudAuthenticated()) return;
+        const missingErrorLogs = logs.filter(
+            (log) =>
+                (log.status === "failed" || log.failCount > 0) &&
+                !log.error &&
+                !log.errors?.length &&
+                log.slotTaskIds?.length &&
+                !backfilledErrorLogIdsRef.current.has(log.id),
+        );
+        if (!missingErrorLogs.length) return;
+
+        const prioritized = previewLog
+            ? [...missingErrorLogs.filter((l) => l.id === previewLog.id), ...missingErrorLogs.filter((l) => l.id !== previewLog.id)]
+            : missingErrorLogs;
+        const batch: GenerationLog[] = [];
+        const taskIds: string[] = [];
+        for (const log of prioritized) {
+            const ids = log.slotTaskIds || [];
+            if (batch.length > 0 && taskIds.length + ids.length > 50) break;
+            batch.push(log);
+            taskIds.push(...ids.slice(0, 50 - taskIds.length));
+            if (taskIds.length >= 50) break;
+        }
+        if (!taskIds.length) return;
+        batch.forEach((log) => backfilledErrorLogIdsRef.current.add(log.id));
+
+        let cancelled = false;
+        void (async () => {
+            try {
+                const res = await storageApi.getByTasks(taskIds);
+                if (cancelled) return;
+                const errorByTask = res.errorByTask || {};
+                let changed = false;
+                for (const log of batch) {
+                    const foundErrors = (log.slotTaskIds || []).map((tid) => errorByTask[tid]).filter(Boolean);
+                    if (!foundErrors.length) continue;
+                    const updated: GenerationLog = {
+                        ...log,
+                        updatedAt: new Date().toISOString(),
+                        error: foundErrors[0],
+                        errors: foundErrors,
+                    };
+                    const serialized = serializeLog(updated);
+                    await logStore.setItem(log.id, serialized);
+                    void pushWorkbenchLogToCloud("image", serialized);
+                    changed = true;
+                    setPreviewLog((cur) => (cur?.id === log.id ? updated : cur));
+                }
+                if (changed && !cancelled) {
+                    await refreshLogs();
+                }
+            } catch {
+                // ignore backfill error
+            }
+        })();
+
+        return () => {
+            cancelled = true;
+        };
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [previewLog?.id, logs.map((l) => `${l.id}:${l.status}:${l.error ? 1 : 0}`).join(",")]);
 
     const previewGenerationLog = async (log: GenerationLog) => {
         setWorkbenchMode("single");
@@ -791,6 +893,7 @@ export default function ImagePage() {
             remaining: perGroupCount,
             pendingLog: null as GenerationLog | null,
             successImages: [] as GeneratedImage[],
+            errors: [] as string[],
             failCount: 0,
             cancelledCount: 0,
         }));
@@ -813,6 +916,7 @@ export default function ImagePage() {
                     successCount,
                     failCount: perGroupCount - successCount,
                     status: successCount > 0 ? "success" : "failed",
+                    ...(state.errors.length ? { error: state.errors[0], errors: state.errors } : {}),
                     images: state.successImages,
                 });
             }
@@ -879,6 +983,7 @@ export default function ImagePage() {
                         state.failCount += 1;
                         totalFail += 1;
                         const errMsg = error instanceof Error ? error.message : t("workbench.generationFailed");
+                        state.errors.push(errMsg);
                         updateBatchJobGroups(jobId, (prev) =>
                             prev.map((g) =>
                                 g.id === state.group.id
@@ -897,6 +1002,7 @@ export default function ImagePage() {
                     state.cancelledCount += 1;
                     state.failCount += 1;
                     totalFail += 1;
+                    state.errors.push("已停止队列");
                     updateBatchJobGroups(jobId, (prev) =>
                         prev.map((g) =>
                             g.id === state.group.id
@@ -1744,7 +1850,7 @@ function FailedImageCard({ error, onRetry }: { error: string; onRetry: () => voi
         <div className="overflow-hidden rounded-lg border border-red-200 bg-red-50 dark:border-red-950 dark:bg-red-950/20">
             <div className="flex aspect-square flex-col items-center justify-center gap-3 p-5 text-center">
                 <div className="text-sm font-medium text-red-600 dark:text-red-300">{t("workbench.failed")}</div>
-                <Typography.Paragraph ellipsis={{ rows: 4 }} className="!mb-0 !text-xs !text-red-500 dark:!text-red-300">
+                <Typography.Paragraph ellipsis={{ rows: 5, tooltip: error }} className="!mb-0 w-full break-words !text-xs !text-red-500 dark:!text-red-300">
                     {error}
                 </Typography.Paragraph>
             </div>
@@ -1829,6 +1935,7 @@ function LogCard({ log, selected, active, onSelectedChange, onClick }: { log: Ge
     const { t } = useTranslation();
     useSyncExternalStore(subscribeImagePreviews, getImagePreviewRevision);
     const thumbnails = log.images.filter((image) => image.dataUrl).slice(0, 4);
+    const logError = log.error || log.errors?.[0];
 
     return (
         <button
@@ -1847,18 +1954,21 @@ function LogCard({ log, selected, active, onSelectedChange, onClick }: { log: Ge
                                     <img key={image.id} src={previewUrlFor(image.storageKey) || image.dataUrl} alt="" className="size-8 shrink-0 rounded-md object-cover" />
                                 ))}
                             </div>
+                        ) : logError ? (
+                            <div className="mt-1.5 line-clamp-2 break-all text-xs leading-4 text-red-500 dark:text-red-400" title={logError}>
+                                {logError}
+                            </div>
                         ) : null}
                     </div>
                 </div>
                 <div className="grid justify-items-end gap-2">
                     <div className="flex gap-1">
                         {log.status === "pending" ? (
-                            <Tag
-                                className="m-0 flex h-6 items-center gap-1 rounded-md px-1.5 text-xs leading-none"
-                                color="processing"
-                                icon={<LoaderCircle className="size-3 animate-spin" />}
-                            >
-                                {t("workbench.generating")}
+                            <Tag className="m-0 !inline-flex h-6 items-center rounded-md px-1.5 text-xs leading-none whitespace-nowrap" color="processing">
+                                <span className="inline-flex items-center gap-1 whitespace-nowrap">
+                                    <LoaderCircle className="size-3 shrink-0 animate-spin" />
+                                    <span>{t("workbench.generating")}</span>
+                                </span>
                             </Tag>
                         ) : (
                             <>
@@ -1868,9 +1978,17 @@ function LogCard({ log, selected, active, onSelectedChange, onClick }: { log: Ge
                                     </Tag>
                                 ) : null}
                                 {log.failCount > 0 || (log.status === "failed" && !log.successCount) ? (
-                                    <Tag className="m-0 flex h-6 items-center rounded-md px-1.5 text-xs leading-none" color="red">
-                                        {t("workbench.failCount", { count: log.failCount || log.imageCount || 1 })}
-                                    </Tag>
+                                    logError ? (
+                                        <Tooltip title={logError}>
+                                            <Tag className="m-0 flex h-6 items-center rounded-md px-1.5 text-xs leading-none" color="red">
+                                                {t("workbench.failCount", { count: log.failCount || log.imageCount || 1 })}
+                                            </Tag>
+                                        </Tooltip>
+                                    ) : (
+                                        <Tag className="m-0 flex h-6 items-center rounded-md px-1.5 text-xs leading-none" color="red">
+                                            {t("workbench.failCount", { count: log.failCount || log.imageCount || 1 })}
+                                        </Tag>
+                                    )
                                 ) : null}
                             </>
                         )}
@@ -1920,9 +2038,12 @@ async function normalizeLog(log: Partial<GenerationLog>): Promise<GenerationLog>
         }),
     );
     const config = normalizeLogConfig(log);
+    const normalizedErrors = Array.isArray(log.errors) ? log.errors.filter((item): item is string => typeof item === "string" && item.trim().length > 0) : [];
+    const normalizedError = typeof log.error === "string" && log.error.trim() ? log.error : normalizedErrors[0];
     return {
         id: log.id || nanoid(),
         createdAt: log.createdAt || Date.now(),
+        ...(log.updatedAt ? { updatedAt: log.updatedAt } : {}),
         title: log.title || log.model || i18n.t("workbench.untitled"),
         prompt: log.prompt || log.title || "",
         time: log.time || new Date().toLocaleString(i18n.resolvedLanguage, { hour12: false }),
@@ -1937,6 +2058,8 @@ async function normalizeLog(log: Partial<GenerationLog>): Promise<GenerationLog>
         quality: log.quality || config.quality || "",
         status: log.status || "success",
         ...(log.slotTaskIds ? { slotTaskIds: log.slotTaskIds } : {}),
+        ...(normalizedError ? { error: normalizedError } : {}),
+        ...(normalizedErrors.length ? { errors: normalizedErrors } : {}),
         images,
     };
 }
@@ -1988,6 +2111,8 @@ function buildLog({
     failCount,
     status,
     slotTaskIds,
+    error,
+    errors,
     images,
 }: {
     id?: string;
@@ -2000,6 +2125,8 @@ function buildLog({
     failCount: number;
     status: GenerationLog["status"];
     slotTaskIds?: string[];
+    error?: string;
+    errors?: string[];
     images: GeneratedImage[];
 }): GenerationLog {
     const logConfig = {
@@ -2026,6 +2153,8 @@ function buildLog({
         quality: logConfig.quality,
         status,
         ...(slotTaskIds ? { slotTaskIds } : {}),
+        ...(error ? { error } : {}),
+        ...(errors?.length ? { errors } : {}),
         images,
     };
 }

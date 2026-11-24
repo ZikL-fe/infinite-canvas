@@ -7,6 +7,7 @@ import { AudioLines, BarChart3, Copy, Coins, Cpu, Database, Download, FileIcon, 
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 
 import { ChannelEditorDrawer } from "@/components/layout/channel-editor-drawer";
+import { VersionReleaseModal } from "@/components/layout/version-release-modal";
 import { formatCompactCredits, formatExactCredits } from "@/lib/format-number";
 import { AnalyticsDashboardPanel } from "@/pages/admin/components/analytics-dashboard-panel";
 import { ADMIN_TABLE_CLASS, ADMIN_TABLE_SCROLL, TableRowActions } from "@/pages/admin/components/table-row-actions";
@@ -3298,6 +3299,15 @@ export default function AdminPage() {
                         onClick={handleMenuSelect}
                         style={{ borderInlineEnd: 0, background: "transparent" }}
                     />
+                    <div
+                        className="mt-auto flex items-center justify-between border-t px-2 pt-3 text-xs"
+                        style={{ borderColor: token.colorBorderSecondary }}
+                    >
+                        <Typography.Text type="secondary" className="text-xs">
+                            当前版本
+                        </Typography.Text>
+                        <VersionReleaseModal />
+                    </div>
                 </aside>
 
                 <main
@@ -3309,23 +3319,14 @@ export default function AdminPage() {
                 >
                     <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
                         <div className="flex items-center gap-3">
-                            <Button
-                                className="lg:hidden"
-                                icon={<MenuIcon className="size-4" />}
-                                onClick={() => setMobileMenuOpen(true)}
-                            >
-                                菜单
-                            </Button>
-                            <div>
-                                <Typography.Title level={4} style={{ margin: 0 }}>
-                                    {activeSection?.pageTitle || activeSection?.label}
-                                </Typography.Title>
-                                <Typography.Text type="secondary" className="text-xs">
-                                    {isAdmin && isAdminRoute
-                                        ? "模型渠道集中管理、用户与 WebDAV 分配、对象存储、积分、公告与个人中心"
-                                        : "账号概览与平台公告、个人安全设置、积分钱包流水及云端媒体管理"}
-                                </Typography.Text>
+                            <div className="lg:hidden">
+                                <Button icon={<MenuIcon className="size-4" />} onClick={() => setMobileMenuOpen(true)}>
+                                    菜单
+                                </Button>
                             </div>
+                            <Typography.Title level={4} style={{ margin: 0 }}>
+                                {activeSection?.pageTitle || activeSection?.label}
+                            </Typography.Title>
                         </div>
                         {isAdmin && isAdminRoute ? (
                             <Button icon={<RefreshCw className="size-4" />} loading={overviewLoading} onClick={() => void loadOverview(overviewDays)}>
@@ -3345,6 +3346,14 @@ export default function AdminPage() {
                 title={isAdmin && isAdminRoute ? "管理后台菜单" : "个人后台菜单"}
                 onClose={() => setMobileMenuOpen(false)}
                 styles={{ body: { padding: 12 } }}
+                footer={
+                    <div className="flex items-center justify-between text-xs">
+                        <Typography.Text type="secondary" className="text-xs">
+                            当前版本
+                        </Typography.Text>
+                        <VersionReleaseModal />
+                    </div>
+                }
             >
                 <Menu
                     mode="inline"

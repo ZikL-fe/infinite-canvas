@@ -106,6 +106,11 @@ workbenchRoutes.put("/logs/:id", zValidator("json", upsertLogSchema), async (c) 
     return c.json({ ok: true, skippedDeleted: true, deletedMediaCount: 0 });
   }
 
+  // 已完成/失败的记录不再允许被迟到的 pending 自动保存覆盖回退
+  if (existing.status !== "pending" && body.status === "pending") {
+    return c.json({ ok: true, skippedStale: true, deletedMediaCount: 0 });
+  }
+
   const oldKeys = extractStorageKeys(existing.payload);
   const newKeys = extractStorageKeys(body.payload);
   const removedKeys = Array.from(oldKeys).filter((key) => !newKeys.has(key));
