@@ -1,4 +1,4 @@
-import { createBrowserRouter, Outlet } from "react-router-dom";
+import { createBrowserRouter, Navigate, Outlet, useLocation } from "react-router-dom";
 
 import { AnalyticsTracker } from "@/components/layout/analytics-tracker";
 import UserLayout from "@/layouts/user-layout";
@@ -14,6 +14,20 @@ import NotFound from "@/pages/not-found";
 import PromptsPage from "@/pages/prompts";
 import ResultsPage from "@/pages/results";
 import VideoPage from "@/pages/video";
+import { useUserStore } from "@/stores/use-user-store";
+
+function RequireAuth() {
+    const location = useLocation();
+    const user = useUserStore((state) => state.user);
+    const accessToken = useUserStore((state) => state.accessToken);
+    const refreshToken = useUserStore((state) => state.refreshToken);
+
+    if (!user || (!accessToken && !refreshToken)) {
+        const redirect = `${location.pathname}${location.search}${location.hash}`;
+        return <Navigate to={`/auth?redirect=${encodeURIComponent(redirect)}`} replace />;
+    }
+    return <Outlet />;
+}
 
 export const router = createBrowserRouter([
     {
@@ -25,17 +39,22 @@ export const router = createBrowserRouter([
         ),
         children: [
             { path: "/", element: <HomePage /> },
-            { path: "/image", element: <ImagePage /> },
-            { path: "/video", element: <VideoPage /> },
-            { path: "/results", element: <ResultsPage /> },
-            { path: "/assets", element: <AssetsPage /> },
             { path: "/prompts", element: <PromptsPage /> },
-            { path: "/canvas", element: <CanvasPage /> },
-            { path: "/canvas/:id", element: <CanvasProjectPage /> },
-            { path: "/config", element: <ConfigPage /> },
             { path: "/auth", element: <AuthPage /> },
-            { path: "/console", element: <AdminPage /> },
-            { path: "/admin", element: <AdminPage /> },
+            {
+                element: <RequireAuth />,
+                children: [
+                    { path: "/image", element: <ImagePage /> },
+                    { path: "/video", element: <VideoPage /> },
+                    { path: "/results", element: <ResultsPage /> },
+                    { path: "/assets", element: <AssetsPage /> },
+                    { path: "/canvas", element: <CanvasPage /> },
+                    { path: "/canvas/:id", element: <CanvasProjectPage /> },
+                    { path: "/config", element: <ConfigPage /> },
+                    { path: "/console", element: <AdminPage /> },
+                    { path: "/admin", element: <AdminPage /> },
+                ],
+            },
         ],
     },
     { path: "*", element: <NotFound /> },

@@ -39,7 +39,8 @@ export default function AuthPage() {
             .catch(() => undefined);
     }, [setBootstrapStatus]);
 
-    const redirectTarget = searchParams.get("redirect") || "";
+    const rawRedirect = searchParams.get("redirect") || "";
+    const redirectTarget = rawRedirect.startsWith("/") && !rawRedirect.startsWith("//") ? rawRedirect : "";
 
     const handleSuccessRedirect = (role: "admin" | "user") => {
         if (redirectTarget) {

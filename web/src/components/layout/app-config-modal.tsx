@@ -237,9 +237,11 @@ export function AppConfigPanel({ showDoneButton = false, initialTab = "preferenc
 
 export function AppConfigModal() {
     const { t } = useTranslation();
+    const user = useUserStore((state) => state.user);
     const isConfigOpen = useConfigStore((state) => state.isConfigOpen);
     const configTab = useConfigStore((state) => state.configTab);
     const setConfigDialogOpen = useConfigStore((state) => state.setConfigDialogOpen);
+    if (!user) return null;
     return (
         <Modal
             title={
@@ -248,7 +250,7 @@ export function AppConfigModal() {
                     <div className="mt-1 text-xs font-normal text-stone-500">{t("config.modalDescription")}</div>
                 </div>
             }
-            open={isConfigOpen}
+            open={isConfigOpen && Boolean(user)}
             width={980}
             centered
             onCancel={() => setConfigDialogOpen(false)}

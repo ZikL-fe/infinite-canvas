@@ -92,7 +92,7 @@ export function UserStatusActions({ showConfig = true, variant = "default", onOp
                         <Puzzle className="size-4" />
                     </button>
                 ) : null}
-                {showConfig ? (
+                {showConfig && user ? (
                     <button type="button" className={naturalIconClass} style={iconStyle} onClick={() => openConfigDialog(false)} aria-label={t("navigation.config")} title={t("navigation.config")}>
                         <Settings2 className="size-4" />
                     </button>

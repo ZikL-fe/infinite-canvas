@@ -7,6 +7,7 @@ description: Implemented changes that still need manual verification
 
 The current release needs manual verification in these areas:
 
+- 核心业务页面登录守卫：在未登录状态下访问 `/canvas`、`/canvas/:id`、`/image`、`/video`、`/results`、`/assets`、`/config`、`/console`、`/admin` 应自动重定向至 `/auth?redirect=...` 并在登录后回跳目标页；顶部操作栏与画布顶部未登录时不再显示「配置」入口且无法打开配置弹窗，首页（`/`）与提示词库（`/prompts`）保持可直接浏览。
 - 系统初始管理员降级/禁用保护：在 `/admin`「用户管理」列表及「用户详情」抽屉中，系统初始化注册的首位管理员账号「降级」按钮应不可点击（详情抽屉悬停提示“系统初始管理员不可降级”）且不提供禁用入口；直接请求 `PATCH /api/admin/users/:id` 将该账号降级或禁用时，后端应拦截并返回 `400` 错误提示。
 - 全站大额积分 `K/M/B` 格式化与「数据看板」及日志保留设置：
   - 当积分或 Token 超过千/百万/十亿时，顶部账号菜单、管理后台系统概览、用户列表、用户详情抽屉、个人概览与积分钱包应显示紧凑 `K` / `M` / `B` 单位并在鼠标悬停时展示完整精确值；
