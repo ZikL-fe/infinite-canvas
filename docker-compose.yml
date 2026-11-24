@@ -1,11 +1,35 @@
 services:
-  app:
-    image: ghcr.io/basketikun/infinite-canvas:latest
+  postgres:
+    image: postgres:17-alpine
+    container_name: infinite-canvas-pg
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-please-change-pg-password}
+      POSTGRES_DB: ${POSTGRES_DB:-infinite_canvas}
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  canvas:
+    image: zikl0113/canvas:v0.20.1
     container_name: infinite-canvas
     ports:
       - "3000:3000"
+    environment:
+      PORT: 3000
+      DATABASE_URL: postgres://postgres:${POSTGRES_PASSWORD:-please-change-pg-password}@postgres:5432/${POSTGRES_DB:-infinite_canvas}
+      JWT_SECRET: ${JWT_SECRET:-please-change-this-to-a-long-random-secret-key}
+      # 可选：用于加密后台保存的渠道 Key / S3 / SMTP 等密钥（建议填写 32 位以上随机字符串）
+      SETTINGS_ENCRYPTION_KEY: ${SETTINGS_ENCRYPTION_KEY:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
     restart: unless-stopped
-    # 统计分析（可选，默认关闭）。每家一个独立变量，填了谁就启用谁，可同时启用多家：
-    # environment:
-    #   ANALYTICS_GA4_ID: G-XXXXXXXXXX                    # Google Analytics 4 衡量 ID
-    #   ANALYTICS_BAIDU_ID: xxxxxxxxxxxxxxxxxxxxxxxxxxxx   # 百度统计站点 ID
+
+volumes:
+  pg_data:

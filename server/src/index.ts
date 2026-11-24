@@ -1,5 +1,8 @@
 /** 服务端 API 入口：挂载多用户认证、AI 代理计费、云同步、对象存储与管理后台路由。 */
+import { existsSync } from "node:fs";
+import { join, resolve } from "node:path";
 import { Hono } from "hono";
+import { serveStatic } from "hono/bun";
 import { cors } from "hono/cors";
 
 import { ensureSchemaReady } from "./db/index.ts";
@@ -67,7 +70,48 @@ app.onError((error, c) => {
   return c.json({ error: error.message || "服务器内部错误" }, 500);
 });
 
+const webDistDir = process.env.WEB_DIST_DIR?.trim() ? resolve(process.env.WEB_DIST_DIR.trim()) : "";
+if (webDistDir && existsSync(webDistDir)) {
+  const sanitizeAnalyticsId = (value?: string) => (value ?? "").replace(/[^A-Za-z0-9-]/g, "");
+  app.get("/config.js", (c) => {
+    const body = `window.__RUNTIME_CONFIG__ = {\n  ANALYTICS_GA4_ID: "${sanitizeAnalyticsId(process.env.ANALYTICS_GA4_ID)}",\n  ANALYTICS_BAIDU_ID: "${sanitizeAnalyticsId(process.env.ANALYTICS_BAIDU_ID)}"\n};\n`;
+    return c.body(body, 200, {
+      "Content-Type": "application/javascript; charset=utf-8",
+      "Cache-Control": "no-store",
+    });
+  });
+
+  app.use("/assets/*", async (c, next) => {
+    await next();
+    if (c.res.ok) {
+      c.res.headers.set("Cache-Control", "public, max-age=31536000, immutable");
+    }
+  });
+
+  const staticMiddleware = serveStatic({ root: webDistDir });
+  app.use("*", async (c, next) => {
+    if (c.req.path.startsWith("/api/")) return next();
+    return staticMiddleware(c, next);
+  });
+
+  const indexHtmlPath = join(webDistDir, "index.html");
+  app.use("*", async (c, next) => {
+    if (c.req.path.startsWith("/api/") || (c.req.method !== "GET" && c.req.method !== "HEAD")) {
+      return next();
+    }
+    const file = Bun.file(indexHtmlPath);
+    if (!(await file.exists())) return next();
+    return new Response(file, {
+      headers: {
+        "Content-Type": "text/html; charset=utf-8",
+        "Cache-Control": "no-cache",
+      },
+    });
+  });
+}
+
 export default {
   port: env.PORT,
+  idleTimeout: 255,
   fetch: app.fetch,
 };

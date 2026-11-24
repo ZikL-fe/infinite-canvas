@@ -6,8 +6,10 @@ docs/.next
 docs/.source
 docs/node_modules
 docs/out
+server/node_modules
 web/.next
 web/node_modules
+web/dist
 web/out
 *.log
 .env*

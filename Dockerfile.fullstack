@@ -1,0 +1,25 @@
+# 阶段 1：构建 Vite 前端产物
+FROM oven/bun:1.4.5 AS web-build
+
+WORKDIR /app/web
+COPY web/package.json web/bun.lock ./
+RUN --mount=type=cache,target=/root/.bun/install/cache bun install --cache-dir=/root/.bun/install/cache
+COPY VERSION /app/VERSION
+COPY CHANGELOG.md /app/CHANGELOG.md
+COPY web ./
+RUN bun run build
+
+# 阶段 2：一体化全栈运行镜像（Bun + Hono 同时提供 /api/* 与前端静态资源）
+FROM oven/bun:1.4.5
+
+WORKDIR /app/server
+COPY server/package.json server/bun.lock* ./
+RUN --mount=type=cache,target=/root/.bun/install/cache bun install --production --cache-dir=/root/.bun/install/cache
+COPY server ./
+COPY --from=web-build /app/web/dist /app/web/dist
+
+ENV PORT=3000
+ENV WEB_DIST_DIR=/app/web/dist
+
+EXPOSE 3000
+CMD ["bun", "run", "src/index.ts"]
