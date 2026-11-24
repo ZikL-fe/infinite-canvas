@@ -438,6 +438,7 @@ export default function AdminPage() {
                 preExpiryWarnDays: expiryRes.preExpiryWarnDays,
                 cleanupWorkspaceData: expiryRes.cleanupWorkspaceData,
                 exemptAdmins: expiryRes.exemptAdmins,
+                cleanupOverQuotaWithoutExpiry: expiryRes.cleanupOverQuotaWithoutExpiry,
             });
             analyticsForm.setFieldsValue({
                 sampleIntervalMinutes: analyticsRes.sampleIntervalMinutes,
@@ -1041,6 +1042,7 @@ export default function AdminPage() {
                 preExpiryWarnDays: res.preExpiryWarnDays,
                 cleanupWorkspaceData: res.cleanupWorkspaceData,
                 exemptAdmins: res.exemptAdmins,
+                cleanupOverQuotaWithoutExpiry: res.cleanupOverQuotaWithoutExpiry,
             });
             message.success("云存储到期清理策略已保存");
         } catch (error) {
@@ -2742,10 +2744,10 @@ export default function AdminPage() {
                                                 title="云存储到期处理流程说明"
                                                 description={
                                                     <div className="space-y-1 text-xs leading-6">
-                                                        <div>1. 到期前预警：在配额到期前「预警天数」内发送一次提醒邮件（设为 0 则关闭预提醒，未绑定邮箱账号仅跳过发信）。</div>
+                                                        <div>1. 到期前预警：在配额或限时存储包到期前「预警天数」内发送一次提醒邮件（设为 0 则关闭预提醒，未绑定邮箱账号仅跳过发信）。</div>
                                                         <div>2. 到期宽限通知：配额到期且已用空间超出剩余有效配额时，进入宽限期并发送宽限通知邮件。</div>
-                                                        <div>3. 逾期自动清理：超过宽限期仍未续期时，按上传时间优先清理超出配额的最旧云端媒体文件；若仍超额（如有效配额归零），可按策略清理该用户的云端画布、工作台记录与个人资产并发送清理确认邮件。</div>
-                                                        <div>4. 后台定时器每小时自动执行一次巡检，单轮最多处理 50 位账号；邮件服务未启用时仍可执行到期清理，预警发信将在邮件恢复后自动重试。</div>
+                                                        <div>3. 逾期与超额清理：超过宽限期仍未续期，或开启「清理无到期时间的纯超额账号」且已用空间超过当前有效配额时，按上传时间从旧到新清理超出部分云端媒体；若仍超额（如有效配额归零），可按策略清理该用户的云端画布、工作台记录与个人资产。</div>
+                                                        <div>4. 后台定时器每小时自动执行一次巡检，单轮最多处理 50 位账号；邮件服务未启用时仍可执行清理，预警发信将在邮件恢复后自动重试。</div>
                                                     </div>
                                                 }
                                             />
@@ -2758,21 +2760,27 @@ export default function AdminPage() {
                                                     preExpiryWarnDays: 3,
                                                     cleanupWorkspaceData: true,
                                                     exemptAdmins: true,
+                                                    cleanupOverQuotaWithoutExpiry: true,
                                                 }}
                                                 onFinish={handleSaveStorageExpiryPolicy}
                                             >
                                                 <Row gutter={16}>
-                                                    <Col xs={24} md={8}>
+                                                    <Col xs={24} md={6}>
                                                         <Form.Item name="enabled" label="启用每小时自动到期巡检与清理" valuePropName="checked">
                                                             <Switch />
                                                         </Form.Item>
                                                     </Col>
-                                                    <Col xs={24} md={8}>
+                                                    <Col xs={24} md={6}>
                                                         <Form.Item name="exemptAdmins" label="豁免管理员账号" valuePropName="checked">
                                                             <Switch />
                                                         </Form.Item>
                                                     </Col>
-                                                    <Col xs={24} md={8}>
+                                                    <Col xs={24} md={6}>
+                                                        <Form.Item name="cleanupOverQuotaWithoutExpiry" label="清理无到期时间的纯超额账号" valuePropName="checked">
+                                                            <Switch />
+                                                        </Form.Item>
+                                                    </Col>
+                                                    <Col xs={24} md={6}>
                                                         <Form.Item name="cleanupWorkspaceData" label="文件清理后仍超额时清理画布/记录/资产" valuePropName="checked">
                                                             <Switch />
                                                         </Form.Item>
@@ -2850,7 +2858,7 @@ export default function AdminPage() {
                                                         dataSource={storageExpiryResult.items}
                                                         pagination={{ defaultPageSize: 10, showSizeChanger: true, pageSizeOptions: [10, 20, 30, 50, 100], showTotal: (count) => `共 ${count} 条` }}
                                                         scroll={{ x: 960 }}
-                                                        locale={{ emptyText: "当前没有需要预警、宽限通知或清理的过期账号" }}
+                                                        locale={{ emptyText: "当前没有需要预警、宽限通知或清理的超额/过期账号" }}
                                                         columns={[
                                                             {
                                                                 title: "用户",
@@ -2875,22 +2883,30 @@ export default function AdminPage() {
                                                                 render: (_, row) => {
                                                                     if (row.action === "pre_expiry_warn") return <Tag color="gold">到期前预警</Tag>;
                                                                     if (row.action === "expired_notice") return <Tag color="orange">宽限期通知</Tag>;
+                                                                    if (row.action === "over_quota_cleaned") {
+                                                                        return <Tag color="volcano">{storageExpiryResult.dryRun ? "待超额清理" : "已超额清理"}</Tag>;
+                                                                    }
                                                                     return <Tag color="red">{storageExpiryResult.dryRun ? "待逾期清理" : "已逾期清理"}</Tag>;
                                                                 },
                                                             },
                                                             {
                                                                 title: "配额到期 / 宽限截止",
                                                                 width: 210,
-                                                                render: (_, row) => (
-                                                                    <div className="text-xs leading-5">
-                                                                        <div>到期：{dayjs(row.expiresAt).format("YYYY-MM-DD HH:mm")}</div>
-                                                                        {row.graceEndsAt ? (
-                                                                            <Typography.Text type="secondary">
-                                                                                宽限截止：{dayjs(row.graceEndsAt).format("YYYY-MM-DD HH:mm")}
-                                                                            </Typography.Text>
-                                                                        ) : null}
-                                                                    </div>
-                                                                ),
+                                                                render: (_, row) =>
+                                                                    row.expiresAt ? (
+                                                                        <div className="text-xs leading-5">
+                                                                            <div>到期：{dayjs(row.expiresAt).format("YYYY-MM-DD HH:mm")}</div>
+                                                                            {row.graceEndsAt ? (
+                                                                                <Typography.Text type="secondary">
+                                                                                    宽限截止：{dayjs(row.graceEndsAt).format("YYYY-MM-DD HH:mm")}
+                                                                                </Typography.Text>
+                                                                            ) : null}
+                                                                        </div>
+                                                                    ) : (
+                                                                        <Typography.Text type="secondary" className="text-xs">
+                                                                            永久有效（当前已超额）
+                                                                        </Typography.Text>
+                                                                    ),
                                                             },
                                                             {
                                                                 title: "已用 / 有效配额",
@@ -2906,7 +2922,7 @@ export default function AdminPage() {
                                                                 title: "预计 / 实际清理",
                                                                 width: 190,
                                                                 render: (_, row) =>
-                                                                    row.action === "cleaned" ? (
+                                                                    row.action === "cleaned" || row.action === "over_quota_cleaned" ? (
                                                                         <div className="text-xs leading-5">
                                                                             <div>
                                                                                 媒体 {row.deletedMediaCount} 个（{formatBytes(row.freedBytes)}）

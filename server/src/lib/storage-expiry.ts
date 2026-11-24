@@ -12,7 +12,7 @@ export const STORAGE_EXPIRY_BATCH_LIMIT = 50;
 const INITIAL_SWEEP_DELAY_MS = 30 * 1000;
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-export type StorageExpiryActionKind = "pre_expiry_warn" | "expired_notice" | "cleaned";
+export type StorageExpiryActionKind = "pre_expiry_warn" | "expired_notice" | "cleaned" | "over_quota_cleaned";
 
 export type StorageExpirySweepItem = {
   userId: string;
@@ -20,7 +20,7 @@ export type StorageExpirySweepItem = {
   displayName: string;
   email: string | null;
   action: StorageExpiryActionKind;
-  expiresAt: string;
+  expiresAt: string | null;
   graceEndsAt: string | null;
   quotaBytes: number;
   usedBytes: number;
@@ -82,6 +82,40 @@ function getLatestExpiredTimestamp(
     }
   }
   return latest;
+}
+
+/** 查找预警窗口内最早即将到期且到期后会导致超额的时间点（兼容永久配额+限时资源包组合）。 */
+function getEarliestPreExpiryWarningTimestamp(
+  baseQuotaBytes: number,
+  baseExpiresAt: Date | null | undefined,
+  grants: Array<{ quotaBytes: number; expiresAt: Date | null; status: string }>,
+  usedBytes: number,
+  nowMs: number,
+  warnWindowMs: number,
+): Date | null {
+  if (warnWindowMs <= 0) return null;
+  const windowEnd = nowMs + warnWindowMs;
+  const candidates: Date[] = [];
+
+  if ((baseQuotaBytes ?? 0) > 0 && baseExpiresAt) {
+    const ms = baseExpiresAt.getTime();
+    if (ms > nowMs && ms <= windowEnd) candidates.push(baseExpiresAt);
+  }
+  for (const grant of grants) {
+    if (grant.status !== "active" || (grant.quotaBytes ?? 0) <= 0 || !grant.expiresAt) continue;
+    const ms = grant.expiresAt.getTime();
+    if (ms > nowMs && ms <= windowEnd) candidates.push(grant.expiresAt);
+  }
+  if (!candidates.length) return null;
+
+  candidates.sort((a, b) => a.getTime() - b.getTime());
+  for (const candidate of candidates) {
+    const afterExpiry = resolveEffectiveStorageQuota(baseQuotaBytes, baseExpiresAt, grants, candidate);
+    if (afterExpiry.storageQuotaBytes <= 0 || usedBytes > afterExpiry.storageQuotaBytes) {
+      return candidate;
+    }
+  }
+  return null;
 }
 
 function selectMediaForCleanup(
@@ -215,18 +249,25 @@ async function runSweepInternal(options?: {
         pendingAction = "expired_notice";
         actionTargetDate = latestExpiredAt;
       }
-    } else if (policy.preExpiryWarnDays > 0 && summary.storageQuotaBytes > 0 && summary.storageQuotaExpiresAt) {
-      const expiresMs = summary.storageQuotaExpiresAt.getTime();
-      if (expiresMs > nowMs && expiresMs - nowMs <= policy.preExpiryWarnDays * DAY_MS) {
-        if (!sameInstant(user.storagePreExpiryWarnedFor, summary.storageQuotaExpiresAt)) {
-          pendingAction = "pre_expiry_warn";
-          actionTargetDate = summary.storageQuotaExpiresAt;
-          graceEndsAt = new Date(expiresMs + policy.gracePeriodDays * DAY_MS);
-        }
+    } else if (policy.cleanupOverQuotaWithoutExpiry && usedBytes > summary.storageQuotaBytes) {
+      pendingAction = "over_quota_cleaned";
+    } else if (policy.preExpiryWarnDays > 0) {
+      const warnAt = getEarliestPreExpiryWarningTimestamp(
+        user.storageQuotaBytes,
+        user.storageQuotaExpiresAt,
+        userGrants,
+        usedBytes,
+        nowMs,
+        policy.preExpiryWarnDays * DAY_MS,
+      );
+      if (warnAt && !sameInstant(user.storagePreExpiryWarnedFor, warnAt)) {
+        pendingAction = "pre_expiry_warn";
+        actionTargetDate = warnAt;
+        graceEndsAt = new Date(warnAt.getTime() + policy.gracePeriodDays * DAY_MS);
       }
     }
 
-    if (!pendingAction || !actionTargetDate) {
+    if (!pendingAction) {
       continue;
     }
 
@@ -243,7 +284,7 @@ async function runSweepInternal(options?: {
       displayName,
       email: user.email || null,
       action: pendingAction,
-      expiresAt: actionTargetDate.toISOString(),
+      expiresAt: actionTargetDate ? actionTargetDate.toISOString() : null,
       graceEndsAt: graceEndsAt ? graceEndsAt.toISOString() : null,
       quotaBytes: summary.storageQuotaBytes,
       usedBytes,
@@ -255,7 +296,7 @@ async function runSweepInternal(options?: {
       emailSent: false,
     };
 
-    if (pendingAction === "pre_expiry_warn") {
+    if (pendingAction === "pre_expiry_warn" && actionTargetDate) {
       if (!dryRun) {
         if (!user.email) {
           skippedNoEmail += 1;
@@ -286,7 +327,7 @@ async function runSweepInternal(options?: {
       continue;
     }
 
-    if (pendingAction === "expired_notice") {
+    if (pendingAction === "expired_notice" && actionTargetDate) {
       if (!dryRun) {
         if (!user.email) {
           skippedNoEmail += 1;

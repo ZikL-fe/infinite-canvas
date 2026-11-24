@@ -1269,6 +1269,7 @@ const saveStorageExpiryPolicySchema = z.object({
   preExpiryWarnDays: z.number().int().min(0).max(30),
   cleanupWorkspaceData: z.boolean(),
   exemptAdmins: z.boolean(),
+  cleanupOverQuotaWithoutExpiry: z.boolean().optional().default(true),
 });
 
 const runStorageExpirySweepSchema = z.object({

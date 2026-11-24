@@ -362,13 +362,14 @@ export type AdminStorageExpiryPolicyForm = {
     preExpiryWarnDays: number;
     cleanupWorkspaceData: boolean;
     exemptAdmins: boolean;
+    cleanupOverQuotaWithoutExpiry: boolean;
 };
 
 export type AdminStorageExpiryPolicy = AdminStorageExpiryPolicyForm & {
     mailReady: boolean;
 };
 
-export type StorageExpiryActionKind = "pre_expiry_warn" | "expired_notice" | "cleaned";
+export type StorageExpiryActionKind = "pre_expiry_warn" | "expired_notice" | "cleaned" | "over_quota_cleaned";
 
 export type StorageExpirySweepItem = {
     userId: string;
@@ -376,7 +377,7 @@ export type StorageExpirySweepItem = {
     displayName: string;
     email: string | null;
     action: StorageExpiryActionKind;
-    expiresAt: string;
+    expiresAt: string | null;
     graceEndsAt: string | null;
     quotaBytes: number;
     usedBytes: number;

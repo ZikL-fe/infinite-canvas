@@ -134,6 +134,7 @@ export type PlatformStorageExpiryPolicy = {
   preExpiryWarnDays: number;
   cleanupWorkspaceData: boolean;
   exemptAdmins: boolean;
+  cleanupOverQuotaWithoutExpiry: boolean;
 };
 
 export type PlatformGlobalNotice = {
@@ -423,6 +424,7 @@ export async function getPlatformStorageExpiryPolicy(): Promise<PlatformStorageE
       preExpiryWarnDays: Number.isFinite(preDays) && preDays >= 0 ? Math.min(30, Math.floor(preDays)) : 3,
       cleanupWorkspaceData: raw.cleanupWorkspaceData ?? true,
       exemptAdmins: raw.exemptAdmins ?? true,
+      cleanupOverQuotaWithoutExpiry: raw.cleanupOverQuotaWithoutExpiry ?? true,
     };
   });
 }
@@ -434,6 +436,7 @@ export async function savePlatformStorageExpiryPolicy(policy: PlatformStorageExp
     preExpiryWarnDays: Math.max(0, Math.min(30, Math.floor(policy.preExpiryWarnDays ?? 3))),
     cleanupWorkspaceData: Boolean(policy.cleanupWorkspaceData),
     exemptAdmins: Boolean(policy.exemptAdmins),
+    cleanupOverQuotaWithoutExpiry: Boolean(policy.cleanupOverQuotaWithoutExpiry),
   };
   await db
     .insert(systemSettings)
