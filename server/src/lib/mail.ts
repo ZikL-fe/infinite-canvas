@@ -144,3 +144,122 @@ export async function sendTestMail(params: { to: string; config: PlatformMailCon
   const text = "【无限画布】这是一封测试邮件，说明当前 SMTP 发信配置工作正常。";
   await sendMail({ to: params.to, subject, html, text, configOverride: params.config });
 }
+
+function formatEmailBytes(bytes: number) {
+  if (!bytes || bytes <= 0) return "0 B";
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  const idx = Math.min(units.length - 1, Math.floor(Math.log(bytes) / Math.log(1024)));
+  const val = bytes / Math.pow(1024, idx);
+  return `${val >= 100 || idx === 0 ? val.toFixed(0) : val.toFixed(2)} ${units[idx]}`;
+}
+
+function formatEmailDate(date: Date) {
+  return date.toLocaleString("zh-CN", {
+    timeZone: "Asia/Shanghai",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  });
+}
+
+/** 发送云存储即将到期预警邮件。 */
+export async function sendStoragePreExpiryEmail(params: {
+  to: string;
+  displayName: string;
+  usedBytes: number;
+  quotaBytes: number;
+  expiresAt: Date;
+  gracePeriodDays: number;
+}) {
+  const subject = "云存储配额即将到期提醒 - 无限画布";
+  const expiresLabel = formatEmailDate(params.expiresAt);
+  const html = renderEmailShell(
+    "云存储配额即将到期提醒",
+    `
+      <p style="margin:0 0 12px;font-size:14px;line-height:1.6;">您好，${escapeHtml(params.displayName)}：</p>
+      <p style="margin:0 0 12px;font-size:14px;line-height:1.6;">
+        您的无限画布云存储配额（当前已用 <strong>${escapeHtml(formatEmailBytes(params.usedBytes))}</strong> / 总配额 <strong>${escapeHtml(formatEmailBytes(params.quotaBytes))}</strong>）
+        将于 <strong style="color:#d97706;">${escapeHtml(expiresLabel)}</strong> 到期。
+      </p>
+      <p style="margin:0 0 12px;font-size:13px;color:#4b5563;">
+        到期后系统将提供 <strong>${params.gracePeriodDays} 天</strong> 宽限期；若宽限期结束后仍未续期且已用空间超出有效配额，系统将自动清理超出的云端文件及必要的云端项目记录。
+      </p>
+      <p style="margin:0;font-size:13px;color:#4b5563;">请及时前往「个人中心」兑换存储容量码、续期或提前下载备份重要资产。</p>
+    `,
+  );
+  const text = `【无限画布】您好 ${params.displayName}，您的云存储配额（已用 ${formatEmailBytes(params.usedBytes)} / ${formatEmailBytes(params.quotaBytes)}）将于 ${expiresLabel} 到期，到期宽限期为 ${params.gracePeriodDays} 天，请及时续期或备份数据。`;
+  await sendMail({ to: params.to, subject, html, text });
+}
+
+/** 发送云存储已到期进入宽限期通知邮件。 */
+export async function sendStorageExpiredNoticeEmail(params: {
+  to: string;
+  displayName: string;
+  usedBytes: number;
+  remainingQuotaBytes: number;
+  expiredAt: Date;
+  graceEndsAt: Date;
+  gracePeriodDays: number;
+}) {
+  const subject = "云存储已到期，请及时续期或备份数据 - 无限画布";
+  const expiredLabel = formatEmailDate(params.expiredAt);
+  const graceEndsLabel = formatEmailDate(params.graceEndsAt);
+  const html = renderEmailShell(
+    "云存储已到期（宽限期通知）",
+    `
+      <p style="margin:0 0 12px;font-size:14px;line-height:1.6;">您好，${escapeHtml(params.displayName)}：</p>
+      <p style="margin:0 0 12px;font-size:14px;line-height:1.6;">
+        您的云存储配额已于 <strong>${escapeHtml(expiredLabel)}</strong> 到期。当前已占用云端空间 <strong>${escapeHtml(formatEmailBytes(params.usedBytes))}</strong>，
+        当前剩余有效配额为 <strong>${escapeHtml(formatEmailBytes(params.remainingQuotaBytes))}</strong>。
+      </p>
+      <p style="margin:0 0 12px;font-size:14px;line-height:1.6;">
+        您现有 <strong>${params.gracePeriodDays} 天</strong> 数据保留宽限期，截止时间为 <strong style="color:#dc2626;">${escapeHtml(graceEndsLabel)}</strong>。
+      </p>
+      <p style="margin:0;font-size:13px;color:#4b5563;">
+        若在宽限期结束前仍未续期或手动清理超出文件，系统将在宽限期满后自动清理过期云端媒体文件；若仍超出配额，还将清理云端画布项目与生成记录。
+      </p>
+    `,
+  );
+  const text = `【无限画布】您好 ${params.displayName}，您的云存储配额已于 ${expiredLabel} 到期（当前已用 ${formatEmailBytes(params.usedBytes)}，剩余有效配额 ${formatEmailBytes(params.remainingQuotaBytes)}），请在宽限期截止（${graceEndsLabel}）前完成续期或数据备份。`;
+  await sendMail({ to: params.to, subject, html, text });
+}
+
+/** 发送云存储逾期自动清理完成确认邮件。 */
+export async function sendStorageCleanedEmail(params: {
+  to: string;
+  displayName: string;
+  deletedMediaCount: number;
+  freedBytes: number;
+  deletedCanvasCount: number;
+  deletedWorkbenchCount: number;
+  deletedAssetCount: number;
+  remainingQuotaBytes: number;
+}) {
+  const subject = "云存储逾期数据已自动清理通知 - 无限画布";
+  const workspaceParts: string[] = [];
+  if (params.deletedCanvasCount > 0) workspaceParts.push(`云端画布 ${params.deletedCanvasCount} 个`);
+  if (params.deletedWorkbenchCount > 0) workspaceParts.push(`工作台记录 ${params.deletedWorkbenchCount} 条`);
+  if (params.deletedAssetCount > 0) workspaceParts.push(`个人资产 ${params.deletedAssetCount} 项`);
+  const workspaceSummary = workspaceParts.length > 0 ? workspaceParts.join("、") : "无额外项目记录";
+
+  const html = renderEmailShell(
+    "云存储逾期数据清理完成",
+    `
+      <p style="margin:0 0 12px;font-size:14px;line-height:1.6;">您好，${escapeHtml(params.displayName)}：</p>
+      <p style="margin:0 0 12px;font-size:14px;line-height:1.6;">
+        由于您的云存储配额到期且已超过宽限期未续期，系统已按平台规则执行自动清理：
+      </p>
+      <ul style="margin:0 0 12px;padding-left:20px;font-size:13px;line-height:1.8;color:#374151;">
+        <li>清理云端媒体文件：<strong>${params.deletedMediaCount} 个</strong>（释放空间 <strong>${escapeHtml(formatEmailBytes(params.freedBytes))}</strong>）</li>
+        <li>清理云端关联数据：<strong>${escapeHtml(workspaceSummary)}</strong></li>
+        <li>当前剩余有效配额：<strong>${escapeHtml(formatEmailBytes(params.remainingQuotaBytes))}</strong></li>
+      </ul>
+      <p style="margin:0;font-size:13px;color:#4b5563;">如需继续使用云存储服务，可在登录后前往「个人中心」兑换存储容量码或联系管理员开通新配额。</p>
+    `,
+  );
+  const text = `【无限画布】您好 ${params.displayName}，您的云存储配额到期且超过宽限期未续期，系统已清理媒体文件 ${params.deletedMediaCount} 个（释放 ${formatEmailBytes(params.freedBytes)}），关联数据：${workspaceSummary}。`;
+  await sendMail({ to: params.to, subject, html, text });
+}

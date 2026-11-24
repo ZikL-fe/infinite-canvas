@@ -300,6 +300,57 @@ export type AdminMailSettingsForm = {
     lowBalanceCooldownHours: number;
 };
 
+export type AdminStorageExpiryPolicyForm = {
+    enabled: boolean;
+    gracePeriodDays: number;
+    preExpiryWarnDays: number;
+    cleanupWorkspaceData: boolean;
+    exemptAdmins: boolean;
+};
+
+export type AdminStorageExpiryPolicy = AdminStorageExpiryPolicyForm & {
+    mailReady: boolean;
+};
+
+export type StorageExpiryActionKind = "pre_expiry_warn" | "expired_notice" | "cleaned";
+
+export type StorageExpirySweepItem = {
+    userId: string;
+    username: string;
+    displayName: string;
+    email: string | null;
+    action: StorageExpiryActionKind;
+    expiresAt: string;
+    graceEndsAt: string | null;
+    quotaBytes: number;
+    usedBytes: number;
+    deletedMediaCount: number;
+    freedBytes: number;
+    deletedCanvasCount: number;
+    deletedWorkbenchCount: number;
+    deletedAssetCount: number;
+    emailSent: boolean;
+    error?: string;
+};
+
+export type StorageExpirySweepResult = {
+    ok: boolean;
+    dryRun: boolean;
+    skippedDisabled?: boolean;
+    executedAt: string;
+    policy: AdminStorageExpiryPolicyForm;
+    scannedUsers: number;
+    eligibleUsers: number;
+    preExpiryWarned: number;
+    expiredNoticed: number;
+    cleanedUsers: number;
+    freedBytesTotal: number;
+    skippedNoEmail: number;
+    failedCount: number;
+    truncated: boolean;
+    items: StorageExpirySweepItem[];
+};
+
 export type RuntimeConfigResponse = {
     channels: Array<{
         id: string;
@@ -806,6 +857,14 @@ export const adminApi = {
         requestServer<{ ok: boolean; ready: boolean; passwordPreview: string }>("/admin/settings/mail", { method: "PUT", body: JSON.stringify(payload) }),
     testMailSettings: (payload: AdminMailSettingsForm & { testTo: string }) =>
         requestServer<{ ok: boolean; message: string }>("/admin/settings/mail/test", { method: "POST", body: JSON.stringify(payload) }),
+    getStorageExpirySettings: () => requestServer<AdminStorageExpiryPolicy>("/admin/settings/storage-expiry"),
+    saveStorageExpirySettings: (payload: AdminStorageExpiryPolicyForm) =>
+        requestServer<{ ok: boolean } & AdminStorageExpiryPolicy>("/admin/settings/storage-expiry", { method: "PUT", body: JSON.stringify(payload) }),
+    runStorageExpirySweep: (payload?: { dryRun?: boolean }) =>
+        requestServer<StorageExpirySweepResult>("/admin/settings/storage-expiry/run", {
+            method: "POST",
+            body: JSON.stringify({ dryRun: Boolean(payload?.dryRun) }),
+        }),
     getChannelSettings: () => requestServer<{ channels: AdminChannelItem[] }>("/admin/settings/channels"),
     saveChannelSettings: (channels: AdminChannelItem[]) =>
         requestServer<{ ok: boolean }>("/admin/settings/channels", { method: "PUT", body: JSON.stringify({ channels }) }),

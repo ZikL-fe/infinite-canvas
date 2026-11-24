@@ -23,17 +23,20 @@ import {
   getAuthPolicy,
   getPlatformChannels,
   getPlatformMailConfig,
+  getPlatformStorageExpiryPolicy,
   getPlatformWebdavConfig,
   getS3StorageConfig,
   saveAuthPolicy,
   savePlatformChannels,
   savePlatformMailConfig,
+  savePlatformStorageExpiryPolicy,
   savePlatformWebdavConfig,
   saveS3StorageConfig,
   type PlatformChannel,
   type PlatformMailConfig,
   type S3StorageConfig,
 } from "../lib/settings.ts";
+import { runStorageExpirySweep } from "../lib/storage-expiry.ts";
 import { getUserStorageQuotaSummary, getUsersStorageQuotaMap, serializeStorageGrant } from "../lib/storage-quota.ts";
 import { requireAdmin, requireAuth, type AppEnv } from "../middleware/auth.ts";
 
@@ -1017,6 +1020,44 @@ adminRoutes.post("/settings/mail/test", zValidator("json", testMailSchema), asyn
     const message = error instanceof Error ? error.message : "测试邮件发送失败";
     return c.json({ error: `测试邮件发送失败：${message}` }, 400);
   }
+});
+
+const saveStorageExpiryPolicySchema = z.object({
+  enabled: z.boolean(),
+  gracePeriodDays: z.number().int().min(1).max(365),
+  preExpiryWarnDays: z.number().int().min(0).max(30),
+  cleanupWorkspaceData: z.boolean(),
+  exemptAdmins: z.boolean(),
+});
+
+const runStorageExpirySweepSchema = z.object({
+  dryRun: z.boolean().optional(),
+});
+
+adminRoutes.get("/settings/storage-expiry", async (c) => {
+  const [policy, mailConfig] = await Promise.all([getPlatformStorageExpiryPolicy(), getPlatformMailConfig()]);
+  return c.json({
+    ...policy,
+    mailReady: isMailConfigReady(mailConfig),
+  });
+});
+
+adminRoutes.put("/settings/storage-expiry", zValidator("json", saveStorageExpiryPolicySchema), async (c) => {
+  const user = c.get("user");
+  const body = c.req.valid("json");
+  const saved = await savePlatformStorageExpiryPolicy(body, user.id);
+  const mailConfig = await getPlatformMailConfig();
+  return c.json({
+    ok: true,
+    ...saved,
+    mailReady: isMailConfigReady(mailConfig),
+  });
+});
+
+adminRoutes.post("/settings/storage-expiry/run", zValidator("json", runStorageExpirySweepSchema), async (c) => {
+  const body = c.req.valid("json");
+  const result = await runStorageExpirySweep({ dryRun: Boolean(body.dryRun) });
+  return c.json(result);
 });
 
 adminRoutes.get("/settings/channels", async (c) => {

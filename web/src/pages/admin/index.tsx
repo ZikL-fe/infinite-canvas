@@ -16,6 +16,7 @@ import {
     type AdminChannelItem,
     type AdminMailSettingsForm,
     type AdminOverview,
+    type AdminStorageExpiryPolicyForm,
     type AdminUserItem,
     type AnnouncementItem,
     type MediaItem,
@@ -23,6 +24,8 @@ import {
     type RedeemCodeKind,
     type S3Provider,
     type S3StorageConfigForm,
+    type StorageExpirySweepItem,
+    type StorageExpirySweepResult,
     type StorageGrantItem,
     type WorkspaceDataItem,
 } from "@/services/api/server";
@@ -204,6 +207,13 @@ export default function AdminPage() {
     const [mailTesting, setMailTesting] = useState(false);
     const [testMailTo, setTestMailTo] = useState("");
 
+    const [storageExpiryForm] = Form.useForm<AdminStorageExpiryPolicyForm>();
+    const [storageExpiryEnabled, setStorageExpiryEnabled] = useState(false);
+    const [storageExpirySaving, setStorageExpirySaving] = useState(false);
+    const [storageExpiryPreviewing, setStorageExpiryPreviewing] = useState(false);
+    const [storageExpiryRunning, setStorageExpiryRunning] = useState(false);
+    const [storageExpiryResult, setStorageExpiryResult] = useState<StorageExpirySweepResult | null>(null);
+
     const [mediaSubTab, setMediaSubTab] = useState<"media" | "canvas" | "image_workbench" | "video_workbench">("media");
     const [mediaItems, setMediaItems] = useState<MediaItem[]>([]);
     const [mediaTotal, setMediaTotal] = useState(0);
@@ -357,10 +367,11 @@ export default function AdminPage() {
 
     const loadAuthAndWebdavSettings = useCallback(async () => {
         try {
-            const [authRes, webdavRes, mailRes] = await Promise.all([
+            const [authRes, webdavRes, mailRes, expiryRes] = await Promise.all([
                 adminApi.getAuthSettings(),
                 adminApi.getWebdavSettings(),
                 adminApi.getMailSettings(),
+                adminApi.getStorageExpirySettings(),
             ]);
             setAllowRegister(authRes.allowRegister);
             setRequireEmailOnRegister(authRes.requireEmailOnRegister);
@@ -387,6 +398,14 @@ export default function AdminPage() {
                 lowBalanceAlertEnabled: mailRes.lowBalanceAlertEnabled,
                 lowBalanceThreshold: mailRes.lowBalanceThreshold,
                 lowBalanceCooldownHours: mailRes.lowBalanceCooldownHours,
+            });
+            setStorageExpiryEnabled(expiryRes.enabled);
+            storageExpiryForm.setFieldsValue({
+                enabled: expiryRes.enabled,
+                gracePeriodDays: expiryRes.gracePeriodDays,
+                preExpiryWarnDays: expiryRes.preExpiryWarnDays,
+                cleanupWorkspaceData: expiryRes.cleanupWorkspaceData,
+                exemptAdmins: expiryRes.exemptAdmins,
             });
         } catch (error) {
             message.error(error instanceof Error ? error.message : "读取系统设置失败");
@@ -959,6 +978,57 @@ export default function AdminPage() {
             if (error instanceof Error) message.error(error.message);
         } finally {
             setMailTesting(false);
+        }
+    };
+
+    const handleSaveStorageExpiryPolicy = async (values: AdminStorageExpiryPolicyForm) => {
+        setStorageExpirySaving(true);
+        try {
+            const res = await adminApi.saveStorageExpirySettings(values);
+            setStorageExpiryEnabled(res.enabled);
+            setMailReady(res.mailReady);
+            storageExpiryForm.setFieldsValue({
+                enabled: res.enabled,
+                gracePeriodDays: res.gracePeriodDays,
+                preExpiryWarnDays: res.preExpiryWarnDays,
+                cleanupWorkspaceData: res.cleanupWorkspaceData,
+                exemptAdmins: res.exemptAdmins,
+            });
+            message.success("云存储到期清理策略已保存");
+        } catch (error) {
+            message.error(error instanceof Error ? error.message : "保存清理策略失败");
+        } finally {
+            setStorageExpirySaving(false);
+        }
+    };
+
+    const handleRunStorageExpirySweep = async (dryRun: boolean) => {
+        if (dryRun) {
+            setStorageExpiryPreviewing(true);
+        } else {
+            setStorageExpiryRunning(true);
+        }
+        try {
+            const res = await adminApi.runStorageExpirySweep({ dryRun });
+            setStorageExpiryResult(res);
+            if (dryRun) {
+                message.success(`预览完成：命中 ${res.eligibleUsers} 位待处理账号`);
+            } else {
+                message.success(
+                    `巡检完成：预警 ${res.preExpiryWarned} 人、宽限提醒 ${res.expiredNoticed} 人、清理 ${res.cleanedUsers} 人（释放 ${formatBytes(res.freedBytesTotal)}）`,
+                );
+                void loadOverview(overviewDays);
+                void loadUsers();
+                void loadMedia();
+            }
+        } catch (error) {
+            message.error(error instanceof Error ? error.message : "执行存储到期巡检失败");
+        } finally {
+            if (dryRun) {
+                setStorageExpiryPreviewing(false);
+            } else {
+                setStorageExpiryRunning(false);
+            }
         }
     };
 
@@ -2537,6 +2607,236 @@ export default function AdminPage() {
                                                     </Button>
                                                 </Space>
                                             </Form>
+                                        </Card>
+                                    ),
+                                },
+                                {
+                                    key: "settings-storage-expiry",
+                                    label: (
+                                        <span className="inline-flex items-center gap-1.5">
+                                            <HardDrive className="size-3.5" />
+                                            存储到期清理
+                                        </span>
+                                    ),
+                                    pageTitle: "系统设置 · 存储到期清理",
+                                    children: (
+                                        <Card
+                                            title={
+                                                <span className="inline-flex items-center gap-2">
+                                                    <HardDrive className="size-4" />
+                                                    云存储到期提醒与宽限期清理策略
+                                                </span>
+                                            }
+                                            extra={<Tag color={storageExpiryEnabled ? "green" : "default"}>{storageExpiryEnabled ? "自动巡检已开启" : "自动巡检未开启"}</Tag>}
+                                        >
+                                            <Alert
+                                                type="info"
+                                                showIcon
+                                                className="mb-4"
+                                                title="云存储到期处理流程说明"
+                                                description={
+                                                    <div className="space-y-1 text-xs leading-6">
+                                                        <div>1. 到期前预警：在配额到期前「预警天数」内发送一次提醒邮件（设为 0 则关闭预提醒，未绑定邮箱账号仅跳过发信）。</div>
+                                                        <div>2. 到期宽限通知：配额到期且已用空间超出剩余有效配额时，进入宽限期并发送宽限通知邮件。</div>
+                                                        <div>3. 逾期自动清理：超过宽限期仍未续期时，按上传时间优先清理超出配额的最旧云端媒体文件；若仍超额（如有效配额归零），可按策略清理该用户的云端画布、工作台记录与个人资产并发送清理确认邮件。</div>
+                                                        <div>4. 后台定时器每小时自动执行一次巡检，单轮最多处理 50 位账号；邮件服务未启用时仍可执行到期清理，预警发信将在邮件恢复后自动重试。</div>
+                                                    </div>
+                                                }
+                                            />
+                                            <Form
+                                                form={storageExpiryForm}
+                                                layout="vertical"
+                                                initialValues={{
+                                                    enabled: false,
+                                                    gracePeriodDays: 7,
+                                                    preExpiryWarnDays: 3,
+                                                    cleanupWorkspaceData: true,
+                                                    exemptAdmins: true,
+                                                }}
+                                                onFinish={handleSaveStorageExpiryPolicy}
+                                            >
+                                                <Row gutter={16}>
+                                                    <Col xs={24} md={8}>
+                                                        <Form.Item name="enabled" label="启用每小时自动到期巡检与清理" valuePropName="checked">
+                                                            <Switch />
+                                                        </Form.Item>
+                                                    </Col>
+                                                    <Col xs={24} md={8}>
+                                                        <Form.Item name="exemptAdmins" label="豁免管理员账号" valuePropName="checked">
+                                                            <Switch />
+                                                        </Form.Item>
+                                                    </Col>
+                                                    <Col xs={24} md={8}>
+                                                        <Form.Item name="cleanupWorkspaceData" label="文件清理后仍超额时清理画布/记录/资产" valuePropName="checked">
+                                                            <Switch />
+                                                        </Form.Item>
+                                                    </Col>
+                                                    <Col xs={24} md={12}>
+                                                        <Form.Item name="preExpiryWarnDays" label="到期前邮件预警天数（0~30，0 为关闭预提醒）">
+                                                            <InputNumber min={0} max={30} precision={0} className="w-full" />
+                                                        </Form.Item>
+                                                    </Col>
+                                                    <Col xs={24} md={12}>
+                                                        <Form.Item name="gracePeriodDays" label="到期后保留宽限天数（1~365，默认 7 天）">
+                                                            <InputNumber min={1} max={365} precision={0} className="w-full" />
+                                                        </Form.Item>
+                                                    </Col>
+                                                </Row>
+                                                <div className="flex flex-wrap items-center justify-between gap-3">
+                                                    <Space wrap>
+                                                        <Button type="primary" htmlType="submit" loading={storageExpirySaving}>
+                                                            保存清理策略
+                                                        </Button>
+                                                        <Button
+                                                            icon={<RefreshCw className="size-4" />}
+                                                            onClick={() => void handleRunStorageExpirySweep(true)}
+                                                            loading={storageExpiryPreviewing}
+                                                            disabled={storageExpiryRunning}
+                                                        >
+                                                            预览受影响账号
+                                                        </Button>
+                                                        <Popconfirm
+                                                            title="确认立即执行一次存储到期巡检？"
+                                                            description="将按上方策略向符合条件的用户发送提醒邮件，并对超过宽限期的账号执行实际清理。"
+                                                            okText="立即执行"
+                                                            cancelText="取消"
+                                                            onConfirm={() => void handleRunStorageExpirySweep(false)}
+                                                        >
+                                                            <Button
+                                                                danger
+                                                                icon={<Trash2 className="size-4" />}
+                                                                loading={storageExpiryRunning}
+                                                                disabled={storageExpiryPreviewing}
+                                                            >
+                                                                立即执行一次巡检
+                                                            </Button>
+                                                        </Popconfirm>
+                                                    </Space>
+                                                    {!mailReady ? <Typography.Text type="warning">提示：当前平台邮件服务未启用，发信将跳过或失败。</Typography.Text> : null}
+                                                </div>
+                                            </Form>
+
+                                            {storageExpiryResult ? (
+                                                <div className="mt-6 space-y-3 border-t border-black/5 pt-4 dark:border-white/5">
+                                                    <div className="flex flex-wrap items-center justify-between gap-2">
+                                                        <Space wrap>
+                                                            <Tag color={storageExpiryResult.dryRun ? "blue" : "green"}>
+                                                                {storageExpiryResult.dryRun ? "演练预览结果（未修改数据）" : "实际执行结果"}
+                                                            </Tag>
+                                                            <Tag>活跃有占用：{storageExpiryResult.scannedUsers} 人</Tag>
+                                                            <Tag>待处理：{storageExpiryResult.eligibleUsers} 人</Tag>
+                                                            <Tag color="gold">预提醒：{storageExpiryResult.preExpiryWarned}</Tag>
+                                                            <Tag color="orange">宽限通知：{storageExpiryResult.expiredNoticed}</Tag>
+                                                            <Tag color="red">已清理/待清理：{storageExpiryResult.cleanedUsers}</Tag>
+                                                            <Tag color="purple">释放空间：{formatBytes(storageExpiryResult.freedBytesTotal)}</Tag>
+                                                            {storageExpiryResult.failedCount > 0 ? <Tag color="error">异常：{storageExpiryResult.failedCount}</Tag> : null}
+                                                        </Space>
+                                                        <Typography.Text type="secondary" className="text-xs">
+                                                            执行时间：{dayjs(storageExpiryResult.executedAt).format("YYYY-MM-DD HH:mm:ss")}
+                                                        </Typography.Text>
+                                                    </div>
+                                                    {storageExpiryResult.truncated ? (
+                                                        <Alert type="warning" showIcon title="本轮命中账号超过单次上限（50 人），剩余账号将在下一轮继续处理。" />
+                                                    ) : null}
+                                                    <Table<StorageExpirySweepItem>
+                                                        className={ADMIN_TABLE_CLASS}
+                                                        rowKey={(row) => `${row.userId}-${row.action}`}
+                                                        dataSource={storageExpiryResult.items}
+                                                        pagination={{ pageSize: 10, hideOnSinglePage: true }}
+                                                        scroll={{ x: 960 }}
+                                                        locale={{ emptyText: "当前没有需要预警、宽限通知或清理的过期账号" }}
+                                                        columns={[
+                                                            {
+                                                                title: "用户",
+                                                                width: 180,
+                                                                render: (_, row) => (
+                                                                    <div>
+                                                                        <div className="font-medium">{row.displayName || row.username}</div>
+                                                                        <Typography.Text type="secondary" className="text-xs">
+                                                                            @{row.username}
+                                                                        </Typography.Text>
+                                                                    </div>
+                                                                ),
+                                                            },
+                                                            {
+                                                                title: "邮箱",
+                                                                width: 190,
+                                                                render: (_, row) => row.email || <Typography.Text type="secondary">未绑定邮箱</Typography.Text>,
+                                                            },
+                                                            {
+                                                                title: "处理动作",
+                                                                width: 120,
+                                                                render: (_, row) => {
+                                                                    if (row.action === "pre_expiry_warn") return <Tag color="gold">到期前预警</Tag>;
+                                                                    if (row.action === "expired_notice") return <Tag color="orange">宽限期通知</Tag>;
+                                                                    return <Tag color="red">{storageExpiryResult.dryRun ? "待逾期清理" : "已逾期清理"}</Tag>;
+                                                                },
+                                                            },
+                                                            {
+                                                                title: "配额到期 / 宽限截止",
+                                                                width: 210,
+                                                                render: (_, row) => (
+                                                                    <div className="text-xs leading-5">
+                                                                        <div>到期：{dayjs(row.expiresAt).format("YYYY-MM-DD HH:mm")}</div>
+                                                                        {row.graceEndsAt ? (
+                                                                            <Typography.Text type="secondary">
+                                                                                宽限截止：{dayjs(row.graceEndsAt).format("YYYY-MM-DD HH:mm")}
+                                                                            </Typography.Text>
+                                                                        ) : null}
+                                                                    </div>
+                                                                ),
+                                                            },
+                                                            {
+                                                                title: "已用 / 有效配额",
+                                                                width: 160,
+                                                                render: (_, row) => (
+                                                                    <div className="text-xs leading-5">
+                                                                        <div>已用：{formatBytes(row.usedBytes)}</div>
+                                                                        <Typography.Text type="secondary">有效：{formatBytes(row.quotaBytes)}</Typography.Text>
+                                                                    </div>
+                                                                ),
+                                                            },
+                                                            {
+                                                                title: "预计 / 实际清理",
+                                                                width: 190,
+                                                                render: (_, row) =>
+                                                                    row.action === "cleaned" ? (
+                                                                        <div className="text-xs leading-5">
+                                                                            <div>
+                                                                                媒体 {row.deletedMediaCount} 个（{formatBytes(row.freedBytes)}）
+                                                                            </div>
+                                                                            {row.deletedCanvasCount || row.deletedWorkbenchCount || row.deletedAssetCount ? (
+                                                                                <Typography.Text type="secondary">
+                                                                                    画布 {row.deletedCanvasCount} / 记录 {row.deletedWorkbenchCount} / 资产 {row.deletedAssetCount}
+                                                                                </Typography.Text>
+                                                                            ) : null}
+                                                                        </div>
+                                                                    ) : (
+                                                                        <Typography.Text type="secondary">-</Typography.Text>
+                                                                    ),
+                                                            },
+                                                            {
+                                                                title: "邮件 / 状态",
+                                                                width: 160,
+                                                                render: (_, row) =>
+                                                                    row.error ? (
+                                                                        <Typography.Text type="danger" className="text-xs">
+                                                                            {row.error}
+                                                                        </Typography.Text>
+                                                                    ) : storageExpiryResult.dryRun ? (
+                                                                        <Typography.Text type="secondary" className="text-xs">
+                                                                            预览待执行
+                                                                        </Typography.Text>
+                                                                    ) : row.emailSent ? (
+                                                                        <Tag color="green">已发邮件</Tag>
+                                                                    ) : (
+                                                                        <Tag>跳过发信</Tag>
+                                                                    ),
+                                                            },
+                                                        ]}
+                                                    />
+                                                </div>
+                                            ) : null}
                                         </Card>
                                     ),
                                 },

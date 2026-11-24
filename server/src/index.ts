@@ -58,6 +58,10 @@ app.route("/api/assets", assetRoutes);
 app.route("/api/workbench", workbenchRoutes);
 app.route("/api/admin", adminRoutes);
 
+void import("./lib/storage-expiry.ts")
+  .then((mod) => mod.startStorageExpiryScheduler())
+  .catch((error) => console.error("[storage-expiry] scheduler init failed:", error));
+
 app.onError((error, c) => {
   console.error("[server] unhandled error:", error);
   return c.json({ error: error.message || "服务器内部错误" }, 500);

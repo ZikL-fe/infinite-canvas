@@ -8,6 +8,9 @@ import { useCanvasSidePanelStore } from "@/stores/use-canvas-side-panel-store";
 import { useThemeStore } from "@/stores/use-theme-store";
 import { DOCS_URL } from "@/constant/env";
 
+// 暂不对外展示画布顶部 Agent 状态入口，后续恢复时改为 true 即可
+const SHOW_CANVAS_AGENT_STATUS = false;
+
 export function CanvasTopBar({
     title,
     titleDraft,
@@ -132,7 +135,7 @@ export function CanvasTopBar({
                             </button>
                         )}
                     </div>
-                    <CompactAgentStatus status={compactAgentStatus} onClick={onToggleAgent} />
+                    {SHOW_CANVAS_AGENT_STATUS ? <CompactAgentStatus status={compactAgentStatus} onClick={onToggleAgent} /> : null}
                 </div>
 
                 <div className="pointer-events-auto flex items-center gap-1">

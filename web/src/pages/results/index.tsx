@@ -1,9 +1,10 @@
 /** 云端生成成果页面：列表仅加载云端缩略图，点击查看或下载时才按需加载原图/原视频。 */
 import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
-import { App, Button, Card, Empty, Image, Input, Modal, Pagination, Popconfirm, Progress, Result, Space, Spin, Tag, Typography } from "antd";
-import { AudioLines, Download, Eye, FolderPlus, HardDrive, ImageIcon, Play, RefreshCw, Search, Trash2, Video } from "lucide-react";
+import { App, Button, Card, Descriptions, Drawer, Empty, Image, Input, Pagination, Popconfirm, Progress, Result, Space, Spin, Tag, Typography } from "antd";
+import { AudioLines, Copy, Download, Eye, FolderPlus, HardDrive, ImageIcon, Play, RefreshCw, Search, Trash2, Video } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 
+import { useCopyText } from "@/hooks/use-copy-text";
 import { createImageThumbnail, createVideoThumbnail } from "@/lib/image-thumbnail";
 import { formatBytes, formatStoragePair } from "@/lib/image-utils";
 import { authApi, storageApi, type MediaItem } from "@/services/api/server";
@@ -27,8 +28,16 @@ const kindLabels: Record<string, string> = {
     file: "文件",
 };
 
+const moduleLabels: Record<string, string> = {
+    canvas: "无限画布",
+    image_workbench: "生图工作台",
+    video_workbench: "视频工作台",
+    assets: "我的资产",
+};
+
 export default function ResultsPage() {
     const { message } = App.useApp();
+    const copyText = useCopyText();
     const navigate = useNavigate();
     useSyncExternalStore(subscribeImagePreviews, getImagePreviewRevision);
     const user = useUserStore((state) => state.user);
@@ -340,8 +349,8 @@ export default function ResultsPage() {
                                         <Card
                                             key={item.id}
                                             hoverable
-                                            className="overflow-hidden"
-                                            styles={{ body: { padding: 14 } }}
+                                            className="flex h-full flex-col overflow-hidden"
+                                            styles={{ body: { padding: 14, flex: 1, display: "flex", flexDirection: "column" } }}
                                             cover={
                                                 item.kind === "image" ? (
                                                     thumbSrc ? (
@@ -389,59 +398,69 @@ export default function ResultsPage() {
                                                 )
                                             }
                                         >
-                                            <div className="flex flex-col gap-2">
-                                                <div className="flex flex-wrap items-center gap-1.5">
-                                                    <Tag className="m-0 text-[11px]">{kindLabels[item.kind] || item.kind}</Tag>
+                                            <div className="flex flex-1 flex-col gap-2">
+                                                <div className="flex min-h-6 items-center gap-1.5 overflow-hidden">
+                                                    <Tag className="m-0 shrink-0 text-[11px]">{kindLabels[item.kind] || item.kind}</Tag>
                                                     {model ? (
-                                                        <Tag color="blue" className="m-0 max-w-[160px] truncate text-[11px]">
+                                                        <Tag color="blue" className="m-0 min-w-0 truncate text-[11px]">
                                                             {model}
                                                         </Tag>
                                                     ) : null}
                                                 </div>
-                                                {promptText ? (
-                                                    <Typography.Paragraph ellipsis={{ rows: 2, tooltip: promptText }} className="!mb-0 text-xs leading-5">
-                                                        {promptText}
-                                                    </Typography.Paragraph>
-                                                ) : (
-                                                    <Typography.Text type="secondary" ellipsis className="font-mono text-xs">
-                                                        {item.objectKey.split("/").pop() || item.id}
+                                                <div className="min-h-10 flex-1">
+                                                    {promptText ? (
+                                                        <Typography.Paragraph ellipsis={{ rows: 2, tooltip: promptText }} className="!mb-0 text-xs leading-5">
+                                                            {promptText}
+                                                        </Typography.Paragraph>
+                                                    ) : (
+                                                        <Typography.Text type="secondary" ellipsis className="block font-mono text-xs leading-5">
+                                                            {item.objectKey.split("/").pop() || item.id}
+                                                        </Typography.Text>
+                                                    )}
+                                                </div>
+                                                <div className="mt-auto space-y-2">
+                                                    <Typography.Text
+                                                        type="secondary"
+                                                        ellipsis={{ tooltip: `${item.width && item.height ? `${item.width}x${item.height} · ` : ""}${formatBytes(item.bytes)} · ${new Date(item.createdAt).toLocaleString("zh-CN")}` }}
+                                                        className="block text-[11px]"
+                                                    >
+                                                        {item.width && item.height ? `${item.width}x${item.height} · ` : ""}
+                                                        {formatBytes(item.bytes)} · {new Date(item.createdAt).toLocaleString("zh-CN")}
                                                     </Typography.Text>
-                                                )}
-                                                <Typography.Text type="secondary" className="text-[11px]">
-                                                    {item.width && item.height ? `${item.width}x${item.height} · ` : ""}
-                                                    {formatBytes(item.bytes)} · {new Date(item.createdAt).toLocaleString("zh-CN")}
-                                                </Typography.Text>
-                                                <Space size={4} wrap className="pt-1">
-                                                    <Button
-                                                        size="small"
-                                                        icon={<Eye className="size-3.5" />}
-                                                        loading={loadingOriginalId === item.id}
-                                                        onClick={() => void handleOpenPreview(item)}
-                                                    >
-                                                        查看
-                                                    </Button>
-                                                    {item.kind === "image" || item.kind === "video" ? (
-                                                        <Button
-                                                            size="small"
-                                                            icon={<FolderPlus className="size-3.5" />}
-                                                            loading={savingId === item.id}
-                                                            onClick={() => void handleSaveToAssets(item)}
-                                                        >
-                                                            存资产
-                                                        </Button>
-                                                    ) : null}
-                                                    <Button
-                                                        size="small"
-                                                        icon={<Download className="size-3.5" />}
-                                                        loading={loadingOriginalId === item.id}
-                                                        onClick={() => void handleDownload(item)}
-                                                    >
-                                                        下载
-                                                    </Button>
-                                                    <Popconfirm title="确定从云端删除该成果并释放空间吗？" onConfirm={() => void handleDelete(item.id)}>
-                                                        <Button size="small" danger loading={deletingId === item.id} icon={<Trash2 className="size-3.5" />} />
-                                                    </Popconfirm>
-                                                </Space>
+                                                    <div className="flex items-center justify-between gap-1.5 border-t border-black/5 pt-2 dark:border-white/5">
+                                                        <div className="flex min-w-0 items-center gap-1.5">
+                                                            <Button
+                                                                size="small"
+                                                                icon={<Eye className="size-3.5" />}
+                                                                loading={loadingOriginalId === item.id}
+                                                                onClick={() => void handleOpenPreview(item)}
+                                                            >
+                                                                查看
+                                                            </Button>
+                                                            {item.kind === "image" || item.kind === "video" ? (
+                                                                <Button
+                                                                    size="small"
+                                                                    icon={<FolderPlus className="size-3.5" />}
+                                                                    loading={savingId === item.id}
+                                                                    onClick={() => void handleSaveToAssets(item)}
+                                                                >
+                                                                    存资产
+                                                                </Button>
+                                                            ) : null}
+                                                            <Button
+                                                                size="small"
+                                                                icon={<Download className="size-3.5" />}
+                                                                loading={loadingOriginalId === item.id}
+                                                                onClick={() => void handleDownload(item)}
+                                                            >
+                                                                下载
+                                                            </Button>
+                                                        </div>
+                                                        <Popconfirm title="确定从云端删除该成果并释放空间吗？" onConfirm={() => void handleDelete(item.id)}>
+                                                            <Button size="small" danger loading={deletingId === item.id} icon={<Trash2 className="size-3.5" />} />
+                                                        </Popconfirm>
+                                                    </div>
+                                                </div>
                                             </div>
                                         </Card>
                                     );
@@ -470,55 +489,116 @@ export default function ResultsPage() {
                 </div>
             </main>
 
-            <Modal
+            <Drawer
+                title="成果详情"
                 open={Boolean(previewItem)}
-                title={previewItem ? `${kindLabels[previewItem.kind] || "文件"}原图预览` : "预览"}
-                onCancel={() => {
+                size="large"
+                onClose={() => {
                     setPreviewItem(null);
                     setPreviewOriginalUrl("");
                 }}
-                footer={
-                    previewItem ? (
-                        <Space>
-                            <Button icon={<Download className="size-4" />} loading={loadingOriginalId === previewItem.id} onClick={() => void handleDownload(previewItem)}>
-                                下载原文件
-                            </Button>
-                            <Button
-                                type="primary"
-                                onClick={() => {
-                                    setPreviewItem(null);
-                                    setPreviewOriginalUrl("");
-                                }}
-                            >
-                                关闭
-                            </Button>
-                        </Space>
-                    ) : null
-                }
-                width={820}
                 destroyOnHidden
             >
-                {previewItem && previewOriginalUrl ? (
-                    <div className="flex flex-col gap-3">
-                        {previewItem.kind === "image" ? (
-                            <div className="flex justify-center overflow-hidden rounded-lg bg-stone-100 p-2 dark:bg-stone-900">
-                                <Image src={previewOriginalUrl} alt={previewItem.objectKey} className="max-h-[70vh] object-contain" />
-                            </div>
-                        ) : previewItem.kind === "video" ? (
-                            <video src={previewOriginalUrl} controls autoPlay className="max-h-[70vh] w-full rounded-lg bg-black" />
-                        ) : previewItem.kind === "audio" ? (
-                            <div className="flex flex-col items-center gap-4 py-8">
-                                <AudioLines className="size-10 text-stone-400" />
-                                <audio src={previewOriginalUrl} controls autoPlay className="w-full max-w-md" />
-                            </div>
-                        ) : null}
-                        <Typography.Text type="secondary" className="text-xs">
-                            {previewItem.width && previewItem.height ? `${previewItem.width}x${previewItem.height} · ` : ""}
-                            {formatBytes(previewItem.bytes)} · {previewItem.mimeType}
-                        </Typography.Text>
-                    </div>
-                ) : null}
-            </Modal>
+                {previewItem && previewOriginalUrl
+                    ? (() => {
+                          const drawerModel = typeof previewItem.meta?.model === "string" ? previewItem.meta.model : "";
+                          const drawerPrompt = typeof previewItem.meta?.prompt === "string" ? previewItem.meta.prompt : "";
+                          const drawerModules = previewItem.modules || [];
+                          return (
+                              <div className="space-y-5">
+                                  {previewItem.kind === "image" ? (
+                                      <div className="overflow-hidden rounded-lg bg-stone-100 dark:bg-stone-900">
+                                          <Image src={previewOriginalUrl} preview={{ src: previewOriginalUrl }} alt={drawerPrompt || previewItem.objectKey} className="max-h-[420px] w-full object-contain" />
+                                      </div>
+                                  ) : previewItem.kind === "video" ? (
+                                      <video src={previewOriginalUrl} controls autoPlay className="aspect-video w-full rounded-lg bg-black" />
+                                  ) : previewItem.kind === "audio" ? (
+                                      <div className="flex flex-col items-center gap-4 rounded-lg border border-stone-200 bg-stone-50 p-6 dark:border-stone-800 dark:bg-stone-900">
+                                          <AudioLines className="size-10 text-stone-400" />
+                                          <audio src={previewOriginalUrl} controls autoPlay className="w-full" />
+                                      </div>
+                                  ) : null}
+
+                                  <div className="flex flex-wrap items-center gap-1.5">
+                                      <Tag className="m-0">{kindLabels[previewItem.kind] || previewItem.kind}</Tag>
+                                      {drawerModel ? (
+                                          <Tag color="blue" className="m-0">
+                                              {drawerModel}
+                                          </Tag>
+                                      ) : null}
+                                      {drawerModules.map((mod) => (
+                                          <Tag key={mod} color="cyan" className="m-0">
+                                              {moduleLabels[mod] || mod}
+                                          </Tag>
+                                      ))}
+                                  </div>
+
+                                  {drawerPrompt ? (
+                                      <div className="rounded-lg border border-stone-200 p-4 dark:border-stone-800">
+                                          <div className="mb-2 flex items-center justify-between gap-2">
+                                              <Typography.Text type="secondary" className="text-xs">
+                                                  生成提示词
+                                              </Typography.Text>
+                                              <Button size="small" type="text" icon={<Copy className="size-3.5" />} onClick={() => copyText(drawerPrompt, "提示词已复制")}>
+                                                  复制
+                                              </Button>
+                                          </div>
+                                          <div className="thin-scrollbar max-h-44 overflow-y-auto pr-1">
+                                              <Typography.Paragraph className="!mb-0 whitespace-pre-wrap text-sm leading-6">
+                                                  {drawerPrompt}
+                                              </Typography.Paragraph>
+                                          </div>
+                                      </div>
+                                  ) : null}
+
+                                  <Descriptions column={1} bordered size="small" styles={{ label: { whiteSpace: "nowrap", width: 120 } }}>
+                                      <Descriptions.Item label="分辨率 / 时长">
+                                          {previewItem.width && previewItem.height ? `${previewItem.width} × ${previewItem.height}` : "—"}
+                                          {previewItem.durationMs ? ` · ${(previewItem.durationMs / 1000).toFixed(1)}s` : ""}
+                                      </Descriptions.Item>
+                                      <Descriptions.Item label="文件大小">{formatBytes(previewItem.bytes)}</Descriptions.Item>
+                                      <Descriptions.Item label="文件类型">{previewItem.mimeType}</Descriptions.Item>
+                                      <Descriptions.Item label="创建时间">{new Date(previewItem.createdAt).toLocaleString("zh-CN")}</Descriptions.Item>
+                                  </Descriptions>
+
+                                  <div className="pt-3">
+                                      <Space wrap>
+                                          <Button
+                                              type="primary"
+                                              icon={<Download className="size-4" />}
+                                              loading={loadingOriginalId === previewItem.id}
+                                              onClick={() => void handleDownload(previewItem)}
+                                          >
+                                              下载原文件
+                                          </Button>
+                                          {previewItem.kind === "image" || previewItem.kind === "video" ? (
+                                              <Button
+                                                  icon={<FolderPlus className="size-4" />}
+                                                  loading={savingId === previewItem.id}
+                                                  onClick={() => void handleSaveToAssets(previewItem)}
+                                              >
+                                                  存资产
+                                              </Button>
+                                          ) : null}
+                                          <Popconfirm
+                                              title="确定从云端删除该成果并释放空间吗？"
+                                              onConfirm={async () => {
+                                                  await handleDelete(previewItem.id);
+                                                  setPreviewItem(null);
+                                                  setPreviewOriginalUrl("");
+                                              }}
+                                          >
+                                              <Button danger icon={<Trash2 className="size-4" />} loading={deletingId === previewItem.id}>
+                                                  删除
+                                              </Button>
+                                          </Popconfirm>
+                                      </Space>
+                                  </div>
+                              </div>
+                          );
+                      })()
+                    : null}
+            </Drawer>
         </div>
     );
 }

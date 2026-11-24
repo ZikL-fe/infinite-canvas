@@ -10,6 +10,7 @@ export const STORAGE_S3_KEY = "storage.s3";
 export const AI_CHANNELS_KEY = "ai.channels";
 export const WEBDAV_CONFIG_KEY = "sync.webdav";
 export const MAIL_CONFIG_KEY = "mail.smtp";
+export const STORAGE_EXPIRY_POLICY_KEY = "storage.expiry";
 
 export type PlatformModelCapability = "image" | "video" | "text" | "audio";
 export type PlatformApiFormat = "openai" | "gemini";
@@ -91,6 +92,14 @@ export type PlatformMailConfig = {
   lowBalanceAlertEnabled: boolean;
   lowBalanceThreshold: number;
   lowBalanceCooldownHours: number;
+};
+
+export type PlatformStorageExpiryPolicy = {
+  enabled: boolean;
+  gracePeriodDays: number;
+  preExpiryWarnDays: number;
+  cleanupWorkspaceData: boolean;
+  exemptAdmins: boolean;
 };
 
 export type S3Provider = "s3" | "r2" | "oss" | "cos";
@@ -339,6 +348,38 @@ export async function savePlatformWebdavConfig(config: PlatformWebdavConfig, upd
         updatedAt: new Date(),
       },
     });
+}
+
+export async function getPlatformStorageExpiryPolicy(): Promise<PlatformStorageExpiryPolicy> {
+  const row = await db.query.systemSettings.findFirst({ where: eq(systemSettings.key, STORAGE_EXPIRY_POLICY_KEY) });
+  const raw = (row?.value || {}) as Partial<PlatformStorageExpiryPolicy>;
+  const graceDays = Number(raw.gracePeriodDays);
+  const preDays = Number(raw.preExpiryWarnDays);
+  return {
+    enabled: Boolean(raw.enabled),
+    gracePeriodDays: Number.isFinite(graceDays) && graceDays >= 1 ? Math.min(365, Math.floor(graceDays)) : 7,
+    preExpiryWarnDays: Number.isFinite(preDays) && preDays >= 0 ? Math.min(30, Math.floor(preDays)) : 3,
+    cleanupWorkspaceData: raw.cleanupWorkspaceData ?? true,
+    exemptAdmins: raw.exemptAdmins ?? true,
+  };
+}
+
+export async function savePlatformStorageExpiryPolicy(policy: PlatformStorageExpiryPolicy, updatedBy: string) {
+  const normalized: PlatformStorageExpiryPolicy = {
+    enabled: Boolean(policy.enabled),
+    gracePeriodDays: Math.max(1, Math.min(365, Math.floor(policy.gracePeriodDays || 7))),
+    preExpiryWarnDays: Math.max(0, Math.min(30, Math.floor(policy.preExpiryWarnDays ?? 3))),
+    cleanupWorkspaceData: Boolean(policy.cleanupWorkspaceData),
+    exemptAdmins: Boolean(policy.exemptAdmins),
+  };
+  await db
+    .insert(systemSettings)
+    .values({ key: STORAGE_EXPIRY_POLICY_KEY, value: normalized, updatedBy, updatedAt: new Date() })
+    .onConflictDoUpdate({
+      target: systemSettings.key,
+      set: { value: normalized, updatedBy, updatedAt: new Date() },
+    });
+  return normalized;
 }
 
 /** 合并平台默认 WebDAV 配置与用户专属配额/期限，判断权限是否有效或超额。 */

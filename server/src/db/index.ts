@@ -76,6 +76,9 @@ export function ensureSchemaReady() {
           )
         `,
         sqlClient`CREATE INDEX IF NOT EXISTS email_verification_codes_lookup_idx ON email_verification_codes (email, purpose, created_at DESC)`,
+        sqlClient`ALTER TABLE users ADD COLUMN IF NOT EXISTS storage_pre_expiry_warned_for timestamptz`,
+        sqlClient`ALTER TABLE users ADD COLUMN IF NOT EXISTS storage_expired_warned_for timestamptz`,
+        sqlClient`ALTER TABLE users ADD COLUMN IF NOT EXISTS storage_cleaned_at timestamptz`,
       ];
       for (const stmt of statements) {
         await stmt.catch((err) => {

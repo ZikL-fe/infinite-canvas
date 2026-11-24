@@ -547,8 +547,8 @@ function AssetCard({ asset, downloading, onOpen, onEdit, onCopy, onDownload, onD
     return (
         <Card
             hoverable
-            className="overflow-hidden"
-            styles={{ body: { padding: 0 } }}
+            className="flex h-full flex-col overflow-hidden"
+            styles={{ body: { padding: 0, flex: 1, display: "flex", flexDirection: "column" } }}
             cover={
                 <button type="button" className="block w-full text-left" onClick={onOpen}>
                     {cover ? (
@@ -559,23 +559,23 @@ function AssetCard({ asset, downloading, onOpen, onEdit, onCopy, onDownload, onD
                 </button>
             }
         >
-            <button type="button" className="block w-full text-left" onClick={onOpen}>
-                <div className="p-4">
-                    <div className="flex items-start justify-between gap-3">
-                        <div className="min-w-0">
+            <button type="button" className="flex w-full flex-1 flex-col text-left" onClick={onOpen}>
+                <div className="flex flex-1 flex-col p-3.5">
+                    <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0 flex-1">
                             <h2 className="line-clamp-1 text-sm font-semibold text-stone-950 dark:text-stone-100">{asset.title}</h2>
-                            <Typography.Text type="secondary" className="mt-1 block text-xs">
+                            <Typography.Text type="secondary" ellipsis className="mt-1 block text-xs">
                                 {asset.source || t("assets.unknownSource")}
                             </Typography.Text>
                         </div>
                         <Tag className="m-0 shrink-0 text-[11px]">{t(`assets.kinds.${asset.kind}`)}</Tag>
                     </div>
-                    <Typography.Paragraph type="secondary" ellipsis={{ rows: 3 }} className="!mb-0 !mt-2 !text-xs !leading-5">
+                    <Typography.Paragraph type="secondary" ellipsis={{ rows: 2 }} className="!mb-0 !mt-2 min-h-10 !text-xs !leading-5">
                         {summary}
                     </Typography.Paragraph>
-                    <div className="mt-3 flex flex-wrap gap-1.5">
+                    <div className="mt-auto flex flex-wrap gap-1.5 pt-2.5">
                         {(asset.tags || []).slice(0, 3).map((tag) => (
-                            <Tag key={tag} className="m-0 text-[11px]">
+                            <Tag key={tag} className="m-0 max-w-[140px] truncate text-[11px]">
                                 {tag}
                             </Tag>
                         ))}
@@ -583,28 +583,28 @@ function AssetCard({ asset, downloading, onOpen, onEdit, onCopy, onDownload, onD
                     </div>
                 </div>
             </button>
-            <div className="flex items-center gap-2 px-4 pb-4">
-                <Button size="small" onClick={onOpen}>
-                    {t("common.view")}
-                </Button>
-                {asset.kind !== "video" ? (
-                    <Button size="small" icon={<PencilLine className="size-3.5" />} onClick={onEdit}>
-                        {t("common.edit")}
+            <div className="mt-auto flex items-center justify-between gap-1.5 border-t border-black/5 px-3.5 py-2.5 dark:border-white/5">
+                <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+                    <Button size="small" onClick={onOpen}>
+                        {t("common.view")}
                     </Button>
-                ) : null}
-                {asset.kind === "text" ? (
-                    <Button size="small" icon={<Copy className="size-3.5" />} onClick={() => void onCopy(asset)}>
-                        {t("common.copy")}
-                    </Button>
-                ) : null}
-                {asset.kind === "image" || asset.kind === "video" ? (
-                    <Button size="small" icon={<Download className="size-3.5" />} loading={downloading} onClick={() => onDownload(asset)}>
-                        {t("common.download")}
-                    </Button>
-                ) : null}
-                <Button size="small" danger icon={<Trash2 className="size-3.5" />} onClick={onDelete}>
-                    {t("common.delete")}
-                </Button>
+                    {asset.kind !== "video" ? (
+                        <Button size="small" icon={<PencilLine className="size-3.5" />} onClick={onEdit}>
+                            {t("common.edit")}
+                        </Button>
+                    ) : null}
+                    {asset.kind === "text" ? (
+                        <Button size="small" icon={<Copy className="size-3.5" />} onClick={() => void onCopy(asset)}>
+                            {t("common.copy")}
+                        </Button>
+                    ) : null}
+                    {asset.kind === "image" || asset.kind === "video" ? (
+                        <Button size="small" icon={<Download className="size-3.5" />} loading={downloading} onClick={() => onDownload(asset)}>
+                            {t("common.download")}
+                        </Button>
+                    ) : null}
+                </div>
+                <Button size="small" danger icon={<Trash2 className="size-3.5" />} onClick={onDelete} aria-label={t("common.delete")} title={t("common.delete")} />
             </div>
         </Card>
     );
