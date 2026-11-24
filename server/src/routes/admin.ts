@@ -22,12 +22,14 @@ import { isMailConfigReady, sendTestMail } from "../lib/mail.ts";
 import {
   getAuthPolicy,
   getPlatformChannels,
+  getPlatformGlobalNotice,
   getPlatformMailConfig,
   getPlatformStorageExpiryPolicy,
   getPlatformWebdavConfig,
   getS3StorageConfig,
   saveAuthPolicy,
   savePlatformChannels,
+  savePlatformGlobalNotice,
   savePlatformMailConfig,
   savePlatformStorageExpiryPolicy,
   savePlatformWebdavConfig,
@@ -231,9 +233,10 @@ const testMailSchema = mailConfigSchema.extend({
 const announcementSchema = z.object({
   title: z.string().trim().min(1, "请输入公告标题").max(120),
   content: z.string().trim().min(1, "请输入公告内容").max(5000),
-  level: z.enum(["info", "warning", "success"]).default("info"),
+  level: z.enum(["default", "ongoing", "success", "warning", "error"]).default("default"),
   isPinned: z.boolean().default(false),
   isPublished: z.boolean().default(true),
+  createdAt: z.string().optional(),
 });
 
 export const adminRoutes = new Hono<AppEnv>();
@@ -317,15 +320,37 @@ adminRoutes.get("/overview", async (c) => {
   });
 });
 
+const globalNoticeSchema = z.object({
+  enabled: z.boolean(),
+  title: z.string().trim().max(120).optional().default(""),
+  content: z.string().max(10000).optional().default(""),
+});
+
 adminRoutes.get("/announcements", async (c) => {
-  const items = await db.query.announcements.findMany({
-    orderBy: [desc(announcements.isPinned), desc(announcements.createdAt)],
-  });
-  return c.json({ items });
+  const [items, notice] = await Promise.all([
+    db.query.announcements.findMany({
+      orderBy: [desc(announcements.isPinned), desc(announcements.createdAt)],
+    }),
+    getPlatformGlobalNotice(),
+  ]);
+  return c.json({ items, notice });
+});
+
+adminRoutes.put("/announcements/notice", zValidator("json", globalNoticeSchema), async (c) => {
+  const body = c.req.valid("json");
+  const notice = await savePlatformGlobalNotice(body, c.get("user").id);
+  return c.json({ notice });
 });
 
 adminRoutes.post("/announcements", zValidator("json", announcementSchema), async (c) => {
   const body = c.req.valid("json");
+  let parsedCreatedAt: Date | undefined;
+  if (body.createdAt) {
+    parsedCreatedAt = new Date(body.createdAt);
+    if (Number.isNaN(parsedCreatedAt.getTime())) {
+      return c.json({ error: "发布时间格式无效" }, 400);
+    }
+  }
   const [created] = await db
     .insert(announcements)
     .values({
@@ -336,6 +361,7 @@ adminRoutes.post("/announcements", zValidator("json", announcementSchema), async
       isPinned: body.isPinned,
       isPublished: body.isPublished,
       createdBy: c.get("user").id,
+      ...(parsedCreatedAt ? { createdAt: parsedCreatedAt } : {}),
     })
     .returning();
   return c.json({ item: created }, 201);
@@ -343,10 +369,21 @@ adminRoutes.post("/announcements", zValidator("json", announcementSchema), async
 
 adminRoutes.patch("/announcements/:id", zValidator("json", announcementSchema.partial()), async (c) => {
   const id = c.req.param("id");
-  const body = c.req.valid("json");
+  const { createdAt, ...rest } = c.req.valid("json");
+  let parsedCreatedAt: Date | undefined;
+  if (createdAt) {
+    parsedCreatedAt = new Date(createdAt);
+    if (Number.isNaN(parsedCreatedAt.getTime())) {
+      return c.json({ error: "发布时间格式无效" }, 400);
+    }
+  }
   const [updated] = await db
     .update(announcements)
-    .set({ ...body, updatedAt: new Date() })
+    .set({
+      ...rest,
+      ...(parsedCreatedAt ? { createdAt: parsedCreatedAt } : {}),
+      updatedAt: new Date(),
+    })
     .where(eq(announcements.id, id))
     .returning();
   if (!updated) return c.json({ error: "公告不存在" }, 404);

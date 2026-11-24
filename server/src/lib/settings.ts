@@ -11,6 +11,7 @@ export const AI_CHANNELS_KEY = "ai.channels";
 export const WEBDAV_CONFIG_KEY = "sync.webdav";
 export const MAIL_CONFIG_KEY = "mail.smtp";
 export const STORAGE_EXPIRY_POLICY_KEY = "storage.expiry";
+export const PLATFORM_NOTICE_KEY = "announcement.notice";
 
 const settingsCache = new Map<string, { value: unknown; expiresAt: number }>();
 const settingsInFlight = new Map<string, Promise<unknown>>();
@@ -132,6 +133,13 @@ export type PlatformStorageExpiryPolicy = {
   preExpiryWarnDays: number;
   cleanupWorkspaceData: boolean;
   exemptAdmins: boolean;
+};
+
+export type PlatformGlobalNotice = {
+  enabled: boolean;
+  title: string;
+  content: string;
+  updatedAt: string | null;
 };
 
 export type S3Provider = "s3" | "r2" | "oss" | "cos";
@@ -429,6 +437,41 @@ export async function savePlatformStorageExpiryPolicy(policy: PlatformStorageExp
       set: { value: normalized, updatedBy, updatedAt: new Date() },
     });
   invalidateSettingCache(STORAGE_EXPIRY_POLICY_KEY);
+  return normalized;
+}
+
+export async function getPlatformGlobalNotice(): Promise<PlatformGlobalNotice> {
+  return getCachedSetting(PLATFORM_NOTICE_KEY, async () => {
+    const row = await db.query.systemSettings.findFirst({ where: eq(systemSettings.key, PLATFORM_NOTICE_KEY) });
+    const raw = (row?.value || {}) as Partial<PlatformGlobalNotice>;
+    return {
+      enabled: Boolean(raw.enabled),
+      title: typeof raw.title === "string" ? raw.title : "",
+      content: typeof raw.content === "string" ? raw.content : "",
+      updatedAt: typeof raw.updatedAt === "string" && raw.updatedAt ? raw.updatedAt : null,
+    };
+  });
+}
+
+export async function savePlatformGlobalNotice(
+  input: { enabled: boolean; title?: string; content?: string },
+  updatedBy: string,
+): Promise<PlatformGlobalNotice> {
+  const prev = await getPlatformGlobalNotice();
+  const enabled = Boolean(input.enabled);
+  const title = (input.title ?? "").trim();
+  const content = (input.content ?? "").trim();
+  const changed = enabled !== prev.enabled || title !== prev.title || content !== prev.content;
+  const updatedAt = enabled && content ? (changed || !prev.updatedAt ? new Date().toISOString() : prev.updatedAt) : prev.updatedAt;
+  const normalized: PlatformGlobalNotice = { enabled, title, content, updatedAt };
+  await db
+    .insert(systemSettings)
+    .values({ key: PLATFORM_NOTICE_KEY, value: normalized, updatedBy, updatedAt: new Date() })
+    .onConflictDoUpdate({
+      target: systemSettings.key,
+      set: { value: normalized, updatedBy, updatedAt: new Date() },
+    });
+  invalidateSettingCache(PLATFORM_NOTICE_KEY);
   return normalized;
 }
 

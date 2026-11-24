@@ -6,6 +6,7 @@ import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
 
 import { AnimatedThemeToggler } from "@/components/ui/animated-theme-toggler";
+import { NotificationBellModal } from "@/components/layout/notification-bell-modal";
 import { VersionReleaseModal } from "@/components/layout/version-release-modal";
 import { changeAppLocale, type AppLocale } from "@/i18n";
 import { formatStoragePair } from "@/lib/image-utils";
@@ -92,6 +93,7 @@ export function UserStatusActions({ showConfig = true, variant = "default", onOp
                         <Settings2 className="size-4" />
                     </button>
                 ) : null}
+                <NotificationBellModal className={naturalIconClass} style={iconStyle} />
                 <Tooltip title={languageLabel} mouseEnterDelay={0.2}>
                     <button type="button" className={`${naturalIconClass} text-[11px] font-semibold tracking-tight`} style={iconStyle} onClick={() => void changeAppLocale(nextLocale)} aria-label={languageLabel}>
                         {locale === "zh-CN" ? "中" : "EN"}

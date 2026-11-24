@@ -20,6 +20,7 @@ import {
     type AdminStorageExpiryPolicyForm,
     type AdminUserItem,
     type AnnouncementItem,
+    type AnnouncementLevel,
     type MediaItem,
     type RedeemCodeItem,
     type RedeemCodeKind,
@@ -33,6 +34,7 @@ import {
 import { notifyCloudWorkspaceChanged, WORKSPACE_CHANGED_EVENT } from "@/services/cloud-media";
 import { syncCloudWorkspace, syncRuntimeSettings } from "@/services/cloud-sync";
 import { createModelChannel, type ModelChannel } from "@/stores/use-config-store";
+import { useNotificationStore } from "@/stores/use-notification-store";
 import { useUserStore } from "@/stores/use-user-store";
 
 function formatBytes(bytes: number) {
@@ -104,9 +106,16 @@ type CreateRedeemForm = {
 type AnnouncementForm = {
     title: string;
     content: string;
-    level: "info" | "warning" | "success";
+    level: AnnouncementLevel;
     isPinned: boolean;
     isPublished: boolean;
+    createdAt?: Dayjs | null;
+};
+
+type GlobalNoticeForm = {
+    enabled: boolean;
+    title: string;
+    content: string;
 };
 
 export default function AdminPage() {
@@ -122,7 +131,11 @@ export default function AdminPage() {
 
     const requestedTab = searchParams.get("tab") || "";
     const defaultTab = isAdmin && isAdminRoute ? "overview" : "user-overview";
-    const normalizeTab = useCallback((tab: string) => (tab === "settings" ? "settings-auth" : tab), []);
+    const normalizeTab = useCallback((tab: string) => {
+        if (tab === "settings") return "settings-auth";
+        if (tab === "announcements") return "settings-announcements";
+        return tab;
+    }, []);
     const [activeTab, setActiveTab] = useState(normalizeTab(requestedTab || defaultTab));
     const [openMenuKeys, setOpenMenuKeys] = useState<string[]>(() => {
         const initial = normalizeTab(requestedTab || defaultTab);
@@ -274,6 +287,9 @@ export default function AdminPage() {
     const [editingAnnouncement, setEditingAnnouncement] = useState<AnnouncementItem | null>(null);
     const [announcementForm] = Form.useForm<AnnouncementForm>();
     const [announcementSaving, setAnnouncementSaving] = useState(false);
+    const [noticeForm] = Form.useForm<GlobalNoticeForm>();
+    const [noticeSaving, setNoticeSaving] = useState(false);
+    const [noticeUpdatedAt, setNoticeUpdatedAt] = useState<string | null>(null);
 
     const loadOverview = useCallback(
         async (days = overviewDays) => {
@@ -441,12 +457,18 @@ export default function AdminPage() {
         try {
             const res = await adminApi.listAnnouncements();
             setAnnouncements(res.items);
+            setNoticeUpdatedAt(res.notice.updatedAt);
+            noticeForm.setFieldsValue({
+                enabled: res.notice.enabled,
+                title: res.notice.title,
+                content: res.notice.content,
+            });
         } catch (error) {
             message.error(error instanceof Error ? error.message : "加载公告列表失败");
         } finally {
             setAnnouncementsLoading(false);
         }
-    }, [message]);
+    }, [message, noticeForm]);
 
     useEffect(() => {
         if (!isAdmin) return;
@@ -503,7 +525,7 @@ export default function AdminPage() {
     }, [activeTab, isAdmin, loadRedeemCodes, redeemActiveKind, redeemPage, redeemQuery, redeemStatusFilter]);
 
     useEffect(() => {
-        if (!isAdmin || activeTab !== "announcements") return;
+        if (!isAdmin || activeTab !== "settings-announcements") return;
         void loadAnnouncements();
     }, [activeTab, isAdmin, loadAnnouncements]);
 
@@ -1046,52 +1068,100 @@ export default function AdminPage() {
         }
     };
 
-    const announcementLevelLabels: Record<AnnouncementItem["level"], { label: string; color: string }> = {
-        info: { label: "通知", color: "blue" },
-        warning: { label: "重要提醒", color: "orange" },
-        success: { label: "更新公告", color: "green" },
+    const announcementLevelMeta: Record<AnnouncementLevel, { label: string; color: string; dotColor: string }> = {
+        default: { label: "默认", color: "default", dotColor: "#6b7280" },
+        ongoing: { label: "进行中", color: "blue", dotColor: "#2563eb" },
+        success: { label: "成功", color: "green", dotColor: "#16a34a" },
+        warning: { label: "警告", color: "orange", dotColor: "#f97316" },
+        error: { label: "错误", color: "red", dotColor: "#ef4444" },
     };
+
+    const renderLevelOption = (value: AnnouncementLevel) => {
+        const meta = announcementLevelMeta[value] || announcementLevelMeta.default;
+        return (
+            <span className="inline-flex items-center gap-2">
+                <span className="inline-block size-2 shrink-0 rounded-full" style={{ backgroundColor: meta.dotColor }} />
+                <span>{meta.label}</span>
+            </span>
+        );
+    };
+
+    const announcementLevelOptions = (Object.keys(announcementLevelMeta) as AnnouncementLevel[]).map((value) => ({
+        value,
+        label: renderLevelOption(value),
+    }));
 
     const handleOpenCreateAnnouncement = () => {
         setEditingAnnouncement(null);
         announcementForm.setFieldsValue({
             title: "",
             content: "",
-            level: "info",
+            level: "default",
             isPinned: false,
             isPublished: true,
+            createdAt: dayjs(),
         });
         setAnnouncementModalOpen(true);
     };
 
     const handleOpenEditAnnouncement = (record: AnnouncementItem) => {
         setEditingAnnouncement(record);
+        const normalizedLevel: AnnouncementLevel = record.level in announcementLevelMeta ? record.level : "default";
         announcementForm.setFieldsValue({
             title: record.title,
             content: record.content,
-            level: record.level,
+            level: normalizedLevel,
             isPinned: record.isPinned,
             isPublished: record.isPublished,
+            createdAt: record.createdAt ? dayjs(record.createdAt) : dayjs(),
         });
         setAnnouncementModalOpen(true);
+    };
+
+    const handleSaveGlobalNotice = async (values: GlobalNoticeForm) => {
+        setNoticeSaving(true);
+        try {
+            const res = await adminApi.saveGlobalNotice({
+                enabled: Boolean(values.enabled),
+                title: values.title?.trim() || "",
+                content: values.content ?? "",
+            });
+            setNoticeUpdatedAt(res.notice.updatedAt);
+            noticeForm.setFieldsValue(res.notice);
+            message.success("全局公告已保存");
+            void useNotificationStore.getState().fetchNotifications(true);
+        } catch (error) {
+            message.error(error instanceof Error ? error.message : "保存全局公告失败");
+        } finally {
+            setNoticeSaving(false);
+        }
     };
 
     const handleSaveAnnouncement = async (values: AnnouncementForm) => {
         setAnnouncementSaving(true);
         try {
+            const payload = {
+                title: values.title,
+                content: values.content,
+                level: values.level,
+                isPinned: values.isPinned,
+                isPublished: values.isPublished,
+                ...(values.createdAt ? { createdAt: values.createdAt.toISOString() } : {}),
+            };
             if (editingAnnouncement) {
-                await adminApi.updateAnnouncement(editingAnnouncement.id, values);
-                message.success("公告已更新");
+                await adminApi.updateAnnouncement(editingAnnouncement.id, payload);
+                message.success("时间线通知已更新");
             } else {
-                await adminApi.createAnnouncement(values);
-                message.success("公告已发布");
+                await adminApi.createAnnouncement(payload);
+                message.success("时间线通知已发布");
             }
             setAnnouncementModalOpen(false);
             setEditingAnnouncement(null);
             void loadAnnouncements();
             void loadOverview(overviewDays);
+            void useNotificationStore.getState().fetchNotifications(true);
         } catch (error) {
-            message.error(error instanceof Error ? error.message : "保存公告失败");
+            message.error(error instanceof Error ? error.message : "保存通知失败");
         } finally {
             setAnnouncementSaving(false);
         }
@@ -1099,26 +1169,28 @@ export default function AdminPage() {
 
     const handleToggleAnnouncementFlag = async (
         record: AnnouncementItem,
-        patch: Partial<Pick<AnnouncementItem, "isPinned" | "isPublished">>,
+        patch: Partial<Pick<AnnouncementItem, "isPinned" | "isPublished" | "level">>,
     ) => {
         try {
             await adminApi.updateAnnouncement(record.id, patch);
-            message.success("公告状态已更新");
+            message.success("状态已更新");
             void loadAnnouncements();
             void loadOverview(overviewDays);
+            void useNotificationStore.getState().fetchNotifications(true);
         } catch (error) {
-            message.error(error instanceof Error ? error.message : "更新公告失败");
+            message.error(error instanceof Error ? error.message : "更新通知失败");
         }
     };
 
     const handleDeleteAnnouncement = async (id: string) => {
         try {
             await adminApi.deleteAnnouncement(id);
-            message.success("公告已删除");
+            message.success("时间线通知已删除");
             void loadAnnouncements();
             void loadOverview(overviewDays);
+            void useNotificationStore.getState().fetchNotifications(true);
         } catch (error) {
-            message.error(error instanceof Error ? error.message : "删除公告失败");
+            message.error(error instanceof Error ? error.message : "删除通知失败");
         }
     };
 
@@ -1241,7 +1313,7 @@ export default function AdminPage() {
                                                 items={overview?.announcements ?? []}
                                                 loading={overviewLoading}
                                                 extra={
-                                                    <Button type="link" size="small" onClick={() => switchTab("announcements")}>
+                                                    <Button type="link" size="small" onClick={() => switchTab("settings-announcements")}>
                                                         管理公告
                                                     </Button>
                                                 }
@@ -1348,116 +1420,6 @@ export default function AdminPage() {
                                 </span>
                             ),
                             children: <UsageLogsPanel defaultScope={isAdminRoute ? "all" : "self"} />,
-                        },
-                        {
-                            key: "announcements",
-                            label: (
-                                <span className="inline-flex items-center gap-1.5">
-                                    <Megaphone className="size-4" />
-                                    公告管理
-                                </span>
-                            ),
-                            children: (
-                                <Card
-                                    title="平台公告管理"
-                                    extra={
-                                        <Button type="primary" icon={<Plus className="size-4" />} onClick={handleOpenCreateAnnouncement}>
-                                            发布公告
-                                        </Button>
-                                    }
-                                >
-                                    <Table<AnnouncementItem>
-                                        rowKey="id"
-                                        className={ADMIN_TABLE_CLASS}
-                                        scroll={ADMIN_TABLE_SCROLL}
-                                        loading={announcementsLoading}
-                                        dataSource={announcements}
-                                        pagination={{ defaultPageSize: 10, showSizeChanger: true, pageSizeOptions: [10, 20, 30, 50, 100], showTotal: (count) => `共 ${count} 条` }}
-                                        columns={[
-                                            {
-                                                title: "公告内容",
-                                                key: "title",
-                                                width: 340,
-                                                render: (_, record) => {
-                                                    const lv = announcementLevelLabels[record.level] || announcementLevelLabels.info;
-                                                    return (
-                                                        <div className="flex max-w-[320px] flex-col gap-1">
-                                                            <div className="flex items-center gap-1.5">
-                                                                <Tag color={lv.color} style={{ marginInlineEnd: 0 }}>
-                                                                    {lv.label}
-                                                                </Tag>
-                                                                {record.isPinned ? (
-                                                                    <Tag color="gold" style={{ marginInlineEnd: 0 }}>
-                                                                        置顶
-                                                                    </Tag>
-                                                                ) : null}
-                                                                <span className="truncate font-medium">{record.title}</span>
-                                                            </div>
-                                                            <Typography.Text type="secondary" ellipsis={{ tooltip: record.content }} className="text-xs">
-                                                                {record.content}
-                                                            </Typography.Text>
-                                                        </div>
-                                                    );
-                                                },
-                                            },
-                                            {
-                                                title: "置顶",
-                                                dataIndex: "isPinned",
-                                                width: 80,
-                                                render: (checked: boolean, record) => (
-                                                    <Switch
-                                                        size="small"
-                                                        checked={checked}
-                                                        onChange={(val) => void handleToggleAnnouncementFlag(record, { isPinned: val })}
-                                                    />
-                                                ),
-                                            },
-                                            {
-                                                title: "展示状态",
-                                                dataIndex: "isPublished",
-                                                width: 90,
-                                                render: (checked: boolean, record) => (
-                                                    <Switch
-                                                        size="small"
-                                                        checked={checked}
-                                                        onChange={(val) => void handleToggleAnnouncementFlag(record, { isPublished: val })}
-                                                    />
-                                                ),
-                                            },
-                                            {
-                                                title: "发布时间",
-                                                dataIndex: "createdAt",
-                                                width: 170,
-                                                render: (value: string) => new Date(value).toLocaleString("zh-CN"),
-                                            },
-                                            {
-                                                title: "操作",
-                                                key: "actions",
-                                                fixed: "right",
-                                                width: 100,
-                                                render: (_, record) => (
-                                                    <TableRowActions
-                                                        items={[
-                                                            {
-                                                                key: "edit",
-                                                                label: "编辑",
-                                                                onClick: () => handleOpenEditAnnouncement(record),
-                                                            },
-                                                            {
-                                                                key: "delete",
-                                                                label: "删除",
-                                                                danger: true,
-                                                                confirm: "确定删除这条公告吗？",
-                                                                onClick: () => void handleDeleteAnnouncement(record.id),
-                                                            },
-                                                        ]}
-                                                    />
-                                                ),
-                                            },
-                                        ]}
-                                    />
-                                </Card>
-                            ),
                         },
                         {
                             key: "channels",
@@ -2903,6 +2865,170 @@ export default function AdminPage() {
                                         </Card>
                                     ),
                                 },
+                                {
+                                    key: "settings-announcements",
+                                    label: (
+                                        <span className="inline-flex items-center gap-1.5">
+                                            <Megaphone className="size-3.5" />
+                                            公告管理
+                                        </span>
+                                    ),
+                                    pageTitle: "系统设置 · 公告管理",
+                                    children: (
+                                        <div className="flex flex-col gap-5">
+                                            <Card
+                                                title="全局公告（顶部铃铛「通知」页签）"
+                                                extra={
+                                                    noticeUpdatedAt ? (
+                                                        <Typography.Text type="secondary" className="text-xs">
+                                                            最近更新：{new Date(noticeUpdatedAt).toLocaleString("zh-CN")}
+                                                        </Typography.Text>
+                                                    ) : null
+                                                }
+                                            >
+                                                <Alert
+                                                    type="info"
+                                                    showIcon
+                                                    className="mb-4"
+                                                    message="全局公告用于置顶展示重要平台通知（支持 Markdown）"
+                                                    description="开启且内容更新保存后，前端页面会主动弹出系统公告弹窗提醒用户，用户确认已读后不再重复自动弹出，但仍可随时点击顶部铃铛查看。"
+                                                />
+                                                <Form
+                                                    form={noticeForm}
+                                                    layout="vertical"
+                                                    initialValues={{ enabled: false, title: "", content: "" }}
+                                                    onFinish={handleSaveGlobalNotice}
+                                                >
+                                                    <Form.Item name="enabled" label="启用全局公告" valuePropName="checked">
+                                                        <Switch />
+                                                    </Form.Item>
+                                                    <Form.Item name="title" label="公告标题（可选）">
+                                                        <Input placeholder="例如：重要系统通知 / 接口维护公告" maxLength={120} />
+                                                    </Form.Item>
+                                                    <Form.Item name="content" label="公告内容（支持 Markdown）">
+                                                        <Input.TextArea
+                                                            rows={6}
+                                                            maxLength={10000}
+                                                            showCount
+                                                            placeholder="输入全局公告内容，支持 # 标题、**加粗**、列表、链接等 Markdown 语法..."
+                                                        />
+                                                    </Form.Item>
+                                                    <Button type="primary" htmlType="submit" loading={noticeSaving}>
+                                                        保存全局公告
+                                                    </Button>
+                                                </Form>
+                                            </Card>
+
+                                            <Card
+                                                title="时间线通知（顶部铃铛「时间线」页签）"
+                                                extra={
+                                                    <Button type="primary" icon={<Plus className="size-4" />} onClick={handleOpenCreateAnnouncement}>
+                                                        发布时间线通知
+                                                    </Button>
+                                                }
+                                            >
+                                                <Table<AnnouncementItem>
+                                                    rowKey="id"
+                                                    className={ADMIN_TABLE_CLASS}
+                                                    scroll={ADMIN_TABLE_SCROLL}
+                                                    loading={announcementsLoading}
+                                                    dataSource={announcements}
+                                                    pagination={{ defaultPageSize: 10, showSizeChanger: true, pageSizeOptions: [10, 20, 30, 50, 100], showTotal: (count) => `共 ${count} 条` }}
+                                                    columns={[
+                                                        {
+                                                            title: "通知内容",
+                                                            key: "title",
+                                                            width: 320,
+                                                            render: (_, record) => (
+                                                                <div className="flex max-w-[300px] flex-col gap-1">
+                                                                    <div className="flex items-center gap-1.5">
+                                                                        {record.isPinned ? (
+                                                                            <Tag color="gold" style={{ marginInlineEnd: 0 }}>
+                                                                                置顶
+                                                                            </Tag>
+                                                                        ) : null}
+                                                                        <span className="truncate font-medium">{record.title}</span>
+                                                                    </div>
+                                                                    <Typography.Text type="secondary" ellipsis={{ tooltip: record.content }} className="text-xs">
+                                                                        {record.content}
+                                                                    </Typography.Text>
+                                                                </div>
+                                                            ),
+                                                        },
+                                                        {
+                                                            title: "状态",
+                                                            dataIndex: "level",
+                                                            width: 120,
+                                                            render: (level: AnnouncementLevel, record) => (
+                                                                <Select
+                                                                    size="small"
+                                                                    value={level in announcementLevelMeta ? level : "default"}
+                                                                    popupMatchSelectWidth={false}
+                                                                    options={announcementLevelOptions}
+                                                                    onChange={(val) => void handleToggleAnnouncementFlag(record, { level: val })}
+                                                                />
+                                                            ),
+                                                        },
+                                                        {
+                                                            title: "置顶",
+                                                            dataIndex: "isPinned",
+                                                            width: 80,
+                                                            render: (checked: boolean, record) => (
+                                                                <Switch
+                                                                    size="small"
+                                                                    checked={checked}
+                                                                    onChange={(val) => void handleToggleAnnouncementFlag(record, { isPinned: val })}
+                                                                />
+                                                            ),
+                                                        },
+                                                        {
+                                                            title: "展示状态",
+                                                            dataIndex: "isPublished",
+                                                            width: 90,
+                                                            render: (checked: boolean, record) => (
+                                                                <Switch
+                                                                    size="small"
+                                                                    checked={checked}
+                                                                    onChange={(val) => void handleToggleAnnouncementFlag(record, { isPublished: val })}
+                                                                />
+                                                            ),
+                                                        },
+                                                        {
+                                                            title: "发布时间",
+                                                            dataIndex: "createdAt",
+                                                            width: 170,
+                                                            render: (value: string) => new Date(value).toLocaleString("zh-CN"),
+                                                        },
+                                                        {
+                                                            title: "操作",
+                                                            key: "actions",
+                                                            fixed: "right",
+                                                            width: 100,
+                                                            render: (_, record) => (
+                                                                <TableRowActions
+                                                                    items={[
+                                                                        {
+                                                                            key: "edit",
+                                                                            label: "编辑",
+                                                                            onClick: () => handleOpenEditAnnouncement(record),
+                                                                        },
+                                                                        {
+                                                                            key: "delete",
+                                                                            label: "删除",
+                                                                            danger: true,
+                                                                            confirm: "确定删除这条通知吗？",
+                                                                            onClick: () => void handleDeleteAnnouncement(record.id),
+                                                                        },
+                                                                    ]}
+                                                                />
+                                                            ),
+                                                        },
+                                                    ]}
+                                                />
+                                            </Card>
+                                        </div>
+                                    ),
+                                },
                             ],
                         },
     ];
@@ -3434,7 +3560,7 @@ export default function AdminPage() {
 
             <Modal
                 open={announcementModalOpen}
-                title={editingAnnouncement ? "编辑公告" : "发布平台公告"}
+                title={editingAnnouncement ? "编辑时间线通知" : "发布时间线通知"}
                 onCancel={() => {
                     setAnnouncementModalOpen(false);
                     setEditingAnnouncement(null);
@@ -3443,19 +3569,22 @@ export default function AdminPage() {
                 confirmLoading={announcementSaving}
             >
                 <Form form={announcementForm} layout="vertical" onFinish={handleSaveAnnouncement}>
-                    <Form.Item name="title" label="公告标题" rules={[{ required: true, message: "请输入公告标题" }]}>
+                    <Form.Item name="title" label="通知标题" rules={[{ required: true, message: "请输入通知标题" }]}>
                         <Input placeholder="例如：模型计费调整 / 维护通知" maxLength={120} />
                     </Form.Item>
-                    <Form.Item name="level" label="公告类型" rules={[{ required: true }]}>
-                        <Select
-                            options={[
-                                { label: "普通通知", value: "info" },
-                                { label: "更新公告", value: "success" },
-                                { label: "重要提醒", value: "warning" },
-                            ]}
-                        />
-                    </Form.Item>
-                    <Form.Item name="content" label="公告正文" rules={[{ required: true, message: "请输入公告内容" }]}>
+                    <Row gutter={12}>
+                        <Col span={12}>
+                            <Form.Item name="level" label="状态" rules={[{ required: true }]}>
+                                <Select options={announcementLevelOptions} />
+                            </Form.Item>
+                        </Col>
+                        <Col span={12}>
+                            <Form.Item name="createdAt" label="发布时间">
+                                <DatePicker showTime allowClear className="w-full" placeholder="留空默认当前时间" />
+                            </Form.Item>
+                        </Col>
+                    </Row>
+                    <Form.Item name="content" label="通知正文" rules={[{ required: true, message: "请输入通知内容" }]}>
                         <Input.TextArea rows={5} placeholder="输入要向全体用户展示的公告详情..." maxLength={4000} showCount />
                     </Form.Item>
                     <Row gutter={16}>

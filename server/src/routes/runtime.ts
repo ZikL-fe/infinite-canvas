@@ -1,12 +1,32 @@
-/** 前端运行时配置下发接口：仅返回脱敏后的可用模型渠道（经代理访问）及当前用户的 WebDAV 配额状态。 */
-import { eq } from "drizzle-orm";
+/** 前端运行时配置与公告通知下发接口：通知接口公开，配置接口鉴权返回脱敏渠道及 WebDAV 状态。 */
+import { desc, eq } from "drizzle-orm";
 import { Hono } from "hono";
 
-import { db, users } from "../db/index.ts";
-import { getPlatformChannels, getPlatformWebdavConfig, resolveEffectiveUserWebdav } from "../lib/settings.ts";
+import { announcements, db, users } from "../db/index.ts";
+import {
+  getPlatformChannels,
+  getPlatformGlobalNotice,
+  getPlatformWebdavConfig,
+  resolveEffectiveUserWebdav,
+} from "../lib/settings.ts";
 import { requireAuth, type AppEnv } from "../middleware/auth.ts";
 
 export const runtimeRoutes = new Hono<AppEnv>();
+
+runtimeRoutes.get("/notifications", async (c) => {
+  const [notice, timeline] = await Promise.all([
+    getPlatformGlobalNotice(),
+    db.query.announcements.findMany({
+      where: eq(announcements.isPublished, true),
+      orderBy: [desc(announcements.isPinned), desc(announcements.createdAt)],
+      limit: 30,
+    }),
+  ]);
+  return c.json({
+    notice: notice.enabled && notice.content.trim() ? notice : { ...notice, enabled: false },
+    timeline,
+  });
+});
 
 runtimeRoutes.use("*", requireAuth);
 

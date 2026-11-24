@@ -303,10 +303,12 @@ export function ConsumptionTrendCard({
     );
 }
 
-const announcementLevelTag: Record<AnnouncementItem["level"], { label: string; color: string }> = {
-    info: { label: "通知", color: "blue" },
-    warning: { label: "重要提醒", color: "orange" },
-    success: { label: "更新喜报", color: "green" },
+const announcementLevelTag: Record<AnnouncementItem["level"], { label: string; color: string; dotColor: string }> = {
+    default: { label: "默认", color: "default", dotColor: "#6b7280" },
+    ongoing: { label: "进行中", color: "blue", dotColor: "#2563eb" },
+    success: { label: "成功", color: "green", dotColor: "#16a34a" },
+    warning: { label: "警告", color: "orange", dotColor: "#f97316" },
+    error: { label: "错误", color: "red", dotColor: "#ef4444" },
 };
 
 export function AnnouncementsCard({
@@ -335,7 +337,7 @@ export function AnnouncementsCard({
                 {items.length ? (
                     <div className="flex flex-col gap-2.5">
                         {items.map((item) => {
-                            const lvl = announcementLevelTag[item.level] || announcementLevelTag.info;
+                            const lvl = announcementLevelTag[item.level] || announcementLevelTag.default;
                             return (
                                 <div
                                     key={item.id}
@@ -349,7 +351,12 @@ export function AnnouncementsCard({
                                                     置顶
                                                 </Tag>
                                             ) : null}
-                                            <Tag color={lvl.color}>{lvl.label}</Tag>
+                                            <Tag color={lvl.color}>
+                                                <span className="inline-flex items-center gap-1.5">
+                                                    <span className="inline-block size-2 rounded-full" style={{ backgroundColor: lvl.dotColor }} />
+                                                    <span>{lvl.label}</span>
+                                                </span>
+                                            </Tag>
                                             <span className="font-medium">{item.title}</span>
                                         </div>
                                         <Typography.Text type="secondary" className="text-xs">
@@ -373,8 +380,8 @@ export function AnnouncementsCard({
                     <div className="flex flex-col gap-3">
                         <Space>
                             {detail.isPinned ? <Tag color="red">置顶</Tag> : null}
-                            <Tag color={(announcementLevelTag[detail.level] || announcementLevelTag.info).color}>
-                                {(announcementLevelTag[detail.level] || announcementLevelTag.info).label}
+                            <Tag color={(announcementLevelTag[detail.level] || announcementLevelTag.default).color}>
+                                {(announcementLevelTag[detail.level] || announcementLevelTag.default).label}
                             </Tag>
                             <Typography.Text type="secondary" className="text-xs">
                                 发布于 {new Date(detail.createdAt).toLocaleString("zh-CN")}

@@ -91,15 +91,29 @@ export type TopModelUsageItem = {
     calls: number;
 };
 
+export type AnnouncementLevel = "default" | "ongoing" | "success" | "warning" | "error";
+
 export type AnnouncementItem = {
     id: string;
     title: string;
     content: string;
-    level: "info" | "warning" | "success";
+    level: AnnouncementLevel;
     isPinned: boolean;
     isPublished: boolean;
     createdAt: string;
     updatedAt: string;
+};
+
+export type PlatformGlobalNotice = {
+    enabled: boolean;
+    title: string;
+    content: string;
+    updatedAt: string | null;
+};
+
+export type RuntimeNotificationsResponse = {
+    notice: PlatformGlobalNotice;
+    timeline: AnnouncementItem[];
 };
 
 export type AdminOverview = {
@@ -793,6 +807,7 @@ export const assetsApi = {
 
 export const runtimeApi = {
     getConfig: () => requestServer<RuntimeConfigResponse>("/runtime/config"),
+    getNotifications: () => requestServer<RuntimeNotificationsResponse>("/runtime/notifications", {}, false),
 };
 
 export const billingApi = {
@@ -839,10 +854,12 @@ export function scheduleRefreshUserBalance() {
 
 export const adminApi = {
     getOverview: (days = 7) => requestServer<AdminOverview>(`/admin/overview?days=${days}`),
-    listAnnouncements: () => requestServer<{ items: AnnouncementItem[] }>("/admin/announcements"),
-    createAnnouncement: (payload: { title: string; content: string; level: "info" | "warning" | "success"; isPinned: boolean; isPublished: boolean }) =>
+    listAnnouncements: () => requestServer<{ items: AnnouncementItem[]; notice: PlatformGlobalNotice }>("/admin/announcements"),
+    saveGlobalNotice: (payload: { enabled: boolean; title?: string; content?: string }) =>
+        requestServer<{ notice: PlatformGlobalNotice }>("/admin/announcements/notice", { method: "PUT", body: JSON.stringify(payload) }),
+    createAnnouncement: (payload: { title: string; content: string; level: AnnouncementLevel; isPinned: boolean; isPublished: boolean; createdAt?: string }) =>
         requestServer<{ item: AnnouncementItem }>("/admin/announcements", { method: "POST", body: JSON.stringify(payload) }),
-    updateAnnouncement: (id: string, payload: Partial<{ title: string; content: string; level: "info" | "warning" | "success"; isPinned: boolean; isPublished: boolean }>) =>
+    updateAnnouncement: (id: string, payload: Partial<{ title: string; content: string; level: AnnouncementLevel; isPinned: boolean; isPublished: boolean; createdAt?: string }>) =>
         requestServer<{ item: AnnouncementItem }>(`/admin/announcements/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(payload) }),
     deleteAnnouncement: (id: string) => requestServer<{ ok: boolean }>(`/admin/announcements/${encodeURIComponent(id)}`, { method: "DELETE" }),
     listUsers: (params?: { q?: string; role?: string; status?: string; sort?: string; page?: number; pageSize?: number }) => {
