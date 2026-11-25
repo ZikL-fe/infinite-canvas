@@ -3462,7 +3462,7 @@ export default function AdminPage() {
             className="flex h-full flex-col overflow-hidden"
             style={{ backgroundColor: token.colorBgLayout }}
         >
-            <div className="grid min-h-0 flex-1 grid-cols-1 gap-3 overflow-hidden p-3 lg:grid-cols-[240px_minmax(0,1fr)]">
+            <div className="mx-auto grid min-h-0 w-full max-w-[1680px] flex-1 grid-cols-1 gap-3 overflow-hidden px-4 py-3 sm:px-6 lg:grid-cols-[240px_minmax(0,1fr)] lg:px-10">
                 <aside
                     className="thin-scrollbar hidden min-h-0 flex-col overflow-y-auto rounded-lg border p-3 lg:flex"
                     style={{

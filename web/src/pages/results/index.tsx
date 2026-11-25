@@ -254,73 +254,77 @@ export default function ResultsPage() {
 
     return (
         <div className="flex h-full flex-col overflow-hidden bg-background text-stone-900 dark:text-stone-100">
-            <main className="min-h-0 flex-1 overflow-y-auto bg-[radial-gradient(#e5e7eb_1px,transparent_1px)] px-6 py-8 [background-size:16px_16px] dark:bg-[radial-gradient(rgba(245,245,244,.14)_1px,transparent_1px)]">
-                <div className="pb-8">
-                    <div className="mx-auto max-w-5xl text-center">
-                        <h1 className="text-4xl font-semibold tracking-tight text-stone-950 dark:text-stone-100">{t("results.title")}</h1>
-                        <p className="mt-3 text-sm text-stone-500 dark:text-stone-400">
-                            {t("results.description")}
-                        </p>
-                        <div className="mx-auto mt-4 inline-flex flex-wrap items-center justify-center gap-3 rounded-full border border-stone-200 bg-background/90 px-4 py-1.5 text-xs shadow-sm dark:border-stone-800">
-                            <span className="inline-flex items-center gap-1.5 font-medium text-stone-700 dark:text-stone-200">
-                                <HardDrive className="size-3.5" />
-                                {t("assets.cloudQuotaLabel", { pair: formatStoragePair(user.storageUsedBytes, user.storageQuotaBytes) })}
-                            </span>
-                            <div className="w-24">
-                                <Progress
-                                    percent={
-                                        (user.storageQuotaBytes ?? 0) > 0
-                                            ? Math.min(100, Math.round(((user.storageUsedBytes ?? 0) / (user.storageQuotaBytes ?? 1)) * 100))
-                                            : 100
-                                    }
-                                    size="small"
-                                    showInfo={false}
-                                    status={exceeded ? "exception" : "active"}
-                                />
+            <main className="min-h-0 flex-1 overflow-y-auto bg-[radial-gradient(#e5e7eb_1px,transparent_1px)] px-4 py-6 [background-size:16px_16px] sm:px-6 lg:px-10 dark:bg-[radial-gradient(rgba(245,245,244,.14)_1px,transparent_1px)]">
+                <div className="mx-auto flex w-full max-w-[1600px] flex-col gap-5 pb-6">
+                    <div className="flex flex-col gap-4 border-b border-stone-200/80 pb-5 md:flex-row md:items-end md:justify-between dark:border-stone-800/80">
+                        <div className="min-w-0">
+                            <div className="flex flex-wrap items-center gap-3">
+                                <h1 className="text-2xl font-semibold tracking-tight text-stone-950 dark:text-stone-100">{t("results.title")}</h1>
+                                <div className="inline-flex flex-wrap items-center gap-2.5 rounded-full border border-stone-200 bg-background/90 px-3 py-1 text-xs shadow-xs dark:border-stone-800">
+                                    <span className="inline-flex items-center gap-1.5 font-medium text-stone-700 dark:text-stone-200">
+                                        <HardDrive className="size-3.5" />
+                                        {t("assets.cloudQuotaLabel", { pair: formatStoragePair(user.storageUsedBytes, user.storageQuotaBytes) })}
+                                    </span>
+                                    <div className="w-20">
+                                        <Progress
+                                            percent={
+                                                (user.storageQuotaBytes ?? 0) > 0
+                                                    ? Math.min(100, Math.round(((user.storageUsedBytes ?? 0) / (user.storageQuotaBytes ?? 1)) * 100))
+                                                    : 100
+                                            }
+                                            size="small"
+                                            showInfo={false}
+                                            status={exceeded ? "exception" : "active"}
+                                        />
+                                    </div>
+                                    {expired ? (
+                                        <Tag
+                                            color="red"
+                                            className="m-0 cursor-pointer"
+                                            onClick={() => navigate(user.role === "admin" ? "/admin?tab=my-media" : "/console?tab=my-media")}
+                                        >
+                                            {t("assets.quotaExpiredAction")}
+                                        </Tag>
+                                    ) : exceeded ? (
+                                        <Tag
+                                            color="red"
+                                            className="m-0 cursor-pointer"
+                                            onClick={() => navigate(user.role === "admin" ? "/admin?tab=my-media" : "/console?tab=my-media")}
+                                        >
+                                            {t("assets.quotaExceededAction")}
+                                        </Tag>
+                                    ) : null}
+                                    <Button
+                                        type="link"
+                                        size="small"
+                                        className="!h-auto !p-0 text-xs"
+                                        onClick={() => navigate(user.role === "admin" ? "/admin?tab=my-media" : "/console?tab=my-media")}
+                                    >
+                                        {t("assets.manageCloudMedia")}
+                                    </Button>
+                                </div>
                             </div>
-                            {expired ? (
-                                <Tag
-                                    color="red"
-                                    className="m-0 cursor-pointer"
-                                    onClick={() => navigate(user.role === "admin" ? "/admin?tab=my-media" : "/console?tab=my-media")}
-                                >
-                                    {t("assets.quotaExpiredAction")}
-                                </Tag>
-                            ) : exceeded ? (
-                                <Tag
-                                    color="red"
-                                    className="m-0 cursor-pointer"
-                                    onClick={() => navigate(user.role === "admin" ? "/admin?tab=my-media" : "/console?tab=my-media")}
-                                >
-                                    {t("assets.quotaExceededAction")}
-                                </Tag>
-                            ) : null}
-                            <Button
-                                type="link"
-                                size="small"
-                                className="!h-auto !p-0 text-xs"
-                                onClick={() => navigate(user.role === "admin" ? "/admin?tab=my-media" : "/console?tab=my-media")}
-                            >
-                                {t("assets.manageCloudMedia")}
-                            </Button>
+                            <p className="mt-1.5 text-sm text-stone-500 dark:text-stone-400">
+                                {t("results.description")}
+                            </p>
+                        </div>
+
+                        <div className="w-full shrink-0 md:w-80 lg:w-96">
+                            <Input.Search
+                                className="w-full"
+                                size="large"
+                                allowClear
+                                prefix={<Search className="size-4 text-stone-400" />}
+                                placeholder={t("results.searchPlaceholder")}
+                                onSearch={(val) => {
+                                    setPage(1);
+                                    setKeyword(val);
+                                }}
+                            />
                         </div>
                     </div>
 
-                    <div className="mx-auto mt-8 w-full max-w-2xl">
-                        <Input.Search
-                            className="w-full"
-                            size="large"
-                            allowClear
-                            prefix={<Search className="size-4 text-stone-400" />}
-                            placeholder={t("results.searchPlaceholder")}
-                            onSearch={(val) => {
-                                setPage(1);
-                                setKeyword(val);
-                            }}
-                        />
-                    </div>
-
-                    <div className="mx-auto mt-6 flex max-w-7xl flex-wrap items-center justify-between gap-3">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
                         <div className="flex flex-wrap items-center gap-2">
                             <span className="text-xs font-medium text-stone-500 dark:text-stone-400">{t("results.typeLabel")}</span>
                             {kindFilterValues.map((value) => (
@@ -358,10 +362,10 @@ export default function ResultsPage() {
                     </div>
                 </div>
 
-                <div className="mx-auto flex max-w-7xl flex-col gap-5">
+                <div className="mx-auto flex w-full max-w-[1600px] flex-col gap-5">
                     <Spin spinning={loading}>
                         {items.length ? (
-                            <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+                            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
                                 {items.map((item) => {
                                     const model = typeof item.meta?.model === "string" ? item.meta.model : "";
                                     const promptText = typeof item.meta?.prompt === "string" ? item.meta.prompt : "";

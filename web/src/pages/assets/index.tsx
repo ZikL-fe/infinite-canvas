@@ -282,150 +282,152 @@ export default function AssetsPage() {
 
     return (
         <div className="flex h-full flex-col overflow-hidden bg-background text-stone-900 dark:text-stone-100">
-            <main className="min-h-0 flex-1 overflow-y-auto bg-[radial-gradient(#e5e7eb_1px,transparent_1px)] px-6 py-8 [background-size:16px_16px] dark:bg-[radial-gradient(rgba(245,245,244,.14)_1px,transparent_1px)]">
-                <div className="pb-8">
-                    <div className="mx-auto max-w-5xl text-center">
-                        <h1 className="text-4xl font-semibold tracking-tight text-stone-950 dark:text-stone-100">{t("assets.title")}</h1>
-                        <p className="mt-3 text-sm text-stone-500 dark:text-stone-400">{t("assets.description")}</p>
-                        {user ? (
-                            <div className="mx-auto mt-4 inline-flex flex-wrap items-center justify-center gap-3 rounded-full border border-stone-200 bg-background/90 px-4 py-1.5 text-xs shadow-sm dark:border-stone-800">
-                                {(() => {
-                                    const expired = Boolean(user.storageQuotaExpiresAt && new Date(user.storageQuotaExpiresAt).getTime() <= Date.now());
-                                    const exceeded = expired || (user.storageQuotaBytes ?? 0) <= 0 || (user.storageUsedBytes ?? 0) >= (user.storageQuotaBytes ?? 0);
-                                    return (
-                                        <>
-                                            <span className="inline-flex items-center gap-1.5 font-medium text-stone-700 dark:text-stone-200">
-                                                <HardDrive className="size-3.5" />
-                                                {t("assets.cloudQuotaLabel", { pair: formatStoragePair(user.storageUsedBytes, user.storageQuotaBytes) })}
-                                            </span>
-                                            <div className="w-24">
-                                                <Progress
-                                                    percent={
-                                                        (user.storageQuotaBytes ?? 0) > 0
-                                                            ? Math.min(100, Math.round(((user.storageUsedBytes ?? 0) / (user.storageQuotaBytes ?? 1)) * 100))
-                                                            : 100
-                                                    }
-                                                    size="small"
-                                                    showInfo={false}
-                                                    status={exceeded ? "exception" : "active"}
-                                                />
-                                            </div>
-                                            {expired ? (
-                                                <Tag
-                                                    color="red"
-                                                    className="m-0 cursor-pointer"
-                                                    onClick={() => navigate(user.role === "admin" ? "/admin?tab=my-media" : "/console?tab=my-media")}
-                                                >
-                                                    {t("assets.quotaExpiredAction")}
-                                                </Tag>
-                                            ) : exceeded ? (
-                                                <Tag
-                                                    color="red"
-                                                    className="m-0 cursor-pointer"
-                                                    onClick={() => navigate(user.role === "admin" ? "/admin?tab=my-media" : "/console?tab=my-media")}
-                                                >
-                                                    {t("assets.quotaExceededAction")}
-                                                </Tag>
-                                            ) : null}
-                                            <Button
-                                                type="link"
-                                                size="small"
-                                                className="!h-auto !p-0 text-xs"
-                                                onClick={() => navigate(user.role === "admin" ? "/admin?tab=my-media" : "/console?tab=my-media")}
-                                            >
-                                                {t("assets.manageCloudMedia")}
-                                            </Button>
-                                        </>
-                                    );
-                                })()}
-                            </div>
-                        ) : null}
-                    </div>
-
-                    <div className="mx-auto mt-8 w-full max-w-2xl">
-                        <Input.Search
-                            className="w-full"
-                            size="large"
-                            allowClear
-                            prefix={<Search className="size-4 text-stone-400" />}
-                            value={keyword}
-                            placeholder={t("assets.search")}
-                            onChange={(event) => {
-                                setPage(1);
-                                setKeyword(event.target.value);
-                            }}
-                            onSearch={(value) => {
-                                setPage(1);
-                                setKeyword(value);
-                            }}
-                        />
-                    </div>
-
-                    <div className="mx-auto mt-6 grid max-w-6xl gap-3 text-left">
-                        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                            <div className="grid gap-2 sm:grid-cols-[56px_minmax(0,1fr)] sm:items-center">
-                                <div className="text-xs font-medium text-stone-500 dark:text-stone-400">{t("assets.type")}</div>
-                                <div className="flex flex-wrap gap-2">
-                                    {kindOptions.map((option) => (
-                                        <Tag.CheckableTag
-                                            key={option}
-                                            checked={kindFilter === option}
-                                            className={cn("prompt-filter-tag", kindFilter === option && "is-active")}
-                                            onChange={() => {
-                                                setPage(1);
-                                                setKindFilter(option);
-                                            }}
-                                        >
-                                            {option === "all" ? t("common.all") : t(`assets.kinds.${option}`)}
-                                        </Tag.CheckableTag>
-                                    ))}
-                                </div>
-                            </div>
+            <main className="min-h-0 flex-1 overflow-y-auto bg-[radial-gradient(#e5e7eb_1px,transparent_1px)] px-4 py-6 [background-size:16px_16px] sm:px-6 lg:px-10 dark:bg-[radial-gradient(rgba(245,245,244,.14)_1px,transparent_1px)]">
+                <div className="mx-auto flex w-full max-w-[1600px] flex-col gap-5 pb-6">
+                    <div className="flex flex-col gap-4 border-b border-stone-200/80 pb-5 md:flex-row md:items-end md:justify-between dark:border-stone-800/80">
+                        <div className="min-w-0">
                             <div className="flex flex-wrap items-center gap-3">
-                                <Button size="small" icon={<CheckSquare className="size-3.5" />} disabled={!visibleAssets.length} onClick={toggleSelectAllPage}>
-                                    {allPageSelected ? t("common.deselectAll") : t("common.selectAllPage")}
-                                </Button>
-                                {selectedIds.length > 0 ? (
-                                    <Button
-                                        size="small"
-                                        type="primary"
-                                        icon={<Download className="size-3.5" />}
-                                        loading={batchDownloading}
-                                        onClick={() => void handleBatchDownload()}
-                                    >
-                                        {t("common.batchDownloadCount", { count: selectedIds.length })}
-                                    </Button>
+                                <h1 className="text-2xl font-semibold tracking-tight text-stone-950 dark:text-stone-100">{t("assets.title")}</h1>
+                                {user ? (
+                                    <div className="inline-flex flex-wrap items-center gap-2.5 rounded-full border border-stone-200 bg-background/90 px-3 py-1 text-xs shadow-xs dark:border-stone-800">
+                                        {(() => {
+                                            const expired = Boolean(user.storageQuotaExpiresAt && new Date(user.storageQuotaExpiresAt).getTime() <= Date.now());
+                                            const exceeded = expired || (user.storageQuotaBytes ?? 0) <= 0 || (user.storageUsedBytes ?? 0) >= (user.storageQuotaBytes ?? 0);
+                                            return (
+                                                <>
+                                                    <span className="inline-flex items-center gap-1.5 font-medium text-stone-700 dark:text-stone-200">
+                                                        <HardDrive className="size-3.5" />
+                                                        {t("assets.cloudQuotaLabel", { pair: formatStoragePair(user.storageUsedBytes, user.storageQuotaBytes) })}
+                                                    </span>
+                                                    <div className="w-20">
+                                                        <Progress
+                                                            percent={
+                                                                (user.storageQuotaBytes ?? 0) > 0
+                                                                    ? Math.min(100, Math.round(((user.storageUsedBytes ?? 0) / (user.storageQuotaBytes ?? 1)) * 100))
+                                                                    : 100
+                                                            }
+                                                            size="small"
+                                                            showInfo={false}
+                                                            status={exceeded ? "exception" : "active"}
+                                                        />
+                                                    </div>
+                                                    {expired ? (
+                                                        <Tag
+                                                            color="red"
+                                                            className="m-0 cursor-pointer"
+                                                            onClick={() => navigate(user.role === "admin" ? "/admin?tab=my-media" : "/console?tab=my-media")}
+                                                        >
+                                                            {t("assets.quotaExpiredAction")}
+                                                        </Tag>
+                                                    ) : exceeded ? (
+                                                        <Tag
+                                                            color="red"
+                                                            className="m-0 cursor-pointer"
+                                                            onClick={() => navigate(user.role === "admin" ? "/admin?tab=my-media" : "/console?tab=my-media")}
+                                                        >
+                                                            {t("assets.quotaExceededAction")}
+                                                        </Tag>
+                                                    ) : null}
+                                                    <Button
+                                                        type="link"
+                                                        size="small"
+                                                        className="!h-auto !p-0 text-xs"
+                                                        onClick={() => navigate(user.role === "admin" ? "/admin?tab=my-media" : "/console?tab=my-media")}
+                                                    >
+                                                        {t("assets.manageCloudMedia")}
+                                                    </Button>
+                                                </>
+                                            );
+                                        })()}
+                                    </div>
                                 ) : null}
-                                <button
-                                    type="button"
-                                    disabled={exportingAssets}
-                                    className="cursor-pointer text-sm font-medium text-stone-700 underline-offset-4 hover:underline focus-visible:outline-none focus-visible:underline disabled:cursor-not-allowed disabled:opacity-50 dark:text-stone-300"
-                                    onClick={() => void exportAllAssets()}
-                                >
-                                    {exportingAssets ? t("common.exporting") : t("assets.export")}
-                                </button>
-                                <button
-                                    type="button"
-                                    disabled={importingAssets}
-                                    className="cursor-pointer text-sm font-medium text-stone-700 underline-offset-4 hover:underline focus-visible:outline-none focus-visible:underline disabled:cursor-not-allowed disabled:opacity-50 dark:text-stone-300"
-                                    onClick={() => assetInputRef.current?.click()}
-                                >
-                                    {importingAssets ? t("common.importing") : t("assets.import")}
-                                </button>
-                                <button
-                                    type="button"
-                                    className="cursor-pointer text-sm font-medium text-stone-700 underline-offset-4 hover:underline focus-visible:outline-none focus-visible:underline dark:text-stone-300"
-                                    onClick={openCreate}
-                                >
-                                    {t("assets.add")}
-                                </button>
                             </div>
+                            <p className="mt-1.5 text-sm text-stone-500 dark:text-stone-400">{t("assets.description")}</p>
+                        </div>
+
+                        <div className="w-full shrink-0 md:w-80 lg:w-96">
+                            <Input.Search
+                                className="w-full"
+                                size="large"
+                                allowClear
+                                prefix={<Search className="size-4 text-stone-400" />}
+                                value={keyword}
+                                placeholder={t("assets.search")}
+                                onChange={(event) => {
+                                    setPage(1);
+                                    setKeyword(event.target.value);
+                                }}
+                                onSearch={(value) => {
+                                    setPage(1);
+                                    setKeyword(value);
+                                }}
+                            />
+                        </div>
+                    </div>
+
+                    <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                        <div className="flex flex-wrap items-center gap-2">
+                            <span className="text-xs font-medium text-stone-500 dark:text-stone-400">{t("assets.type")}</span>
+                            <div className="flex flex-wrap gap-2">
+                                {kindOptions.map((option) => (
+                                    <Tag.CheckableTag
+                                        key={option}
+                                        checked={kindFilter === option}
+                                        className={cn("prompt-filter-tag", kindFilter === option && "is-active")}
+                                        onChange={() => {
+                                            setPage(1);
+                                            setKindFilter(option);
+                                        }}
+                                    >
+                                        {option === "all" ? t("common.all") : t(`assets.kinds.${option}`)}
+                                    </Tag.CheckableTag>
+                                ))}
+                            </div>
+                        </div>
+                        <div className="flex flex-wrap items-center gap-3">
+                            <Button size="small" icon={<CheckSquare className="size-3.5" />} disabled={!visibleAssets.length} onClick={toggleSelectAllPage}>
+                                {allPageSelected ? t("common.deselectAll") : t("common.selectAllPage")}
+                            </Button>
+                            {selectedIds.length > 0 ? (
+                                <Button
+                                    size="small"
+                                    type="primary"
+                                    icon={<Download className="size-3.5" />}
+                                    loading={batchDownloading}
+                                    onClick={() => void handleBatchDownload()}
+                                >
+                                    {t("common.batchDownloadCount", { count: selectedIds.length })}
+                                </Button>
+                            ) : null}
+                            <button
+                                type="button"
+                                disabled={exportingAssets}
+                                className="cursor-pointer text-sm font-medium text-stone-700 underline-offset-4 hover:underline focus-visible:outline-none focus-visible:underline disabled:cursor-not-allowed disabled:opacity-50 dark:text-stone-300"
+                                onClick={() => void exportAllAssets()}
+                            >
+                                {exportingAssets ? t("common.exporting") : t("assets.export")}
+                            </button>
+                            <button
+                                type="button"
+                                disabled={importingAssets}
+                                className="cursor-pointer text-sm font-medium text-stone-700 underline-offset-4 hover:underline focus-visible:outline-none focus-visible:underline disabled:cursor-not-allowed disabled:opacity-50 dark:text-stone-300"
+                                onClick={() => assetInputRef.current?.click()}
+                            >
+                                {importingAssets ? t("common.importing") : t("assets.import")}
+                            </button>
+                            <button
+                                type="button"
+                                className="cursor-pointer text-sm font-medium text-stone-700 underline-offset-4 hover:underline focus-visible:outline-none focus-visible:underline dark:text-stone-300"
+                                onClick={openCreate}
+                            >
+                                {t("assets.add")}
+                            </button>
                         </div>
                     </div>
                 </div>
 
-                <div className="mx-auto flex max-w-7xl flex-col gap-5">
-                    <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+                <div className="mx-auto flex w-full max-w-[1600px] flex-col gap-5">
+                    <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
                         {visibleAssets.map((asset) => (
                             <AssetCard
                                 key={asset.id}

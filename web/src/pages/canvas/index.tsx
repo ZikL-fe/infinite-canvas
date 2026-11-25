@@ -86,11 +86,11 @@ export default function CanvasPage() {
 
     return (
         <main className="h-full overflow-auto bg-background text-stone-950 dark:text-stone-100">
-            <div className="mx-auto flex w-full max-w-6xl flex-col gap-8 px-6 py-10">
-                <header className="flex flex-wrap items-end justify-between gap-4 border-b border-stone-200 pb-6 dark:border-stone-800">
+            <div className="mx-auto flex w-full max-w-[1680px] flex-col gap-6 px-4 py-6 sm:px-6 lg:px-10">
+                <header className="flex flex-wrap items-end justify-between gap-4 border-b border-stone-200/80 pb-5 dark:border-stone-800/80">
                     <div>
                         <p className="text-xs text-stone-500">{t("canvas.library")}</p>
-                        <h1 className="mt-3 text-3xl font-semibold">{t("canvas.title")}</h1>
+                        <h1 className="mt-1.5 text-2xl font-semibold tracking-tight">{t("canvas.title")}</h1>
                     </div>
                     <div className="flex items-center gap-2">
                         {selectedIds.length ? (
@@ -120,7 +120,7 @@ export default function CanvasPage() {
                 {!hydrated ? (
                     <section className="flex min-h-[360px] items-center justify-center border-y border-stone-200 text-sm text-stone-500 dark:border-stone-800">{t("canvas.loading")}</section>
                 ) : projects.length ? (
-                    <div className="grid gap-5 sm:grid-cols-2 xl:grid-cols-3">
+                    <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
                         {projects.map((project) => (
                             <CanvasProjectCard key={project.id} project={project} />
                         ))}
