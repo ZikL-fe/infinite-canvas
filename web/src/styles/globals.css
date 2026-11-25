@@ -528,6 +528,32 @@
     width: 100%;
 }
 
+/* 深色模式下部分主色高亮组件未提供独立前景色 Token，确保浅灰/白底上的文字、滑块圆点与勾选标记具备对比度 */
+.dark .ant-picker-dropdown .ant-picker-cell-in-view.ant-picker-cell-selected:not(.ant-picker-cell-disabled) .ant-picker-cell-inner,
+.dark .ant-picker-dropdown .ant-picker-cell-in-view.ant-picker-cell-range-start:not(.ant-picker-cell-disabled) .ant-picker-cell-inner,
+.dark .ant-picker-dropdown .ant-picker-cell-in-view.ant-picker-cell-range-end:not(.ant-picker-cell-disabled) .ant-picker-cell-inner,
+.dark .ant-tag.ant-tag-checkable-checked,
+.dark .ant-switch.ant-switch-checked .ant-switch-inner .ant-switch-inner-checked {
+    color: #171717;
+}
+
+.dark .ant-switch.ant-switch-checked .ant-switch-handle::before {
+    background: #171717;
+}
+
+.dark .ant-checkbox.ant-checkbox-checked:not(.ant-checkbox-disabled)::after {
+    border-color: #171717;
+}
+
+.dark .ant-radio.ant-radio-checked:not(.ant-radio-disabled)::after {
+    background-color: #171717;
+}
+
+.dark .ant-steps.ant-steps-filled .ant-steps-item-active:not(.ant-steps-item-error) .ant-steps-item-icon {
+    color: #171717;
+    --ant-cmp-steps-item-icon-active-text-color: #171717;
+}
+
 .agent-streamdown {
     overflow-wrap: anywhere;
 }

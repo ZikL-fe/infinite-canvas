@@ -172,14 +172,14 @@ function ImageDropBox({
                             <div className="absolute inset-x-0.5 bottom-0.5 hidden justify-between group-hover:flex">
                                 <Button
                                     size="small"
-                                    className="!h-5 !w-5 !min-w-5 !rounded-full !bg-white/85 !p-0"
+                                    className="!h-5 !w-5 !min-w-5 !rounded-full !bg-white/85 !p-0 !text-stone-700 hover:!text-stone-950 disabled:!text-stone-400 dark:!bg-stone-900/85 dark:!text-stone-200 dark:hover:!text-white dark:disabled:!text-stone-600"
                                     icon={<ArrowLeft className="size-3" />}
                                     disabled={idx <= 0}
                                     onClick={() => onMove(idx, -1)}
                                 />
                                 <Button
                                     size="small"
-                                    className="!h-5 !w-5 !min-w-5 !rounded-full !bg-white/85 !p-0"
+                                    className="!h-5 !w-5 !min-w-5 !rounded-full !bg-white/85 !p-0 !text-stone-700 hover:!text-stone-950 disabled:!text-stone-400 dark:!bg-stone-900/85 dark:!text-stone-200 dark:hover:!text-white dark:disabled:!text-stone-600"
                                     icon={<ArrowRight className="size-3" />}
                                     disabled={idx >= images.length - 1}
                                     onClick={() => onMove(idx, 1)}

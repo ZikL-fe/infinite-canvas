@@ -150,9 +150,21 @@ export function ImageSettingsTheme({ theme, children }: { theme: CanvasTheme; ch
     return (
         <ConfigProvider
             theme={{
-                token: { colorBgContainer: theme.toolbar.panel, colorBgElevated: theme.toolbar.panel, colorBorder: theme.node.stroke, colorPrimary: theme.node.activeStroke, colorText: theme.node.text, colorTextLightSolid: theme.node.panel },
+                token: {
+                    colorBgContainer: theme.toolbar.panel,
+                    colorBgElevated: theme.toolbar.panel,
+                    colorBorder: theme.node.stroke,
+                    colorPrimary: theme.node.activeStroke,
+                    colorPrimaryBg: theme.node.fill,
+                    colorPrimaryBgHover: theme.toolbar.activeBg,
+                    colorPrimaryBorder: theme.node.stroke,
+                    colorPrimaryBorderHover: theme.node.muted,
+                    colorText: theme.node.text,
+                    colorTextLightSolid: "#ffffff",
+                    controlOutline: "rgba(120, 113, 108, 0.2)",
+                },
                 components: {
-                    Button: { defaultBg: theme.toolbar.panel, defaultBorderColor: theme.node.stroke, defaultColor: theme.node.text },
+                    Button: { defaultBg: theme.toolbar.panel, defaultBorderColor: theme.node.stroke, defaultColor: theme.node.text, primaryColor: theme.node.panel },
                     Slider: { railBg: theme.node.stroke, railHoverBg: theme.node.stroke, trackBg: theme.node.activeStroke, handleColor: theme.node.text, handleActiveColor: theme.node.text },
                 },
             }}
