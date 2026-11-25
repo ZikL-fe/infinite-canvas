@@ -12,14 +12,20 @@ import {
 import { ensureCloudMediaUploaded, stripBlobUrls } from "@/services/cloud-media-sync";
 import { resolveMediaUrl, clearLocalMediaFileCache, prefetchUncachedMediaUrls } from "@/services/file-storage";
 import { resolveImageUrl, clearLocalImageAndWorkbenchCaches, prefetchUncachedImageUrls } from "@/services/image-storage";
-import { syncWorkbenchLogsWithCloud } from "@/services/workbench-sync";
+import { clearWorkbenchSyncCursors, syncWorkbenchLogsWithCloud } from "@/services/workbench-sync";
 import { useCanvasStore, type CanvasDeletedProject, type CanvasProject } from "@/stores/canvas/use-canvas-store";
 import { useAssetStore, type Asset } from "@/stores/use-asset-store";
 import { useConfigStore, type AiConfig } from "@/stores/use-config-store";
 import { useUserStore } from "@/stores/use-user-store";
 
 const LAST_SYNC_USER_KEY = "infinite-canvas:cloud_sync_uid";
+const CANVAS_SYNC_CURSOR_KEY = "infinite-canvas:canvas_sync_cursor";
 const PROJECT_SYNC_DEBOUNCE_MS = 800;
+
+function clearAllSyncCursors() {
+    localStorage.removeItem(CANVAS_SYNC_CURSOR_KEY);
+    clearWorkbenchSyncCursors();
+}
 
 let listenersInitialized = false;
 let applyingRemote = false;
@@ -134,7 +140,75 @@ function mergeProjects(
     const deletedToPush = localDeleted.filter((d) => !remoteDeletedSet.has(d.id)).map((d) => d.id);
     const mergedDeleted = [...deletedMap.entries()].map(([id, deletedAt]) => ({ id, deletedAt }));
 
-    return { merged, mergedDeleted, toPush, deletedToPush };
+    return { merged, mergedDeleted, toPush, deletedToPush, changed: true };
+}
+
+function mergeProjectsIncremental(
+    localProjects: CanvasProject[],
+    localDeleted: CanvasDeletedProject[],
+    remoteProjects: CanvasProject[],
+    remoteDeleted: CanvasDeletedProject[],
+    since: string,
+) {
+    const deletedMap = new Map<string, string>();
+    for (const item of [...localDeleted, ...remoteDeleted]) {
+        const prev = deletedMap.get(item.id);
+        if (!prev || item.deletedAt > prev) deletedMap.set(item.id, item.deletedAt);
+    }
+
+    const localMap = new Map(localProjects.map((p) => [p.id, p]));
+    const remoteMap = new Map(remoteProjects.map((p) => [p.id, p]));
+    const mergedMap = new Map(localMap);
+    const toPush: CanvasProject[] = [];
+    let changed = false;
+
+    for (const item of remoteDeleted) {
+        const local = mergedMap.get(item.id);
+        if (local && item.deletedAt >= local.updatedAt) {
+            mergedMap.delete(item.id);
+            changed = true;
+        }
+    }
+
+    for (const [id, remote] of remoteMap) {
+        const local = mergedMap.get(id);
+        const deletedAt = deletedMap.get(id);
+        const latestUpdatedAt = [local?.updatedAt || "", remote.updatedAt].sort().pop() || "";
+        if (deletedAt && deletedAt >= latestUpdatedAt) {
+            if (local) {
+                mergedMap.delete(id);
+                changed = true;
+            }
+            continue;
+        }
+        if (local && local.updatedAt > remote.updatedAt) {
+            toPush.push(local);
+        } else if (!local || remote.updatedAt > local.updatedAt) {
+            mergedMap.set(id, remote);
+            changed = true;
+        }
+    }
+
+    for (const [id, local] of localMap) {
+        if (remoteMap.has(id)) continue;
+        const deletedAt = deletedMap.get(id);
+        if (deletedAt && deletedAt >= local.updatedAt) {
+            mergedMap.delete(id);
+            changed = true;
+            continue;
+        }
+        if (local.updatedAt >= since) {
+            toPush.push(local);
+        }
+    }
+
+    const merged = Array.from(mergedMap.values()).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+    const remoteDeletedSet = new Set(remoteDeleted.map((d) => d.id));
+    const deletedToPush = localDeleted.filter((d) => d.deletedAt >= since && !remoteDeletedSet.has(d.id)).map((d) => d.id);
+    const mergedDeleted = [...deletedMap.entries()].map(([id, deletedAt]) => ({ id, deletedAt }));
+    if (mergedDeleted.length !== localDeleted.length) changed = true;
+
+    return { merged, mergedDeleted, toPush, deletedToPush, changed };
 }
 
 function mergeAssets(
@@ -253,6 +327,7 @@ export async function syncCloudWorkspace() {
             // 同浏览器切换不同账号时先清理上一位用户的本地缓存与媒体/工作台日志，避免数据串号
             const lastUid = localStorage.getItem(LAST_SYNC_USER_KEY);
             if (lastUid && lastUid !== currentUser.id) {
+                clearAllSyncCursors();
                 applyingRemote = true;
                 try {
                     useCanvasStore.getState().replaceProjects([], []);
@@ -265,8 +340,12 @@ export async function syncCloudWorkspace() {
             }
             localStorage.setItem(LAST_SYNC_USER_KEY, currentUser.id);
 
+            const preLocalCanvas = useCanvasStore.getState();
+            const hasLocalCanvas = preLocalCanvas.projects.length > 0 || preLocalCanvas.deletedProjects.length > 0;
+            const canvasSince = hasLocalCanvas ? localStorage.getItem(CANVAS_SYNC_CURSOR_KEY) || undefined : undefined;
+
             const [remoteCanvas, remoteAssetRes] = await Promise.all([
-                canvasApi.listProjects(),
+                canvasApi.listProjects(false, canvasSince),
                 assetsApi.list(),
                 syncWorkbenchLogsWithCloud("image", localforage.createInstance({ name: "infinite-canvas", storeName: "image_generation_logs" }), (log) => log),
                 syncWorkbenchLogsWithCloud("video", localforage.createInstance({ name: "infinite-canvas", storeName: "video_generation_logs" }), (log) => log),
@@ -277,7 +356,10 @@ export async function syncCloudWorkspace() {
             const localCanvas = useCanvasStore.getState();
             const localAssets = useAssetStore.getState().assets;
 
-            const canvasPlan = mergeProjects(localCanvas.projects, localCanvas.deletedProjects, remoteProjects, remoteCanvas.deletedProjects);
+            const canvasPlan =
+                remoteCanvas.incremental && canvasSince
+                    ? mergeProjectsIncremental(localCanvas.projects, localCanvas.deletedProjects, remoteProjects, remoteCanvas.deletedProjects, canvasSince)
+                    : mergeProjects(localCanvas.projects, localCanvas.deletedProjects, remoteProjects, remoteCanvas.deletedProjects);
             const assetPlan = mergeAssets(localAssets, remoteAssets, remoteAssetRes.deletedIds);
             const assetKeys = assetPlan.merged.flatMap((asset) => (asset.kind === "image" || asset.kind === "video") && asset.data.storageKey ? [asset.data.storageKey] : []);
             await Promise.all([prefetchUncachedImageUrls(assetKeys), prefetchUncachedMediaUrls(assetKeys)]);
@@ -285,10 +367,15 @@ export async function syncCloudWorkspace() {
 
             applyingRemote = true;
             try {
-                useCanvasStore.getState().replaceProjects(canvasPlan.merged, canvasPlan.mergedDeleted);
+                if (canvasPlan.changed) {
+                    useCanvasStore.getState().replaceProjects(canvasPlan.merged, canvasPlan.mergedDeleted);
+                }
                 useAssetStore.getState().replaceAssets(hydratedAssets);
             } finally {
                 applyingRemote = false;
+            }
+            if (remoteCanvas.syncedAt) {
+                localStorage.setItem(CANVAS_SYNC_CURSOR_KEY, remoteCanvas.syncedAt);
             }
             window.dispatchEvent(new CustomEvent("infinite-canvas:cloud-workspace-synced"));
 
@@ -458,6 +545,7 @@ export function initCloudSyncListeners() {
             useConfigStore.getState().clearRuntimeConfig();
             if (prevState.accessToken || prevState.user) {
                 localStorage.removeItem(LAST_SYNC_USER_KEY);
+                clearAllSyncCursors();
                 applyingRemote = true;
                 try {
                     useCanvasStore.getState().replaceProjects([], []);

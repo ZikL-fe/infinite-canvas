@@ -288,6 +288,15 @@ export function ensureSchemaReady() {
         sqlClient`ALTER TABLE users ADD COLUMN IF NOT EXISTS storage_pre_expiry_warned_for timestamptz`,
         sqlClient`ALTER TABLE users ADD COLUMN IF NOT EXISTS storage_expired_warned_for timestamptz`,
         sqlClient`ALTER TABLE users ADD COLUMN IF NOT EXISTS storage_cleaned_at timestamptz`,
+        sqlClient`CREATE INDEX IF NOT EXISTS user_sessions_user_idx ON user_sessions (user_id, created_at DESC)`,
+        sqlClient`CREATE INDEX IF NOT EXISTS media_objects_user_status_created_idx ON media_objects (user_id, status, created_at DESC)`,
+        sqlClient`CREATE INDEX IF NOT EXISTS user_assets_user_updated_idx ON user_assets (user_id, updated_at DESC)`,
+        sqlClient`CREATE INDEX IF NOT EXISTS canvas_projects_user_updated_idx ON canvas_projects (user_id, updated_at DESC)`,
+        sqlClient`CREATE INDEX IF NOT EXISTS workbench_logs_user_kind_updated_idx ON workbench_logs (user_id, kind, updated_at DESC)`,
+        sqlClient`CREATE INDEX IF NOT EXISTS workbench_logs_user_created_idx ON workbench_logs (user_id, created_at DESC)`,
+        sqlClient`CREATE INDEX IF NOT EXISTS credit_ledger_user_created_idx ON credit_ledger (user_id, created_at DESC)`,
+        sqlClient`CREATE INDEX IF NOT EXISTS credit_ledger_created_idx ON credit_ledger (created_at DESC)`,
+        sqlClient`CREATE INDEX IF NOT EXISTS ai_billing_tasks_user_created_idx ON ai_billing_tasks (user_id, created_at DESC)`,
       ];
       for (const stmt of statements) {
         await stmt.catch((err) => {

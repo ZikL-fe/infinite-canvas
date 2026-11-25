@@ -1,6 +1,6 @@
 /** 画布项目云端保存、增量拉取与批量删除接口。 */
 import { zValidator } from "@hono/zod-validator";
-import { and, desc, eq, inArray } from "drizzle-orm";
+import { and, desc, eq, gte, inArray } from "drizzle-orm";
 import { Hono } from "hono";
 import { z } from "zod";
 
@@ -35,11 +35,29 @@ export const canvasRoutes = new Hono<AppEnv>();
 
 canvasRoutes.use("*", requireAuth);
 
+function parseSinceParam(raw?: string) {
+  if (!raw?.trim()) return null;
+  const parsed = new Date(raw.trim());
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function resolveMonotonicUpdatedAt(raw?: string) {
+  const serverNow = new Date();
+  if (!raw) return serverNow;
+  const parsed = new Date(raw);
+  if (Number.isNaN(parsed.getTime())) return serverNow;
+  return parsed.getTime() >= serverNow.getTime() ? parsed : serverNow;
+}
+
 canvasRoutes.get("/projects", async (c) => {
   const user = c.get("user");
   const withStats = c.req.query("withStats") === "1";
+  const sinceDate = withStats ? null : parseSinceParam(c.req.query("updatedSince"));
+  const syncedAt = new Date().toISOString();
   const rows = await db.query.canvasProjects.findMany({
-    where: eq(canvasProjects.userId, user.id),
+    where: sinceDate
+      ? and(eq(canvasProjects.userId, user.id), gte(canvasProjects.updatedAt, sinceDate))
+      : eq(canvasProjects.userId, user.id),
     orderBy: [desc(canvasProjects.updatedAt)],
   });
   const byteMap = withStats ? await loadUserMediaByteMap([user.id]) : null;
@@ -76,7 +94,7 @@ canvasRoutes.get("/projects", async (c) => {
       deletedAt: row.deletedAt!.toISOString(),
     }));
 
-  return c.json({ projects, deletedProjects });
+  return c.json({ projects, deletedProjects, incremental: Boolean(sinceDate), syncedAt });
 });
 
 canvasRoutes.put("/projects/:id", zValidator("json", upsertProjectSchema), async (c) => {
@@ -90,7 +108,7 @@ canvasRoutes.put("/projects/:id", zValidator("json", upsertProjectSchema), async
   }
 
   const createdAt = body.createdAt ? new Date(body.createdAt) : new Date();
-  const updatedAt = body.updatedAt ? new Date(body.updatedAt) : new Date();
+  const updatedAt = resolveMonotonicUpdatedAt(body.updatedAt);
 
   if (!existing) {
     const [created] = await db

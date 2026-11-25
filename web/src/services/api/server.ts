@@ -886,10 +886,18 @@ export const storageApi = {
 };
 
 export const canvasApi = {
-    listProjects: (withStats = false) =>
-        requestServer<{ projects: Record<string, unknown>[]; deletedProjects: { id: string; deletedAt: string }[] }>(
-            `/canvas/projects${withStats ? "?withStats=1" : ""}`,
-        ),
+    listProjects: (withStats = false, updatedSince?: string) => {
+        const query = new URLSearchParams();
+        if (withStats) query.set("withStats", "1");
+        if (updatedSince) query.set("updatedSince", updatedSince);
+        const suffix = query.size ? `?${query.toString()}` : "";
+        return requestServer<{
+            projects: Record<string, unknown>[];
+            deletedProjects: { id: string; deletedAt: string }[];
+            incremental?: boolean;
+            syncedAt?: string;
+        }>(`/canvas/projects${suffix}`);
+    },
     saveProject: (id: string, payload: Record<string, unknown>) =>
         requestServer<{ project: Record<string, unknown> | null; skippedDeleted?: boolean; deletedMediaCount?: number }>(
             `/canvas/projects/${encodeURIComponent(id)}`,
@@ -900,10 +908,17 @@ export const canvasApi = {
 };
 
 export const workbenchApi = {
-    listLogs: (kind: "image" | "video", withStats = false) =>
-        requestServer<{ logs: Record<string, unknown>[]; deletedIds: { id: string; deletedAt: string }[] }>(
-            `/workbench/logs?kind=${kind}${withStats ? "&withStats=1" : ""}`,
-        ),
+    listLogs: (kind: "image" | "video", withStats = false, updatedSince?: string) => {
+        const query = new URLSearchParams({ kind });
+        if (withStats) query.set("withStats", "1");
+        if (updatedSince) query.set("updatedSince", updatedSince);
+        return requestServer<{
+            logs: Record<string, unknown>[];
+            deletedIds: { id: string; deletedAt: string }[];
+            incremental?: boolean;
+            syncedAt?: string;
+        }>(`/workbench/logs?${query.toString()}`);
+    },
     saveLog: (id: string, payload: Record<string, unknown>) =>
         requestServer<{ ok: boolean; skippedDeleted?: boolean; deletedMediaCount?: number }>(
             `/workbench/logs/${encodeURIComponent(id)}`,

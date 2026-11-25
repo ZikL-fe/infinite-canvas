@@ -7,6 +7,10 @@ description: Implemented changes that still need manual verification
 
 The current release needs manual verification in these areas:
 
+- 数据库核心业务表 `user_id` 复合索引与画布/工作台增量同步：
+  - 重启服务端后检查 PostgreSQL 已自动补齐 `user_sessions_user_idx`、`media_objects_user_status_created_idx`、`user_assets_user_updated_idx`、`canvas_projects_user_updated_idx`、`workbench_logs_user_kind_updated_idx`、`workbench_logs_user_created_idx`、`credit_ledger_user_created_idx`、`credit_ledger_created_idx`、`ai_billing_tasks_user_created_idx` 索引；
+  - 登录后首次全量同步完成，刷新页面或跨标签页再次同步时，核对浏览器 Network 面板中 `/api/canvas/projects` 与 `/api/workbench/logs` 已携带 `updatedSince` 参数且仅返回变更项（无变更时返回空数组）；新建、修改或删除画布/工作台记录后在另一标签页或刷新验证增量合并与墓碑删除一致；退出或切换账号后重新登录应自动回退首次全量同步。
+
 - 跨浏览器冷启动与全站大批量媒体加载渲染性能优化：
   - 在包含大量节点、图片与连线的画布，以及拥有较多生成记录/资产的账号下，更换全新浏览器或清空本地 IndexedDB 后重新登录并分别打开画布、生图工作台（`/image`）、视频创作台（`/video`）、成果（`/results`）与我的资产（`/assets`）；
   - 通过浏览器 Network 面板核对图片与视频签名 URL 已合并为 `POST /api/storage/urls` 批量请求（不再触发数百个单条 `/api/storage/url/:id`），且冷启动列表与画布默认先加载 WebP 缩略图、成果页 `/api/storage/list` 翻页响应流畅；

@@ -70,115 +70,152 @@ export const users = pgTable('users', {
     .defaultNow(),
 });
 
-export const userSessions = pgTable('user_sessions', {
-  id: text('id').primaryKey(),
-  userId: text('user_id')
-    .notNull()
-    .references(() => users.id, { onDelete: 'cascade' }),
-  refreshTokenHash: text('refresh_token_hash').notNull(),
-  userAgent: text('user_agent').notNull().default(''),
-  ip: text('ip').notNull().default(''),
-  expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
-  revokedAt: timestamp('revoked_at', { withTimezone: true }),
-  createdAt: timestamp('created_at', { withTimezone: true })
-    .notNull()
-    .defaultNow(),
-});
+export const userSessions = pgTable(
+  'user_sessions',
+  {
+    id: text('id').primaryKey(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    refreshTokenHash: text('refresh_token_hash').notNull(),
+    userAgent: text('user_agent').notNull().default(''),
+    ip: text('ip').notNull().default(''),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+    revokedAt: timestamp('revoked_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [index('user_sessions_user_idx').on(table.userId, table.createdAt)],
+);
 
-export const mediaObjects = pgTable('media_objects', {
-  id: text('id').primaryKey(),
-  userId: text('user_id')
-    .notNull()
-    .references(() => users.id, { onDelete: 'cascade' }),
-  bucket: text('bucket').notNull(),
-  objectKey: text('object_key').notNull().unique(),
-  kind: text('kind').$type<MediaKind>().notNull().default('file'),
-  mimeType: text('mime_type').notNull().default('application/octet-stream'),
-  bytes: bigint('bytes', { mode: 'number' }).notNull().default(0),
-  width: integer('width'),
-  height: integer('height'),
-  durationMs: integer('duration_ms'),
-  sourceType: text('source_type').notNull().default('upload'),
-  status: text('status').$type<MediaStatus>().notNull().default('pending'),
-  meta: jsonb('meta').$type<Record<string, unknown>>().notNull().default({}),
-  createdAt: timestamp('created_at', { withTimezone: true })
-    .notNull()
-    .defaultNow(),
-});
+export const mediaObjects = pgTable(
+  'media_objects',
+  {
+    id: text('id').primaryKey(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    bucket: text('bucket').notNull(),
+    objectKey: text('object_key').notNull().unique(),
+    kind: text('kind').$type<MediaKind>().notNull().default('file'),
+    mimeType: text('mime_type').notNull().default('application/octet-stream'),
+    bytes: bigint('bytes', { mode: 'number' }).notNull().default(0),
+    width: integer('width'),
+    height: integer('height'),
+    durationMs: integer('duration_ms'),
+    sourceType: text('source_type').notNull().default('upload'),
+    status: text('status').$type<MediaStatus>().notNull().default('pending'),
+    meta: jsonb('meta').$type<Record<string, unknown>>().notNull().default({}),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    index('media_objects_user_status_created_idx').on(
+      table.userId,
+      table.status,
+      table.createdAt,
+    ),
+  ],
+);
 
-export const userAssets = pgTable('user_assets', {
-  id: text('id').primaryKey(),
-  userId: text('user_id')
-    .notNull()
-    .references(() => users.id, { onDelete: 'cascade' }),
-  kind: text('kind').notNull(),
-  title: text('title').notNull(),
-  mediaId: text('media_id').references(() => mediaObjects.id, {
-    onDelete: 'set null',
-  }),
-  coverUrl: text('cover_url').notNull().default(''),
-  tags: jsonb('tags').$type<string[]>().notNull().default([]),
-  note: text('note'),
-  source: text('source'),
-  data: jsonb('data').$type<Record<string, unknown>>().notNull().default({}),
-  deletedAt: timestamp('deleted_at', { withTimezone: true }),
-  createdAt: timestamp('created_at', { withTimezone: true })
-    .notNull()
-    .defaultNow(),
-  updatedAt: timestamp('updated_at', { withTimezone: true })
-    .notNull()
-    .defaultNow(),
-});
+export const userAssets = pgTable(
+  'user_assets',
+  {
+    id: text('id').primaryKey(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    kind: text('kind').notNull(),
+    title: text('title').notNull(),
+    mediaId: text('media_id').references(() => mediaObjects.id, {
+      onDelete: 'set null',
+    }),
+    coverUrl: text('cover_url').notNull().default(''),
+    tags: jsonb('tags').$type<string[]>().notNull().default([]),
+    note: text('note'),
+    source: text('source'),
+    data: jsonb('data').$type<Record<string, unknown>>().notNull().default({}),
+    deletedAt: timestamp('deleted_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    index('user_assets_user_updated_idx').on(table.userId, table.updatedAt),
+  ],
+);
 
-export const canvasProjects = pgTable('canvas_projects', {
-  id: text('id').primaryKey(),
-  userId: text('user_id')
-    .notNull()
-    .references(() => users.id, { onDelete: 'cascade' }),
-  title: text('title').notNull(),
-  nodes: jsonb('nodes').$type<unknown[]>().notNull().default([]),
-  connections: jsonb('connections').$type<unknown[]>().notNull().default([]),
-  chatSessions: jsonb('chat_sessions').$type<unknown[]>().notNull().default([]),
-  activeChatId: text('active_chat_id'),
-  backgroundMode: text('background_mode').notNull().default('lines'),
-  showImageInfo: boolean('show_image_info').notNull().default(false),
-  viewport: jsonb('viewport')
-    .$type<{ x: number; y: number; k: number }>()
-    .notNull()
-    .default({ x: 0, y: 0, k: 1 }),
-  version: integer('version').notNull().default(1),
-  deletedAt: timestamp('deleted_at', { withTimezone: true }),
-  createdAt: timestamp('created_at', { withTimezone: true })
-    .notNull()
-    .defaultNow(),
-  updatedAt: timestamp('updated_at', { withTimezone: true })
-    .notNull()
-    .defaultNow(),
-});
+export const canvasProjects = pgTable(
+  'canvas_projects',
+  {
+    id: text('id').primaryKey(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    title: text('title').notNull(),
+    nodes: jsonb('nodes').$type<unknown[]>().notNull().default([]),
+    connections: jsonb('connections').$type<unknown[]>().notNull().default([]),
+    chatSessions: jsonb('chat_sessions').$type<unknown[]>().notNull().default([]),
+    activeChatId: text('active_chat_id'),
+    backgroundMode: text('background_mode').notNull().default('lines'),
+    showImageInfo: boolean('show_image_info').notNull().default(false),
+    viewport: jsonb('viewport')
+      .$type<{ x: number; y: number; k: number }>()
+      .notNull()
+      .default({ x: 0, y: 0, k: 1 }),
+    version: integer('version').notNull().default(1),
+    deletedAt: timestamp('deleted_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    index('canvas_projects_user_updated_idx').on(table.userId, table.updatedAt),
+  ],
+);
 
-export const workbenchLogs = pgTable('workbench_logs', {
-  id: text('id').primaryKey(),
-  userId: text('user_id')
-    .notNull()
-    .references(() => users.id, { onDelete: 'cascade' }),
-  kind: text('kind').$type<WorkbenchKind>().notNull(),
-  title: text('title').notNull().default(''),
-  prompt: text('prompt').notNull().default(''),
-  model: text('model').notNull().default(''),
-  status: text('status').notNull().default('success'),
-  durationMs: integer('duration_ms').notNull().default(0),
-  payload: jsonb('payload')
-    .$type<Record<string, unknown>>()
-    .notNull()
-    .default({}),
-  deletedAt: timestamp('deleted_at', { withTimezone: true }),
-  createdAt: timestamp('created_at', { withTimezone: true })
-    .notNull()
-    .defaultNow(),
-  updatedAt: timestamp('updated_at', { withTimezone: true })
-    .notNull()
-    .defaultNow(),
-});
+export const workbenchLogs = pgTable(
+  'workbench_logs',
+  {
+    id: text('id').primaryKey(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    kind: text('kind').$type<WorkbenchKind>().notNull(),
+    title: text('title').notNull().default(''),
+    prompt: text('prompt').notNull().default(''),
+    model: text('model').notNull().default(''),
+    status: text('status').notNull().default('success'),
+    durationMs: integer('duration_ms').notNull().default(0),
+    payload: jsonb('payload')
+      .$type<Record<string, unknown>>()
+      .notNull()
+      .default({}),
+    deletedAt: timestamp('deleted_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    index('workbench_logs_user_kind_updated_idx').on(
+      table.userId,
+      table.kind,
+      table.updatedAt,
+    ),
+    index('workbench_logs_user_created_idx').on(table.userId, table.createdAt),
+  ],
+);
 
 export const systemSettings = pgTable('system_settings', {
   key: text('key').primaryKey(),
@@ -247,71 +284,90 @@ export const creditWallets = pgTable('credit_wallets', {
     .defaultNow(),
 });
 
-export const creditLedger = pgTable('credit_ledger', {
-  id: text('id').primaryKey(),
-  userId: text('user_id')
-    .notNull()
-    .references(() => users.id, { onDelete: 'cascade' }),
-  delta: doublePrecision('delta').notNull(),
-  balanceAfter: doublePrecision('balance_after').notNull(),
-  reason: text('reason').notNull(),
-  refId: text('ref_id'),
-  meta: jsonb('meta').$type<Record<string, unknown>>().notNull().default({}),
-  createdAt: timestamp('created_at', { withTimezone: true })
-    .notNull()
-    .defaultNow(),
-});
+export const creditLedger = pgTable(
+  'credit_ledger',
+  {
+    id: text('id').primaryKey(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    delta: doublePrecision('delta').notNull(),
+    balanceAfter: doublePrecision('balance_after').notNull(),
+    reason: text('reason').notNull(),
+    refId: text('ref_id'),
+    meta: jsonb('meta').$type<Record<string, unknown>>().notNull().default({}),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    index('credit_ledger_user_created_idx').on(table.userId, table.createdAt),
+    index('credit_ledger_created_idx').on(table.createdAt),
+  ],
+);
 
-export const aiBillingTasks = pgTable('ai_billing_tasks', {
-  id: text('id').primaryKey(),
-  userId: text('user_id')
-    .notNull()
-    .references(() => users.id, { onDelete: 'cascade' }),
-  channelId: text('channel_id').notNull(),
-  model: text('model').notNull(),
-  taskId: text('task_id').notNull().unique(),
-  chargedCredits: doublePrecision('charged_credits').notNull().default(0),
-  status: text('status')
-    .$type<'pending' | 'completed' | 'refunded'>()
-    .notNull()
-    .default('pending'),
-  createdAt: timestamp('created_at', { withTimezone: true })
-    .notNull()
-    .defaultNow(),
-  updatedAt: timestamp('updated_at', { withTimezone: true })
-    .notNull()
-    .defaultNow(),
-});
+export const aiBillingTasks = pgTable(
+  'ai_billing_tasks',
+  {
+    id: text('id').primaryKey(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    channelId: text('channel_id').notNull(),
+    model: text('model').notNull(),
+    taskId: text('task_id').notNull().unique(),
+    chargedCredits: doublePrecision('charged_credits').notNull().default(0),
+    status: text('status')
+      .$type<'pending' | 'completed' | 'refunded'>()
+      .notNull()
+      .default('pending'),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    index('ai_billing_tasks_user_created_idx').on(table.userId, table.createdAt),
+  ],
+);
 
 export type RedeemCodeKind = 'credits' | 'storage';
 export type StorageGrantSource = 'redeem_code' | 'admin_grant' | 'plan_grant';
 export type StorageGrantStatus = 'active' | 'revoked';
 
-export const userStorageGrants = pgTable('user_storage_grants', {
-  id: text('id').primaryKey(),
-  userId: text('user_id')
-    .notNull()
-    .references(() => users.id, { onDelete: 'cascade' }),
-  quotaBytes: bigint('quota_bytes', { mode: 'number' }).notNull().default(0),
-  durationDays: integer('duration_days'),
-  expiresAt: timestamp('expires_at', { withTimezone: true }),
-  source: text('source')
-    .$type<StorageGrantSource>()
-    .notNull()
-    .default('redeem_code'),
-  refId: text('ref_id'),
-  codeId: text('code_id').references(() => redeemCodes.id, {
-    onDelete: 'set null',
-  }),
-  note: text('note').notNull().default(''),
-  status: text('status')
-    .$type<StorageGrantStatus>()
-    .notNull()
-    .default('active'),
-  createdAt: timestamp('created_at', { withTimezone: true })
-    .notNull()
-    .defaultNow(),
-});
+export const userStorageGrants = pgTable(
+  'user_storage_grants',
+  {
+    id: text('id').primaryKey(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    quotaBytes: bigint('quota_bytes', { mode: 'number' }).notNull().default(0),
+    durationDays: integer('duration_days'),
+    expiresAt: timestamp('expires_at', { withTimezone: true }),
+    source: text('source')
+      .$type<StorageGrantSource>()
+      .notNull()
+      .default('redeem_code'),
+    refId: text('ref_id'),
+    codeId: text('code_id').references(() => redeemCodes.id, {
+      onDelete: 'set null',
+    }),
+    note: text('note').notNull().default(''),
+    status: text('status')
+      .$type<StorageGrantStatus>()
+      .notNull()
+      .default('active'),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    index('user_storage_grants_user_idx').on(table.userId, table.createdAt),
+  ],
+);
 
 export const redeemCodes = pgTable('redeem_codes', {
   id: text('id').primaryKey(),

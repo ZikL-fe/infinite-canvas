@@ -7,6 +7,18 @@ import { ensureCloudMediaUploaded, stripBlobUrls } from "@/services/cloud-media-
 import { useUserStore } from "@/stores/use-user-store";
 
 const deletedWorkbenchLogIds = new Set<string>();
+const WORKBENCH_CURSOR_PREFIX = "infinite-canvas:workbench_sync_cursor:";
+
+function cursorStorageKey(kind: "image" | "video") {
+    return `${WORKBENCH_CURSOR_PREFIX}${kind}`;
+}
+
+/** 清空生图/视频工作台增量同步游标（退出或切换账号时调用）。 */
+export function clearWorkbenchSyncCursors() {
+    if (typeof localStorage === "undefined") return;
+    localStorage.removeItem(cursorStorageKey("image"));
+    localStorage.removeItem(cursorStorageKey("video"));
+}
 
 type BaseWorkbenchLog = {
     id: string;
@@ -52,37 +64,52 @@ export async function pushWorkbenchLogToCloud<T extends BaseWorkbenchLog>(kind: 
     }
 }
 
-/** 双向同步本地与云端工作台历史：应用墓碑删除、合并新增记录并推送本地独有记录。 */
+function logIsoTimestamp(log?: BaseWorkbenchLog) {
+    if (!log) return "";
+    return log.updatedAt || (log.createdAt ? new Date(log.createdAt).toISOString() : "");
+}
+
+/** 双向同步本地与云端工作台历史：首次全量、后续按 updatedSince 增量拉取并应用墓碑删除与本地补推。 */
 export async function syncWorkbenchLogsWithCloud<T extends BaseWorkbenchLog>(
     kind: "image" | "video",
     localStore: LocalForage,
     serialize: (log: T) => T,
 ) {
     if (!isCloudAuthenticated()) return;
-    const remote = await workbenchApi.listLogs(kind).catch(() => null);
-    if (!remote) return;
 
-    const deletedMap = new Map(remote.deletedIds.map((d) => [d.id, d.deletedAt]));
     const localItems: T[] = [];
     await localStore.iterate((value) => {
         if (value && typeof value === "object") localItems.push(value as T);
     });
 
+    const cursorKey = cursorStorageKey(kind);
+    const since = localItems.length > 0 && typeof localStorage !== "undefined" ? localStorage.getItem(cursorKey) || undefined : undefined;
+    const remote = await workbenchApi.listLogs(kind, false, since).catch(() => null);
+    if (!remote) return;
+
+    const deletedMap = new Map(remote.deletedIds.map((d) => [d.id, d.deletedAt]));
     const localMap = new Map(localItems.map((item) => [item.id, item]));
     const remoteMap = new Map(remote.logs.map((item) => [String(item.id), item as unknown as T]));
-    const allIds = new Set([...localMap.keys(), ...remoteMap.keys()]);
-
     const toPush: T[] = [];
-    for (const id of allIds) {
+    const candidateIds = new Set<string>([...remoteMap.keys()]);
+    if (remote.incremental && since) {
+        for (const id of deletedMap.keys()) {
+            if (localMap.has(id)) candidateIds.add(id);
+        }
+        for (const [id, local] of localMap) {
+            if (logIsoTimestamp(local) >= since) candidateIds.add(id);
+        }
+    } else {
+        for (const id of localMap.keys()) {
+            candidateIds.add(id);
+        }
+    }
+
+    for (const id of candidateIds) {
         const local = localMap.get(id);
         const remoteItem = remoteMap.get(id);
         const deletedAt = deletedMap.get(id);
-        const latestIso = [
-            local?.updatedAt || (local?.createdAt ? new Date(local.createdAt).toISOString() : ""),
-            remoteItem?.updatedAt || (remoteItem?.createdAt ? new Date(remoteItem.createdAt).toISOString() : ""),
-        ]
-            .sort()
-            .pop() || "";
+        const latestIso = [logIsoTimestamp(local), logIsoTimestamp(remoteItem)].sort().pop() || "";
 
         if (deletedAt && deletedAt >= latestIso) {
             if (local) await localStore.removeItem(id).catch(() => undefined);
@@ -111,6 +138,10 @@ export async function syncWorkbenchLogsWithCloud<T extends BaseWorkbenchLog>(
 
     for (const item of toPush) {
         await pushWorkbenchLogToCloud(kind, item);
+    }
+
+    if (remote.syncedAt && typeof localStorage !== "undefined") {
+        localStorage.setItem(cursorKey, remote.syncedAt);
     }
 }
 

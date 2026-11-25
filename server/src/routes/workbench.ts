@@ -1,6 +1,6 @@
 /** 生图与视频工作台生成历史云端同步及级联删除接口。 */
 import { zValidator } from "@hono/zod-validator";
-import { and, desc, eq, inArray } from "drizzle-orm";
+import { and, desc, eq, gte, inArray } from "drizzle-orm";
 import { Hono } from "hono";
 import { z } from "zod";
 
@@ -29,14 +29,34 @@ export const workbenchRoutes = new Hono<AppEnv>();
 
 workbenchRoutes.use("*", requireAuth);
 
+function parseSinceParam(raw?: string) {
+  if (!raw?.trim()) return null;
+  const parsed = new Date(raw.trim());
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function resolveMonotonicUpdatedAt(raw?: string) {
+  const serverNow = new Date();
+  if (!raw) return serverNow;
+  const parsed = new Date(raw);
+  if (Number.isNaN(parsed.getTime())) return serverNow;
+  return parsed.getTime() >= serverNow.getTime() ? parsed : serverNow;
+}
+
 workbenchRoutes.get("/logs", async (c) => {
   const user = c.get("user");
   const kindRaw = c.req.query("kind")?.trim();
   const kind = kindRaw === "image" || kindRaw === "video" ? kindRaw : undefined;
   const withStats = c.req.query("withStats") === "1";
+  const sinceDate = withStats ? null : parseSinceParam(c.req.query("updatedSince"));
+  const syncedAt = new Date().toISOString();
+
+  const conditions = [eq(workbenchLogs.userId, user.id)];
+  if (kind) conditions.push(eq(workbenchLogs.kind, kind));
+  if (sinceDate) conditions.push(gte(workbenchLogs.updatedAt, sinceDate));
 
   const rows = await db.query.workbenchLogs.findMany({
-    where: kind ? and(eq(workbenchLogs.userId, user.id), eq(workbenchLogs.kind, kind)) : eq(workbenchLogs.userId, user.id),
+    where: conditions.length === 1 ? conditions[0] : and(...conditions),
     orderBy: [desc(workbenchLogs.createdAt)],
   });
   const byteMap = withStats ? await loadUserMediaByteMap([user.id]) : null;
@@ -67,7 +87,7 @@ workbenchRoutes.get("/logs", async (c) => {
     .filter((row) => row.deletedAt)
     .map((row) => ({ id: row.id, deletedAt: row.deletedAt!.toISOString() }));
 
-  return c.json({ logs, deletedIds });
+  return c.json({ logs, deletedIds, incremental: Boolean(sinceDate), syncedAt });
 });
 
 workbenchRoutes.put("/logs/:id", zValidator("json", upsertLogSchema), async (c) => {
@@ -81,7 +101,7 @@ workbenchRoutes.put("/logs/:id", zValidator("json", upsertLogSchema), async (c) 
   }
 
   const createdAt = body.createdAt ? new Date(body.createdAt) : new Date();
-  const updatedAt = body.updatedAt ? new Date(body.updatedAt) : new Date();
+  const updatedAt = resolveMonotonicUpdatedAt(body.updatedAt);
   const durationMs = Math.round(body.durationMs);
 
   if (!existing) {

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
++ [优化] 为 `workbench_logs`、`canvas_projects`、`media_objects`、`user_assets`、`credit_ledger`、`user_sessions` 与 `ai_billing_tasks` 补齐 `user_id` 复合索引以避免百万行级全表扫描，并为画布（`GET /api/canvas/projects`）与工作台（`GET /api/workbench/logs`）接入基于 `updatedSince` 服务端游标的增量同步，非首次同步仅拉取变更记录。
+
 + [修复] 修复切换对象存储桶（如迁移至 Cloudflare R2）后旧桶缺失文件导致 `/api/storage/download/:mediaId` 返回 500 并在前端缩略图/媒体预取链路被反复重试轮询的问题：服务端对 `NoSuchKey` 返回明确的 `404`，前端在确认 404/缺失后不再降级重复打 `/download` 并记入会话级缺失缓存以终止无效重试。
 
 + [优化] 优化跨浏览器登录及大画布、工作台、成果与资产页面的冷启动加载与渲染性能：扩展 `POST /api/storage/urls` 批量返回原图及缩略图预签名地址并增加前端会话级缓存与 4 并发缩略图队列；画布改为仅对视口可见图片按需补齐预览、小地图改用 `<canvas>` 绘制、连线高亮改为邻接表索引；生图/视频工作台支持日志历史分页、增量更新与按需预览；成果页列表跳过冗余全表统计与引用扫描。
