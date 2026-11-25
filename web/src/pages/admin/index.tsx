@@ -235,6 +235,7 @@ export default function AdminPage() {
     const [storageExpirySaving, setStorageExpirySaving] = useState(false);
     const [storageExpiryPreviewing, setStorageExpiryPreviewing] = useState(false);
     const [storageExpiryRunning, setStorageExpiryRunning] = useState(false);
+    const [cleaningSingleUserId, setCleaningSingleUserId] = useState<string | null>(null);
     const [storageExpiryResult, setStorageExpiryResult] = useState<StorageExpirySweepResult | null>(null);
     const [analyticsForm] = Form.useForm<PlatformAnalyticsPolicy>();
     const [analyticsSaving, setAnalyticsSaving] = useState(false);
@@ -1090,6 +1091,41 @@ export default function AdminPage() {
             } else {
                 setStorageExpiryRunning(false);
             }
+        }
+    };
+
+    const handleRunSingleUserStorageSweep = async (row: StorageExpirySweepItem) => {
+        if (cleaningSingleUserId) return;
+        setCleaningSingleUserId(row.userId);
+        try {
+            const res = await adminApi.runStorageExpirySweep({ dryRun: false, userId: row.userId });
+            const targetItem = res.items[0];
+            if (targetItem?.error) {
+                message.warning(targetItem.error);
+            } else if (row.action === "cleaned" || row.action === "over_quota_cleaned") {
+                message.success(
+                    t("admin.messages.expirySingleCleaned", {
+                        user: row.displayName || row.username,
+                        count: targetItem?.deletedMediaCount ?? 0,
+                        freed: formatBytes(targetItem?.freedBytes ?? 0),
+                    }),
+                );
+            } else {
+                message.success(
+                    t("admin.messages.expirySingleNoticed", {
+                        user: row.displayName || row.username,
+                    }),
+                );
+            }
+            const nextPreview = await adminApi.runStorageExpirySweep({ dryRun: true });
+            setStorageExpiryResult(nextPreview);
+            void loadOverview(overviewDays);
+            void loadUsers();
+            void loadMedia();
+        } catch (error) {
+            message.error(error instanceof Error ? error.message : t("admin.messages.expirySweepFailed"));
+        } finally {
+            setCleaningSingleUserId(null);
         }
     };
 
@@ -3000,7 +3036,7 @@ export default function AdminPage() {
                                                             },
                                                             {
                                                                 title: t("admin.settingsTab.storageExpiry.colEmailStatus"),
-                                                                width: 160,
+                                                                width: 150,
                                                                 render: (_, row) =>
                                                                     row.error ? (
                                                                         <Typography.Text type="danger" className="text-xs">
@@ -3015,6 +3051,60 @@ export default function AdminPage() {
                                                                     ) : (
                                                                         <Tag>{t("admin.settingsTab.storageExpiry.emailSkipped")}</Tag>
                                                                     ),
+                                                            },
+                                                            {
+                                                                title: t("common.actions"),
+                                                                key: "actions",
+                                                                fixed: "right",
+                                                                width: 110,
+                                                                render: (_, row) => {
+                                                                    if (!storageExpiryResult.dryRun) {
+                                                                        return (
+                                                                            <Typography.Text type="secondary" className="text-xs">
+                                                                                {t("admin.settingsTab.storageExpiry.handled")}
+                                                                            </Typography.Text>
+                                                                        );
+                                                                    }
+                                                                    const isCleanup = row.action === "cleaned" || row.action === "over_quota_cleaned";
+                                                                    const isBusy = cleaningSingleUserId === row.userId;
+                                                                    return (
+                                                                        <Popconfirm
+                                                                            title={
+                                                                                isCleanup
+                                                                                    ? t("admin.settingsTab.storageExpiry.confirmSingleCleanTitle", {
+                                                                                          user: row.displayName || row.username,
+                                                                                      })
+                                                                                    : t("admin.settingsTab.storageExpiry.confirmSingleNoticeTitle", {
+                                                                                          user: row.displayName || row.username,
+                                                                                      })
+                                                                            }
+                                                                            description={
+                                                                                isCleanup
+                                                                                    ? t("admin.settingsTab.storageExpiry.confirmSingleCleanDesc", {
+                                                                                          count: row.deletedMediaCount,
+                                                                                          size: formatBytes(row.freedBytes),
+                                                                                      })
+                                                                                    : undefined
+                                                                            }
+                                                                            okText={t("admin.settingsTab.storageExpiry.confirmRunOk")}
+                                                                            cancelText={t("common.cancel")}
+                                                                            onConfirm={() => void handleRunSingleUserStorageSweep(row)}
+                                                                        >
+                                                                            <Button
+                                                                                type="link"
+                                                                                size="small"
+                                                                                danger={isCleanup}
+                                                                                loading={isBusy}
+                                                                                disabled={Boolean(cleaningSingleUserId && !isBusy) || storageExpiryRunning || storageExpiryPreviewing}
+                                                                                className="!h-6 !px-1 !text-xs whitespace-nowrap"
+                                                                            >
+                                                                                {isCleanup
+                                                                                    ? t("admin.settingsTab.storageExpiry.singleCleanBtn")
+                                                                                    : t("admin.settingsTab.storageExpiry.singleNoticeBtn")}
+                                                                            </Button>
+                                                                        </Popconfirm>
+                                                                    );
+                                                                },
                                                             },
                                                         ]}
                                                     />

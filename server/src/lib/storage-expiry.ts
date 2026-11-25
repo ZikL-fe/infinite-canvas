@@ -120,18 +120,19 @@ function getEarliestPreExpiryWarningTimestamp(
 
 function selectMediaForCleanup(
   rows: Array<{ id: string; objectKey: string; sizeBytes: number; meta: Record<string, unknown> | null }>,
-  usedBytes: number,
   effectiveQuotaBytes: number,
 ) {
+  const actualUsedBytes = rows.reduce((sum, item) => sum + Math.max(0, Number(item.sizeBytes || 0)), 0);
   if (effectiveQuotaBytes <= 0) {
     return {
+      actualUsedBytes,
       targets: rows,
-      freedBytes: rows.reduce((sum, item) => sum + Math.max(0, Number(item.sizeBytes || 0)), 0),
+      freedBytes: actualUsedBytes,
       remainingBytes: 0,
     };
   }
 
-  let remaining = usedBytes;
+  let remaining = actualUsedBytes;
   let freedBytes = 0;
   const targets: typeof rows = [];
   for (const row of rows) {
@@ -141,13 +142,14 @@ function selectMediaForCleanup(
     remaining = Math.max(0, remaining - size);
     freedBytes += size;
   }
-  return { targets, freedBytes, remainingBytes: remaining };
+  return { actualUsedBytes, targets, freedBytes, remainingBytes: remaining };
 }
 
 async function runSweepInternal(options?: {
   now?: Date;
   dryRun?: boolean;
   onlyWhenEnabled?: boolean;
+  userId?: string;
 }): Promise<StorageExpirySweepResult> {
   const now = options?.now ?? new Date();
   const nowMs = now.getTime();
@@ -189,7 +191,7 @@ async function runSweepInternal(options?: {
       storageExpiredWarnedFor: users.storageExpiredWarnedFor,
     })
     .from(users)
-    .where(eq(users.status, "active"));
+    .where(options?.userId ? and(eq(users.status, "active"), eq(users.id, options.userId)) : eq(users.status, "active"));
 
   const candidateUsers = allUsers.filter((user) => {
     if (policy.exemptAdmins && user.role === "admin") return false;
@@ -370,12 +372,24 @@ async function runSweepInternal(options?: {
       .where(and(eq(mediaObjects.userId, user.id), eq(mediaObjects.status, "active")))
       .orderBy(asc(mediaObjects.createdAt));
 
-    const plan = selectMediaForCleanup(activeMedia, usedBytes, summary.storageQuotaBytes);
+    const plan = selectMediaForCleanup(activeMedia, summary.storageQuotaBytes);
+    item.usedBytes = plan.actualUsedBytes;
     item.deletedMediaCount = plan.targets.length;
     item.freedBytes = plan.freedBytes;
 
-    const shouldCleanWorkspace =
-      policy.cleanupWorkspaceData && (summary.storageQuotaBytes <= 0 || plan.remainingBytes > summary.storageQuotaBytes);
+    // 仅当用户已没有任何有效存储配额（<= 0）且策略允许时才清理云端画布/工作台记录/资产；有正数可用配额时仅删除超出配额的最旧媒体文件
+    const shouldCleanWorkspace = policy.cleanupWorkspaceData && summary.storageQuotaBytes <= 0;
+
+    if (plan.targets.length === 0 && !shouldCleanWorkspace) {
+      if (!dryRun && plan.actualUsedBytes !== usedBytes) {
+        await db
+          .update(users)
+          .set({ storageUsedBytes: plan.actualUsedBytes, updatedAt: now })
+          .where(eq(users.id, user.id));
+      }
+      eligibleUsers = Math.max(0, eligibleUsers - 1);
+      continue;
+    }
 
     if (dryRun) {
       if (shouldCleanWorkspace) {
@@ -509,12 +523,16 @@ async function runSweepInternal(options?: {
   };
 }
 
-/** 执行一次云存储到期预警与逾期清理巡检（带并发互斥保护）。 */
+/** 执行一次云存储到期预警与逾期清理巡检（带并发互斥保护；指定 userId 时仅处理单个账号）。 */
 export async function runStorageExpirySweep(options?: {
   now?: Date;
   dryRun?: boolean;
   onlyWhenEnabled?: boolean;
+  userId?: string;
 }): Promise<StorageExpirySweepResult> {
+  if (options?.userId) {
+    return runSweepInternal(options);
+  }
   if (sweepInFlight) {
     return sweepInFlight;
   }

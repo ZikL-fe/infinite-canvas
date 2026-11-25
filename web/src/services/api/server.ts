@@ -991,10 +991,13 @@ export const adminApi = {
     getStorageExpirySettings: () => requestServer<AdminStorageExpiryPolicy>("/admin/settings/storage-expiry"),
     saveStorageExpirySettings: (payload: AdminStorageExpiryPolicyForm) =>
         requestServer<{ ok: boolean } & AdminStorageExpiryPolicy>("/admin/settings/storage-expiry", { method: "PUT", body: JSON.stringify(payload) }),
-    runStorageExpirySweep: (payload?: { dryRun?: boolean }) =>
+    runStorageExpirySweep: (payload?: { dryRun?: boolean; userId?: string }) =>
         requestServer<StorageExpirySweepResult>("/admin/settings/storage-expiry/run", {
             method: "POST",
-            body: JSON.stringify({ dryRun: Boolean(payload?.dryRun) }),
+            body: JSON.stringify({
+                dryRun: Boolean(payload?.dryRun),
+                ...(payload?.userId ? { userId: payload.userId } : {}),
+            }),
         }),
     getAnalyticsSettings: () => requestServer<PlatformAnalyticsPolicy>("/admin/settings/analytics"),
     saveAnalyticsSettings: (payload: PlatformAnalyticsPolicy) =>

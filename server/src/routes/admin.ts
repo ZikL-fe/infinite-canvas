@@ -1274,6 +1274,7 @@ const saveStorageExpiryPolicySchema = z.object({
 
 const runStorageExpirySweepSchema = z.object({
   dryRun: z.boolean().optional(),
+  userId: z.string().trim().min(1).optional(),
 });
 
 adminRoutes.get("/settings/storage-expiry", async (c) => {
@@ -1298,7 +1299,7 @@ adminRoutes.put("/settings/storage-expiry", zValidator("json", saveStorageExpiry
 
 adminRoutes.post("/settings/storage-expiry/run", zValidator("json", runStorageExpirySweepSchema), async (c) => {
   const body = c.req.valid("json");
-  const result = await runStorageExpirySweep({ dryRun: Boolean(body.dryRun) });
+  const result = await runStorageExpirySweep({ dryRun: Boolean(body.dryRun), userId: body.userId });
   return c.json(result);
 });
 
