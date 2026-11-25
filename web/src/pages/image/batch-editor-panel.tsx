@@ -169,7 +169,7 @@ function ImageDropBox({
             >
                 {images.map((item, idx) => (
                     <div key={item.id} className="group relative size-16 shrink-0 overflow-hidden rounded border border-stone-200 dark:border-stone-700">
-                        <img src={previewUrlFor(item.storageKey) || item.dataUrl} alt={item.name} className="size-full object-cover" />
+                        <img src={previewUrlFor(item.storageKey) || item.dataUrl} alt={item.name} loading="lazy" decoding="async" className="size-full object-cover" />
                         <span className="absolute left-0.5 top-0.5 rounded bg-black/65 px-1 text-[10px] font-medium text-white">
                             {showOrdinal ? `#${idx + 1}` : imageReferenceLabel(idx)}
                         </span>

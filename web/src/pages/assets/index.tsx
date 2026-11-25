@@ -10,7 +10,7 @@ import { useCopyText } from "@/hooks/use-copy-text";
 import { formatBytes, formatStoragePair, readFileAsDataUrl } from "@/lib/image-utils";
 import { getMediaBlob } from "@/services/file-storage";
 import { deleteAssetWithCloud } from "@/services/cloud-sync";
-import { getImageBlob, getImagePreviewRevision, subscribeImagePreviews, uploadImage } from "@/services/image-storage";
+import { ensureImagePreview, getImageBlob, getImagePreviewRevision, previewUrlFor, subscribeImagePreviews, uploadImage } from "@/services/image-storage";
 import { cn } from "@/lib/utils";
 import { assetCoverUrl, useAssetStore, type Asset, type AssetKind, type ImageAsset } from "@/stores/use-asset-store";
 import { useUserStore } from "@/stores/use-user-store";
@@ -613,6 +613,13 @@ export default function AssetsPage() {
 function AssetCard({ asset, selected, downloading, onSelectedChange, onOpen, onEdit, onCopy, onDownload, onDelete }: { asset: Asset; selected?: boolean; downloading?: boolean; onSelectedChange: (checked: boolean) => void; onOpen: () => void; onEdit: () => void; onCopy: (asset: Asset) => void; onDownload: (asset: Asset) => void; onDelete: () => void }) {
     const { t } = useTranslation();
     useSyncExternalStore(subscribeImagePreviews, getImagePreviewRevision);
+    const storageKey = asset.kind === "image" ? asset.data.storageKey : undefined;
+    const previewReady = previewUrlFor(storageKey);
+    useEffect(() => {
+        if (storageKey && !previewReady) {
+            void ensureImagePreview(storageKey);
+        }
+    }, [previewReady, storageKey]);
     const cover = assetCoverUrl(asset);
     const summary = assetSummary(asset);
     return (
@@ -630,7 +637,7 @@ function AssetCard({ asset, selected, downloading, onSelectedChange, onOpen, onE
                     </div>
                     <button type="button" className="block w-full text-left" onClick={onOpen}>
                         {cover ? (
-                            <img src={cover} alt={asset.title} className="aspect-[4/3] w-full object-cover" />
+                            <img src={cover} alt={asset.title} loading="lazy" decoding="async" className="aspect-[4/3] w-full object-cover" />
                         ) : (
                             <div className="flex aspect-[4/3] items-center justify-center bg-stone-100 p-5 text-center text-sm leading-6 text-stone-600 dark:bg-stone-900 dark:text-stone-300">{asset.kind === "text" ? asset.data.content : t("assets.noCover")}</div>
                         )}

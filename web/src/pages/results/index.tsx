@@ -401,7 +401,7 @@ export default function ResultsPage() {
                                                                 className="group relative block aspect-[4/3] w-full cursor-pointer overflow-hidden bg-stone-100 dark:bg-stone-900"
                                                                 onClick={() => void handleOpenPreview(item)}
                                                             >
-                                                                <img src={thumbSrc} alt={promptText || item.objectKey} className="h-full w-full object-cover transition group-hover:scale-[1.02]" />
+                                                                <img src={thumbSrc} alt={promptText || item.objectKey} loading="lazy" decoding="async" className="h-full w-full object-cover transition group-hover:scale-[1.02]" />
                                                             </button>
                                                         ) : (
                                                             <button
@@ -420,7 +420,7 @@ export default function ResultsPage() {
                                                             onClick={() => void handleOpenPreview(item)}
                                                         >
                                                             {thumbSrc ? (
-                                                                <img src={thumbSrc} alt={promptText || item.objectKey} className="h-full w-full object-cover opacity-85 transition group-hover:scale-[1.02]" />
+                                                                <img src={thumbSrc} alt={promptText || item.objectKey} loading="lazy" decoding="async" className="h-full w-full object-cover opacity-85 transition group-hover:scale-[1.02]" />
                                                             ) : (
                                                                 <Video className="size-8 text-stone-400" />
                                                             )}

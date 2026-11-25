@@ -458,24 +458,37 @@ storageRoutes.get("/list", async (c) => {
   const kind = c.req.query("kind")?.trim() || "";
   const sourceType = c.req.query("sourceType")?.trim() || "";
   const moduleFilter = c.req.query("module")?.trim() || "";
+  const includeStats = c.req.query("includeStats") === "1";
   const page = Math.max(1, Number(c.req.query("page") || 1));
   const pageSize = Math.min(100, Math.max(1, Number(c.req.query("pageSize") || 20)));
   const offset = (page - 1) * pageSize;
 
-  const [{ moduleMap, activeKeySet }, [canvasCount], [imageLogCount], [videoLogCount], [assetCount]] = await Promise.all([
-    collectUserMediaReferences([user.id]),
-    db.select({ total: count() }).from(canvasProjects).where(and(eq(canvasProjects.userId, user.id), isNull(canvasProjects.deletedAt))),
-    db.select({ total: count() }).from(workbenchLogs).where(and(eq(workbenchLogs.userId, user.id), eq(workbenchLogs.kind, "image"), isNull(workbenchLogs.deletedAt))),
-    db.select({ total: count() }).from(workbenchLogs).where(and(eq(workbenchLogs.userId, user.id), eq(workbenchLogs.kind, "video"), isNull(workbenchLogs.deletedAt))),
-    db.select({ total: count() }).from(userAssets).where(and(eq(userAssets.userId, user.id), isNull(userAssets.deletedAt))),
-  ]);
+  const needModuleRefs =
+    includeStats ||
+    moduleFilter === "standalone" ||
+    moduleFilter === "canvas" ||
+    moduleFilter === "image_workbench" ||
+    moduleFilter === "video_workbench" ||
+    moduleFilter === "assets";
 
-  const workspaceStats = {
-    canvasProjects: Number(canvasCount?.total ?? 0),
-    imageLogs: Number(imageLogCount?.total ?? 0),
-    videoLogs: Number(videoLogCount?.total ?? 0),
-    assets: Number(assetCount?.total ?? 0),
-  };
+  const [{ moduleMap, activeKeySet }, workspaceStats] = await Promise.all([
+    needModuleRefs
+      ? collectUserMediaReferences([user.id])
+      : Promise.resolve({ moduleMap: new Map<string, Set<MediaSourceModule>>(), activeKeySet: new Set<string>() }),
+    includeStats
+      ? Promise.all([
+          db.select({ total: count() }).from(canvasProjects).where(and(eq(canvasProjects.userId, user.id), isNull(canvasProjects.deletedAt))),
+          db.select({ total: count() }).from(workbenchLogs).where(and(eq(workbenchLogs.userId, user.id), eq(workbenchLogs.kind, "image"), isNull(workbenchLogs.deletedAt))),
+          db.select({ total: count() }).from(workbenchLogs).where(and(eq(workbenchLogs.userId, user.id), eq(workbenchLogs.kind, "video"), isNull(workbenchLogs.deletedAt))),
+          db.select({ total: count() }).from(userAssets).where(and(eq(userAssets.userId, user.id), isNull(userAssets.deletedAt))),
+        ]).then(([[canvasCount], [imageLogCount], [videoLogCount], [assetCount]]) => ({
+          canvasProjects: Number(canvasCount?.total ?? 0),
+          imageLogs: Number(imageLogCount?.total ?? 0),
+          videoLogs: Number(videoLogCount?.total ?? 0),
+          assets: Number(assetCount?.total ?? 0),
+        }))
+      : Promise.resolve(undefined),
+  ]);
 
   const filters: SQL[] = [eq(mediaObjects.userId, user.id), eq(mediaObjects.status, "active")];
   if (kind === "image" || kind === "video" || kind === "audio" || kind === "file") {
@@ -863,15 +876,22 @@ storageRoutes.post("/urls", zValidator("json", batchUrlsSchema), async (c) => {
   });
 
   const urls: Record<string, string> = {};
+  const thumbnailUrls: Record<string, string> = {};
   await Promise.all(
     rows
       .filter((row) => row.userId === user.id || user.role === "admin")
       .map(async (row) => {
-        urls[row.id] = await createMediaReadUrl(config, row.objectKey);
+        const thumbKey = typeof row.meta?.thumbObjectKey === "string" ? row.meta.thumbObjectKey : "";
+        const [url, thumbUrl] = await Promise.all([
+          createMediaReadUrl(config, row.objectKey),
+          thumbKey ? createMediaReadUrl(config, thumbKey) : Promise.resolve(""),
+        ]);
+        urls[row.id] = url;
+        if (thumbUrl) thumbnailUrls[row.id] = thumbUrl;
       }),
   );
 
-  return c.json({ urls });
+  return c.json({ urls, thumbnailUrls, expiresIn: env.S3_PRESIGN_EXPIRES_SECONDS });
 });
 
 async function deleteMediaRowsWithQuota(

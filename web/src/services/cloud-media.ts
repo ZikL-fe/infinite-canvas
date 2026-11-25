@@ -12,6 +12,11 @@ export const WORKSPACE_CHANGED_EVENT = "infinite-canvas:workspace-data-changed";
 
 const inFlightUrls = new Map<string, Promise<string>>();
 const inFlightBlobs = new Map<string, Promise<Blob | null>>();
+const urlCache = new Map<string, { url: string; expiresAt: number }>();
+const thumbnailUrlCache = new Map<string, { url: string; expiresAt: number }>();
+const URLS_BATCH_LIMIT = 100;
+const DEFAULT_PRESIGN_EXPIRES_SECONDS = 900;
+const PRESIGN_CACHE_BUFFER_SECONDS = 60;
 const TAB_INSTANCE_ID = Math.random().toString(36).slice(2);
 let syncChannel: BroadcastChannel | null = null;
 let cloudSyncHydrated = false;
@@ -167,14 +172,78 @@ export async function uploadBlobToCloud(
     }
 }
 
+function computeCacheExpiresAt(expiresInSeconds?: number) {
+    const ttlSeconds = typeof expiresInSeconds === "number" && expiresInSeconds > 0 ? expiresInSeconds : DEFAULT_PRESIGN_EXPIRES_SECONDS;
+    const effectiveSeconds = ttlSeconds > PRESIGN_CACHE_BUFFER_SECONDS ? ttlSeconds - PRESIGN_CACHE_BUFFER_SECONDS : ttlSeconds * 0.5;
+    return Date.now() + Math.max(1, effectiveSeconds) * 1000;
+}
+
+function readCachedUrl(cache: Map<string, { url: string; expiresAt: number }>, key?: string) {
+    if (!key) return undefined;
+    const entry = cache.get(key);
+    if (!entry) return undefined;
+    if (entry.expiresAt <= Date.now()) {
+        cache.delete(key);
+        return undefined;
+    }
+    return entry.url;
+}
+
+/** 获取当前会话内存缓存中的云端缩略图预签名地址。 */
+export function getCachedCloudThumbnailUrl(storageKey?: string) {
+    return readCachedUrl(thumbnailUrlCache, storageKey);
+}
+
+/** 清理云端预签名 URL 内存缓存（退出登录或切换账号时调用）。 */
+export function clearCloudMediaUrlCache() {
+    urlCache.clear();
+    thumbnailUrlCache.clear();
+}
+
+/** 批量预取云端媒体原图与缩略图签名地址并写入会话缓存，避免冷启动逐条请求。 */
+export async function prefetchCloudMediaUrls(keys: Iterable<string>): Promise<void> {
+    if (!isCloudAuthenticated()) return;
+    const missing = Array.from(new Set(keys)).filter((key) => key.includes(":") && !readCachedUrl(urlCache, key));
+    if (!missing.length) return;
+
+    const chunks: string[][] = [];
+    for (let i = 0; i < missing.length; i += URLS_BATCH_LIMIT) {
+        chunks.push(missing.slice(i, i + URLS_BATCH_LIMIT));
+    }
+
+    await Promise.all(
+        chunks.map(async (chunk) => {
+            try {
+                const res = await storageApi.getUrls(chunk);
+                const expiresAt = computeCacheExpiresAt(res.expiresIn);
+                for (const [id, url] of Object.entries(res.urls || {})) {
+                    if (url) urlCache.set(id, { url, expiresAt });
+                }
+                for (const [id, thumbUrl] of Object.entries(res.thumbnailUrls || {})) {
+                    if (thumbUrl) thumbnailUrlCache.set(id, { url: thumbUrl, expiresAt });
+                }
+            } catch {
+                // 单批预取失败时静默跳过，后续单图仍可回退单条接口
+            }
+        }),
+    );
+}
+
 export async function resolveCloudMediaUrl(storageKey: string, fallback = ""): Promise<string> {
     if (!isCloudAuthenticated() || !storageKey) return fallback;
+    const cached = readCachedUrl(urlCache, storageKey);
+    if (cached) return cached;
     const pending = inFlightUrls.get(storageKey);
     if (pending) return pending;
 
     const promise = storageApi
         .getUrl(storageKey)
-        .then((res) => res.url || fallback)
+        .then((res) => {
+            if (res.url) {
+                urlCache.set(storageKey, { url: res.url, expiresAt: computeCacheExpiresAt(res.expiresIn) });
+            }
+            return res.url || fallback;
+        })
         .catch(() => fallback)
         .finally(() => {
             inFlightUrls.delete(storageKey);
@@ -219,7 +288,14 @@ export async function fetchCloudMediaBlob(storageKey: string, cacheLocal: (blob:
 export async function fetchCloudThumbnailBlob(storageKey: string): Promise<Blob | null> {
     if (!isCloudAuthenticated() || !storageKey) return null;
     try {
-        const { thumbnailUrl } = await storageApi.getThumbnailUrl(storageKey);
+        let thumbnailUrl = readCachedUrl(thumbnailUrlCache, storageKey);
+        if (!thumbnailUrl) {
+            const res = await storageApi.getThumbnailUrl(storageKey);
+            thumbnailUrl = res.thumbnailUrl;
+            if (thumbnailUrl) {
+                thumbnailUrlCache.set(storageKey, { url: thumbnailUrl, expiresAt: computeCacheExpiresAt() });
+            }
+        }
         if (!thumbnailUrl) return null;
         const res = await fetch(thumbnailUrl);
         if (!res.ok) return null;

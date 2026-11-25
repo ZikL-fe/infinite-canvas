@@ -1,6 +1,6 @@
 import { ArrowLeft, ArrowRight, BookOpen, CheckSquare, ClipboardPaste, Download, FolderPlus, History, LoaderCircle, Plus, RotateCcw, SlidersHorizontal, Sparkles, Trash2, Upload, VideoIcon } from "lucide-react";
-import { useEffect, useRef, useState, useSyncExternalStore, type DragEvent } from "react";
-import { App, Button, Checkbox, Drawer, Empty, Input, Modal, Tag, Typography } from "antd";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type DragEvent } from "react";
+import { App, Button, Checkbox, Drawer, Empty, Input, Modal, Pagination, Tag, Typography } from "antd";
 import localforage from "localforage";
 import { nanoid } from "nanoid";
 import { saveAs } from "file-saver";
@@ -14,9 +14,9 @@ import { VideoSettingsPanel, normalizeVideoResolutionValue, normalizeVideoSizeVa
 import { canvasThemes } from "@/lib/canvas-theme";
 import { clampVideoSeconds } from "@/lib/media-size";
 import { formatBytes, formatDuration } from "@/lib/image-utils";
-import { resolveMediaUrl } from "@/services/file-storage";
+import { prefetchUncachedMediaUrls, resolveMediaUrl } from "@/services/file-storage";
 import { deleteWorkbenchLogsWithCloud, pushWorkbenchLogToCloud, syncWorkbenchLogsWithCloud } from "@/services/workbench-sync";
-import { resolveImageUrl, resolvePickedImage, ensureImagePreview, getImagePreviewRevision, previewUrlFor, subscribeImagePreviews, uploadImage } from "@/services/image-storage";
+import { resolveImageUrl, resolvePickedImage, getImagePreviewRevision, prefetchUncachedImageUrls, previewUrlFor, subscribeImagePreviews, uploadImage } from "@/services/image-storage";
 import { createVideoGenerationTask, pollVideoGenerationTask, storeGeneratedVideo, type VideoGenerationTask } from "@/services/api/video";
 import { ensureRuntimeConfigForGeneration } from "@/services/cloud-sync";
 import { WORKSPACE_CHANGED_EVENT, type WorkspaceChangeScope } from "@/services/cloud-media";
@@ -374,7 +374,9 @@ export default function VideoPage() {
     const saveLog = async (log: GenerationLog, resumePending = true) => {
         const serialized = serializeLog(log);
         await logStore.setItem(log.id, serialized);
-        await refreshLogs(resumePending);
+        const normalized = await normalizeLog(serialized);
+        setLogs((prev) => [normalized, ...prev.filter((item) => item.id !== normalized.id)].sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0)));
+        if (resumePending) resumePendingLogs([normalized]);
         void pushWorkbenchLogToCloud("video", serialized);
     };
 
@@ -529,7 +531,7 @@ export default function VideoPage() {
                                 >
                                     {references.map((item, index) => (
                                         <div key={item.id} className="group relative size-20 shrink-0 overflow-hidden rounded-md border border-stone-200 dark:border-stone-800">
-                                            <img src={previewUrlFor(item.storageKey) || item.dataUrl} alt={item.name} className="size-full object-cover" />
+                                            <img src={previewUrlFor(item.storageKey) || item.dataUrl} alt={item.name} loading="lazy" decoding="async" className="size-full object-cover" />
                                             <span className="absolute left-1 top-1 rounded bg-black/60 px-1.5 py-0.5 text-[10px] font-medium text-white">{index + 1}</span>
                                             <ReferenceOrderButtons index={index} total={references.length} onMove={(offset) => setReferences((value) => moveListItem(value, index, offset))} />
                                             <button type="button" className="absolute right-1 top-1 hidden size-6 items-center justify-center rounded bg-black/60 text-white group-hover:flex" onClick={() => setReferences((value) => value.filter((ref) => ref.id !== item.id))} aria-label={t("videoWorkbench.removeImage")}>
@@ -712,6 +714,13 @@ function LogPanel({
     onPreviewLog: (log: GenerationLog) => void;
 }) {
     const { t } = useTranslation();
+    const [page, setPage] = useState(1);
+    const [pageSize, setPageSize] = useState(20);
+    useEffect(() => {
+        const maxPage = Math.max(1, Math.ceil(logs.length / pageSize));
+        setPage((current) => Math.min(current, maxPage));
+    }, [logs.length, pageSize]);
+    const pagedLogs = useMemo(() => logs.slice((page - 1) * pageSize, page * pageSize), [logs, page, pageSize]);
     const allSelected = Boolean(logs.length) && selectedLogIds.length === logs.length;
     const toggleAll = () => onSelectedLogIdsChange(allSelected ? [] : logs.map((log) => log.id));
 
@@ -733,11 +742,28 @@ function LogPanel({
                 </Button>
             </div>
             <div className="space-y-3">
-                {logs.map((log) => (
+                {pagedLogs.map((log) => (
                     <LogCard key={log.id} log={log} selected={selectedLogIds.includes(log.id)} active={activeLogId === log.id} onSelectedChange={(checked) => onSelectedLogIdsChange(checked ? [...selectedLogIds, log.id] : selectedLogIds.filter((id) => id !== log.id))} onClick={() => onPreviewLog(log)} />
                 ))}
                 {!logs.length ? <div className="flex min-h-48 items-center justify-center rounded-lg border border-dashed border-stone-300 text-center text-sm text-stone-500 dark:border-stone-700">{t("workbench.noLogs")}</div> : null}
             </div>
+            {logs.length > pageSize ? (
+                <div className="mt-4 flex justify-center">
+                    <Pagination
+                        size="small"
+                        current={page}
+                        pageSize={pageSize}
+                        total={logs.length}
+                        showTotal={(count) => t("common.totalItems", { count })}
+                        showSizeChanger
+                        pageSizeOptions={[10, 20, 30, 50]}
+                        onChange={(nextPage, nextSize) => {
+                            setPage(nextSize !== pageSize ? 1 : nextPage);
+                            setPageSize(nextSize);
+                        }}
+                    />
+                </div>
+            ) : null}
         </>
     );
 }
@@ -776,6 +802,15 @@ async function readStoredLogs() {
         await logStore.iterate<GenerationLog, void>((value) => {
             logs.push(value);
         });
+        const imageKeys: string[] = [];
+        const mediaKeys: string[] = [];
+        for (const item of logs) {
+            if (item.video?.storageKey) mediaKeys.push(item.video.storageKey);
+            item.references?.forEach((ref) => {
+                if (ref.storageKey) imageKeys.push(ref.storageKey);
+            });
+        }
+        await Promise.all([prefetchUncachedImageUrls(imageKeys), prefetchUncachedMediaUrls(mediaKeys)]);
         return (await Promise.all(logs.map(normalizeLog))).sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
     } catch {
         return [];
@@ -785,10 +820,10 @@ async function readStoredLogs() {
 async function normalizeLog(log: Partial<GenerationLog>): Promise<GenerationLog> {
     const video = log.video?.storageKey ? { ...log.video, url: await resolveMediaUrl(log.video.storageKey, log.video.url) } : log.video;
     const references = await Promise.all(
-        (log.references || []).map(async (item) => {
-            void ensureImagePreview(item.storageKey);
-            return { ...item, dataUrl: await resolveImageUrl(item.storageKey, item.dataUrl) };
-        }),
+        (log.references || []).map(async (item) => ({
+            ...item,
+            dataUrl: await resolveImageUrl(item.storageKey, item.dataUrl),
+        })),
     );
     const config = normalizeLogConfig(log);
     return {

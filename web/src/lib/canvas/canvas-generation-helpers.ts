@@ -2,8 +2,8 @@ import { defaultConfig, resolveModelForCapability, type AiConfig } from "@/store
 import i18n from "@/i18n";
 import { storageApi } from "@/services/api/server";
 import { isCloudAuthenticated } from "@/services/cloud-media";
-import { ensureImagePreview, getImageBlob, resolveImageUrl, uploadImage } from "@/services/image-storage";
-import { resolveMediaUrl } from "@/services/file-storage";
+import { getImageBlob, prefetchUncachedImageUrls, resolveImageUrl, uploadImage } from "@/services/image-storage";
+import { prefetchUncachedMediaUrls, resolveMediaUrl } from "@/services/file-storage";
 import { imageMetadata, referenceUrl } from "@/lib/canvas/canvas-node-factory";
 import { fitNodeSize } from "@/lib/canvas/canvas-node-size";
 import type { NodeGenerationInput } from "@/components/canvas/canvas-node-generation";
@@ -46,6 +46,22 @@ export async function resolveMetadataReferences(metadata: CanvasNodeMetadata) {
 }
 
 export async function hydrateCanvasImages(nodes: CanvasNodeData[]) {
+    const imageKeys: string[] = [];
+    const mediaKeys: string[] = [];
+    for (const node of nodes) {
+        const metadata = node.metadata;
+        if (!metadata) continue;
+        if ((node.type === CanvasNodeType.Video || node.type === CanvasNodeType.Audio) && metadata.storageKey) {
+            mediaKeys.push(metadata.storageKey);
+        } else if (node.type === CanvasNodeType.Image) {
+            if (metadata.storageKey) imageKeys.push(metadata.storageKey);
+            metadata.images?.forEach((img) => {
+                if (img.storageKey) imageKeys.push(img.storageKey);
+            });
+        }
+    }
+    await Promise.all([prefetchUncachedImageUrls(imageKeys), prefetchUncachedMediaUrls(mediaKeys)]);
+
     return Promise.all(
         nodes.map(async (node) => {
             const metadata = node.metadata;
@@ -59,7 +75,6 @@ export async function hydrateCanvasImages(nodes: CanvasNodeData[]) {
                 ? await Promise.all(
                       metadata.images.map(async (image) => {
                           if (image.storageKey) {
-                              void ensureImagePreview(image.storageKey);
                               return { ...image, content: await resolveImageUrl(image.storageKey, image.content || "") };
                           }
                           if (!image.content) return image;
@@ -70,7 +85,6 @@ export async function hydrateCanvasImages(nodes: CanvasNodeData[]) {
 
             const primarySlot = images?.find((img) => img.id === metadata.primaryImageId) || images?.find((img) => img.content);
             if (metadata.storageKey) {
-                void ensureImagePreview(metadata.storageKey);
                 const resolved = await resolveImageUrl(metadata.storageKey, content);
                 return {
                     ...node,
@@ -99,6 +113,16 @@ export async function hydrateCanvasImages(nodes: CanvasNodeData[]) {
 }
 
 export async function hydrateAssistantImages(sessions: CanvasAssistantSession[]) {
+    const refKeys: string[] = [];
+    sessions.forEach((session) =>
+        session.messages.forEach((message) =>
+            message.references?.forEach((ref) => {
+                if (ref.storageKey) refKeys.push(ref.storageKey);
+            }),
+        ),
+    );
+    await prefetchUncachedImageUrls(refKeys);
+
     const hydrateItem = async <T extends { dataUrl?: string; storageKey?: string }>(item: T) => {
         if (item.storageKey) return { ...item, dataUrl: await resolveImageUrl(item.storageKey, item.dataUrl) };
         if (item.dataUrl?.startsWith("data:image/")) {

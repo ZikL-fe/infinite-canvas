@@ -3,8 +3,8 @@ import { persist, type PersistStorage, type StorageValue } from "zustand/middlew
 
 import { nanoid } from "nanoid";
 import { localForageStorage } from "@/lib/localforage-storage";
-import { cleanupUnusedImages, ensureImagePreview, previewUrlFor, resolveImageUrl, uploadImage } from "@/services/image-storage";
-import { cleanupUnusedMedia, resolveMediaUrl } from "@/services/file-storage";
+import { cleanupUnusedImages, prefetchUncachedImageUrls, previewUrlFor, resolveImageUrl, uploadImage } from "@/services/image-storage";
+import { cleanupUnusedMedia, prefetchUncachedMediaUrls, resolveMediaUrl } from "@/services/file-storage";
 
 export type AssetKind = "text" | "image" | "video";
 export type TextAsset = AssetBase<"text"> & { data: { content: string } };
@@ -55,12 +55,13 @@ const assetStorage: PersistStorage<AssetStore> = {
         const value = await localForageStorage.getItem(name);
         if (!value) return null;
         const parsed = JSON.parse(value) as StorageValue<AssetStore>;
+        const keys = parsed.state.assets.flatMap((asset) => (asset.kind === "image" || asset.kind === "video") && asset.data.storageKey ? [asset.data.storageKey] : []);
+        await Promise.all([prefetchUncachedImageUrls(keys), prefetchUncachedMediaUrls(keys)]);
         parsed.state.assets = await Promise.all(
             parsed.state.assets.map(async (asset) => {
                 if (asset.kind === "video" && asset.data.storageKey) return { ...asset, data: { ...asset.data, url: await resolveMediaUrl(asset.data.storageKey, asset.data.url) } };
                 if (asset.kind !== "image") return asset;
                 if (asset.data.storageKey) {
-                    void ensureImagePreview(asset.data.storageKey);
                     return {
                         ...asset,
                         coverUrl: asset.coverUrl.startsWith("blob:") ? await resolveImageUrl(asset.data.storageKey, asset.coverUrl) : asset.coverUrl,

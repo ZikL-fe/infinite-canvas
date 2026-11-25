@@ -1,6 +1,6 @@
 import { ArrowLeft, ArrowRight, BookOpen, CheckSquare, ClipboardPaste, Download, Eye, FolderPlus, History, ImagePlus, LoaderCircle, PenLine, Plus, RotateCcw, SlidersHorizontal, Sparkles, Square, Trash2, Upload } from "lucide-react";
-import { useEffect, useRef, useState, useSyncExternalStore } from "react";
-import { App, Button, Checkbox, Drawer, Empty, Image, Input, Modal, Segmented, Tag, Tooltip, Typography } from "antd";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { App, Button, Checkbox, Drawer, Empty, Image, Input, Modal, Pagination, Segmented, Tag, Tooltip, Typography } from "antd";
 import localforage from "localforage";
 import { saveAs } from "file-saver";
 import { useTranslation } from "react-i18next";
@@ -21,7 +21,7 @@ import { requestEdit, requestGeneration } from "@/services/api/image";
 import { storageApi } from "@/services/api/server";
 import { isCloudAuthenticated, WORKSPACE_CHANGED_EVENT, type WorkspaceChangeScope } from "@/services/cloud-media";
 import { ensureRuntimeConfigForGeneration } from "@/services/cloud-sync";
-import { ensureImagePreview, getImageBlob, getImagePreviewRevision, previewUrlFor, resolveImageUrl, resolvePickedImage, subscribeImagePreviews, uploadImage } from "@/services/image-storage";
+import { ensureImagePreview, getImageBlob, getImagePreviewRevision, prefetchUncachedImageUrls, previewUrlFor, resolveImageUrl, resolvePickedImage, subscribeImagePreviews, uploadImage } from "@/services/image-storage";
 import { deleteWorkbenchLogsWithCloud, pushWorkbenchLogToCloud, syncWorkbenchLogsWithCloud } from "@/services/workbench-sync";
 import { useAssetStore } from "@/stores/use-asset-store";
 import { useWorkbenchAgentStore } from "@/stores/use-workbench-agent-store";
@@ -591,7 +591,10 @@ export default function ImagePage() {
 
     const saveLog = (log: GenerationLog) => {
         const serialized = serializeLog({ ...log, updatedAt: new Date().toISOString() });
-        void logStore.setItem(log.id, serialized).then(refreshLogs);
+        void logStore.setItem(log.id, serialized).then(async () => {
+            const normalized = await normalizeLog(serialized);
+            setLogs((prev) => [normalized, ...prev.filter((item) => item.id !== normalized.id)].sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0)));
+        });
         void pushWorkbenchLogToCloud("image", serialized);
     };
 
@@ -1436,7 +1439,7 @@ export default function ImagePage() {
                                         >
                                             {references.map((item, index) => (
                                                 <div key={item.id} className="group relative size-20 shrink-0 overflow-hidden rounded-md border border-stone-200 dark:border-stone-800">
-                                                    <img src={previewUrlFor(item.storageKey) || item.dataUrl} alt={item.name} className="size-full object-cover" />
+                                                    <img src={previewUrlFor(item.storageKey) || item.dataUrl} alt={item.name} loading="lazy" decoding="async" className="size-full object-cover" />
                                                     <span className="absolute left-1 top-1 rounded bg-black/60 px-1.5 py-0.5 text-[10px] font-medium text-white">{imageReferenceLabel(index)}</span>
                                                     <ReferenceOrderButtons index={index} total={references.length} onMove={(offset) => setReferences((value) => moveListItem(value, index, offset))} />
                                                     <button
@@ -1667,7 +1670,7 @@ export default function ImagePage() {
                                                     <div className="flex shrink-0 items-center gap-1.5">
                                                         {task.references.map((ref, refIdx) => (
                                                             <div key={`${ref.id}-${refIdx}`} className="relative size-11 overflow-hidden rounded border border-stone-200 dark:border-stone-700">
-                                                                <img src={previewUrlFor(ref.storageKey) || ref.dataUrl} alt={ref.name} className="size-full object-cover" />
+                                                                <img src={previewUrlFor(ref.storageKey) || ref.dataUrl} alt={ref.name} loading="lazy" decoding="async" className="size-full object-cover" />
                                                                 <span className="absolute left-0.5 top-0.5 rounded bg-black/65 px-1 text-[9px] text-white">
                                                                     {imageReferenceLabel(refIdx)}
                                                                 </span>
@@ -1819,9 +1822,15 @@ function ResultImageCard({
     useSyncExternalStore(subscribeImagePreviews, getImagePreviewRevision);
     const [saving, setSaving] = useState(false);
     const [addingRef, setAddingRef] = useState(false);
+    const previewSrc = previewUrlFor(image.storageKey);
+    useEffect(() => {
+        if (image.storageKey && !previewSrc) {
+            void ensureImagePreview(image.storageKey);
+        }
+    }, [image.storageKey, previewSrc]);
     return (
         <div className="overflow-hidden rounded-lg border border-stone-200 bg-background dark:border-stone-800">
-            <Image src={previewUrlFor(image.storageKey) || image.dataUrl} preview={{ src: image.dataUrl }} alt={t("imageWorkbench.resultAlt", { count: index + 1 })} className="aspect-square object-cover" />
+            <Image src={previewSrc || image.dataUrl} preview={{ src: image.dataUrl }} alt={t("imageWorkbench.resultAlt", { count: index + 1 })} className="aspect-square object-cover" />
             <div className="space-y-2 border-t border-stone-200 px-3 py-2.5 dark:border-stone-800">
                 <div className="flex min-w-0 gap-x-2 gap-y-1 text-xs text-stone-500 dark:text-stone-400">
                     <span>
@@ -1942,6 +1951,22 @@ function LogPanel({
     onPreviewLog: (log: GenerationLog) => void;
 }) {
     const { t } = useTranslation();
+    const [page, setPage] = useState(1);
+    const [pageSize, setPageSize] = useState(20);
+    useEffect(() => {
+        const maxPage = Math.max(1, Math.ceil(logs.length / pageSize));
+        setPage((current) => Math.min(current, maxPage));
+    }, [logs.length, pageSize]);
+    const pagedLogs = useMemo(() => logs.slice((page - 1) * pageSize, page * pageSize), [logs, page, pageSize]);
+    useEffect(() => {
+        pagedLogs.forEach((log) => {
+            log.images.slice(0, 4).forEach((image) => {
+                if (image.storageKey && !previewUrlFor(image.storageKey)) {
+                    void ensureImagePreview(image.storageKey);
+                }
+            });
+        });
+    }, [pagedLogs]);
     const allSelected = Boolean(logs.length) && selectedLogIds.length === logs.length;
     const toggleAll = () => onSelectedLogIdsChange(allSelected ? [] : logs.map((log) => log.id));
 
@@ -1968,7 +1993,7 @@ function LogPanel({
                 </Button>
             </div>
             <div className="space-y-3">
-                {logs.map((log) => (
+                {pagedLogs.map((log) => (
                     <LogCard
                         key={log.id}
                         log={log}
@@ -1980,6 +2005,23 @@ function LogPanel({
                 ))}
                 {!logs.length ? <div className="flex min-h-48 items-center justify-center rounded-lg border border-dashed border-stone-300 text-center text-sm text-stone-500 dark:border-stone-700">{t("workbench.noLogs")}</div> : null}
             </div>
+            {logs.length > pageSize ? (
+                <div className="mt-4 flex justify-center">
+                    <Pagination
+                        size="small"
+                        current={page}
+                        pageSize={pageSize}
+                        total={logs.length}
+                        showTotal={(count) => t("common.totalItems", { count })}
+                        showSizeChanger
+                        pageSizeOptions={[10, 20, 30, 50]}
+                        onChange={(nextPage, nextSize) => {
+                            setPage(nextSize !== pageSize ? 1 : nextPage);
+                            setPageSize(nextSize);
+                        }}
+                    />
+                </div>
+            ) : null}
         </>
     );
 }
@@ -1987,7 +2029,7 @@ function LogPanel({
 function LogCard({ log, selected, active, onSelectedChange, onClick }: { log: GenerationLog; selected: boolean; active: boolean; onSelectedChange: (checked: boolean) => void; onClick: () => void }) {
     const { t } = useTranslation();
     useSyncExternalStore(subscribeImagePreviews, getImagePreviewRevision);
-    const thumbnails = log.images.filter((image) => image.dataUrl).slice(0, 4);
+    const thumbnails = log.images.filter((image) => image.dataUrl || image.storageKey).slice(0, 4);
     const logError = log.error || log.errors?.[0];
 
     return (
@@ -2003,9 +2045,14 @@ function LogCard({ log, selected, active, onSelectedChange, onClick }: { log: Ge
                         <div className="truncate text-sm font-semibold leading-5">{log.title}</div>
                         {thumbnails.length ? (
                             <div className="mt-2 flex gap-1 overflow-hidden">
-                                {thumbnails.map((image) => (
-                                    <img key={image.id} src={previewUrlFor(image.storageKey) || image.dataUrl} alt="" className="size-8 shrink-0 rounded-md object-cover" />
-                                ))}
+                                {thumbnails.map((image) => {
+                                    const thumbSrc = previewUrlFor(image.storageKey) || (!image.storageKey ? image.dataUrl : "");
+                                    return thumbSrc ? (
+                                        <img key={image.id} src={thumbSrc} alt="" loading="lazy" decoding="async" className="size-8 shrink-0 rounded-md object-cover" />
+                                    ) : (
+                                        <div key={image.id} className="size-8 shrink-0 rounded-md bg-stone-100 dark:bg-stone-800" />
+                                    );
+                                })}
                             </div>
                         ) : logError ? (
                             <div className="mt-1.5 line-clamp-2 break-all text-xs leading-4 text-red-500 dark:text-red-400" title={logError}>
@@ -2070,6 +2117,16 @@ async function readStoredLogs() {
         await logStore.iterate<GenerationLog, void>((value) => {
             values.push(value);
         });
+        const keys: string[] = [];
+        for (const item of values) {
+            item.references?.forEach((ref) => {
+                if (ref.storageKey) keys.push(ref.storageKey);
+            });
+            item.images?.forEach((img) => {
+                if (img.storageKey) keys.push(img.storageKey);
+            });
+        }
+        await prefetchUncachedImageUrls(keys);
         const logs = await Promise.all(values.map(normalizeLog));
         return logs.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
     } catch {
@@ -2079,16 +2136,16 @@ async function readStoredLogs() {
 
 async function normalizeLog(log: Partial<GenerationLog>): Promise<GenerationLog> {
     const references = await Promise.all(
-        (log.references || []).map(async (item) => {
-            void ensureImagePreview(item.storageKey);
-            return { ...item, dataUrl: await resolveImageUrl(item.storageKey, item.dataUrl) };
-        }),
+        (log.references || []).map(async (item) => ({
+            ...item,
+            dataUrl: await resolveImageUrl(item.storageKey, item.dataUrl),
+        })),
     );
     const images = await Promise.all(
-        (log.images || []).map(async (item) => {
-            void ensureImagePreview(item.storageKey);
-            return { ...item, dataUrl: await resolveImageUrl(item.storageKey, item.dataUrl) };
-        }),
+        (log.images || []).map(async (item) => ({
+            ...item,
+            dataUrl: await resolveImageUrl(item.storageKey, item.dataUrl),
+        })),
     );
     const config = normalizeLogConfig(log);
     const normalizedErrors = Array.isArray(log.errors) ? log.errors.filter((item): item is string => typeof item === "string" && item.trim().length > 0) : [];

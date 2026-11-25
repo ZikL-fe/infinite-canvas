@@ -689,7 +689,7 @@ export const storageApi = {
         requestServer<{ existingIds: string[] }>("/storage/check-exists", { method: "POST", body: JSON.stringify({ mediaIds }) }),
     ingestUrl: (payload: { url: string; kind?: "image" | "video" | "audio" | "file"; sourceType?: "upload" | "ai_generated" | "canvas_import" }) =>
         requestServer<{ media: MediaItem; url: string }>("/storage/ingest-url", { method: "POST", body: JSON.stringify(payload) }),
-    list: (params?: { q?: string; kind?: string; sourceType?: string; module?: string; page?: number; pageSize?: number }) => {
+    list: (params?: { q?: string; kind?: string; sourceType?: string; module?: string; page?: number; pageSize?: number; includeStats?: boolean }) => {
         const query = new URLSearchParams();
         if (params?.q) query.set("q", params.q);
         if (params?.kind) query.set("kind", params.kind);
@@ -697,6 +697,7 @@ export const storageApi = {
         if (params?.module) query.set("module", params.module);
         if (params?.page) query.set("page", String(params.page));
         if (params?.pageSize) query.set("pageSize", String(params.pageSize));
+        if (params?.includeStats) query.set("includeStats", "1");
         const suffix = query.size ? `?${query.toString()}` : "";
         return requestServer<{
             items: MediaItem[];
@@ -754,7 +755,11 @@ export const storageApi = {
             body: form,
         });
     },
-    getUrls: (mediaIds: string[]) => requestServer<{ urls: Record<string, string> }>("/storage/urls", { method: "POST", body: JSON.stringify({ mediaIds }) }),
+    getUrls: (mediaIds: string[]) =>
+        requestServer<{ urls: Record<string, string>; thumbnailUrls?: Record<string, string>; expiresIn?: number }>("/storage/urls", {
+            method: "POST",
+            body: JSON.stringify({ mediaIds }),
+        }),
     remove: (mediaId: string) => requestServer<{ ok: boolean }>(`/storage/${encodeURIComponent(mediaId)}`, { method: "DELETE" }),
     batchRemove: (mediaIds: string[]) =>
         requestServer<{ ok: boolean; deletedCount: number; freedBytes: number; failedCount?: number; firstError?: string }>("/storage/batch-delete", {

@@ -2667,7 +2667,7 @@ export function MyMediaPanel() {
         setLoading(true);
         try {
             const [listRes, profileRes] = await Promise.all([
-                storageApi.list({ page, pageSize, q, kind, module: moduleFilter }),
+                storageApi.list({ page, pageSize, q, kind, module: moduleFilter, includeStats: true }),
                 accountApi.getProfile(),
             ]);
             setItems(listRes.items);

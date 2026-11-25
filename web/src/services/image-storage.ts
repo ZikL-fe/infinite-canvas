@@ -4,7 +4,16 @@ import { nanoid } from "nanoid";
 import i18n from "@/i18n";
 import { withLocalProxy } from "@/stores/use-config-store";
 import { createImageThumbnail } from "@/lib/image-thumbnail";
-import { deleteCloudMedia, fetchCloudMediaBlob, fetchCloudThumbnailBlob, resolveCloudMediaUrl, uploadBlobToCloud } from "@/services/cloud-media";
+import {
+    clearCloudMediaUrlCache,
+    deleteCloudMedia,
+    fetchCloudMediaBlob,
+    fetchCloudThumbnailBlob,
+    getCachedCloudThumbnailUrl,
+    prefetchCloudMediaUrls,
+    resolveCloudMediaUrl,
+    uploadBlobToCloud,
+} from "@/services/cloud-media";
 
 export type UploadedImage = {
     url: string;
@@ -23,7 +32,11 @@ const objectUrls = new Map<string, string>();
 const previewUrls = new Map<string, string>();
 const previewListeners = new Set<() => void>();
 let previewRevision = 0;
-let previewQueue: Promise<unknown> = Promise.resolve();
+const PREVIEW_CONCURRENCY = 4;
+const pendingPreviewKeys = new Set<string>();
+const previewTaskQueue: string[] = [];
+let activePreviewWorkers = 0;
+let previewNotifyScheduled = false;
 const IMAGE_PREVIEW_VERSION = 1;
 const IMAGE_DOWNLOAD_TIMEOUT_MS = 10 * 60_000;
 const IMAGE_REMOTE_LOAD_TIMEOUT_MS = 10 * 60_000;
@@ -202,12 +215,23 @@ export async function getImageBlob(storageKey: string) {
     });
 }
 
-// 缩略图按图片的 storageKey 另存一份 WebP，只放在本地 IndexedDB 里，不写进节点数据，也不参与导出和 WebDAV 同步。
-export function previewUrlFor(storageKey?: string) {
-    return storageKey ? previewUrls.get(storageKey) : undefined;
+/** 过滤掉本地 IndexedDB 或内存已缓存的图片 key，批量预取剩余云端签名地址。 */
+export async function prefetchUncachedImageUrls(keys: Iterable<string>) {
+    const unique = Array.from(new Set(keys)).filter((key) => key.startsWith("image:") && !objectUrls.has(key));
+    if (!unique.length) return;
+    const localKeys = new Set(await store.keys().catch(() => [] as string[]));
+    const missing = unique.filter((key) => !localKeys.has(key));
+    if (missing.length) await prefetchCloudMediaUrls(missing);
 }
 
-// 缩略图在后台补，生成完成后再让用到它的界面重渲染一次。
+// 缩略图按图片的 storageKey 另存一份 WebP，只放在本地 IndexedDB 里，不写进节点数据，也不参与导出和 WebDAV 同步。
+// 若会话内已通过批量接口拿到云端缩略图预签名 URL，则直接复用避免重复下载写库。
+export function previewUrlFor(storageKey?: string) {
+    if (!storageKey) return undefined;
+    return previewUrls.get(storageKey) || getCachedCloudThumbnailUrl(storageKey);
+}
+
+// 缩略图在后台补，生成完成后合并到下一帧通知订阅界面重渲染，避免单张完成引起整页频繁抖动。
 export function subscribeImagePreviews(listener: () => void) {
     previewListeners.add(listener);
     return () => {
@@ -219,9 +243,24 @@ export function getImagePreviewRevision() {
     return previewRevision;
 }
 
+function schedulePreviewNotify() {
+    if (previewNotifyScheduled) return;
+    previewNotifyScheduled = true;
+    const flush = () => {
+        previewNotifyScheduled = false;
+        previewRevision += 1;
+        previewListeners.forEach((listener) => listener());
+    };
+    if (typeof requestAnimationFrame === "function") {
+        requestAnimationFrame(flush);
+    } else {
+        queueMicrotask(flush);
+    }
+}
+
 export async function ensureImagePreview(storageKey?: string) {
     if (!storageKey) return undefined;
-    const cached = previewUrls.get(storageKey);
+    const cached = previewUrlFor(storageKey);
     if (cached) return cached;
     const stored = await previewStore.getItem<StoredImagePreview>(storageKey).catch(() => null);
     if (stored?.version === IMAGE_PREVIEW_VERSION) return stored.blob ? cacheImagePreview(storageKey, stored.blob) : undefined;
@@ -229,20 +268,38 @@ export async function ensureImagePreview(storageKey?: string) {
     return undefined;
 }
 
-// 缩略图生成排成一队，避免一次打开大量图片时同时解码；云端图片优先拉取云端缩略图，避免下载原图。
+// 缩略图生成按并发上限排队执行，并按 storageKey 去重；云端图片优先拉取云端缩略图，避免下载原图。
 function queueImagePreview(storageKey: string) {
-    previewQueue = previewQueue
-        .then(async () => {
+    if (pendingPreviewKeys.has(storageKey)) return;
+    pendingPreviewKeys.add(storageKey);
+    previewTaskQueue.push(storageKey);
+    while (activePreviewWorkers < PREVIEW_CONCURRENCY && previewTaskQueue.length) {
+        activePreviewWorkers += 1;
+        void runPreviewWorker().finally(() => {
+            activePreviewWorkers = Math.max(0, activePreviewWorkers - 1);
+        });
+    }
+}
+
+async function runPreviewWorker() {
+    while (previewTaskQueue.length) {
+        const storageKey = previewTaskQueue.shift();
+        if (!storageKey) continue;
+        try {
             const cloudThumb = await fetchCloudThumbnailBlob(storageKey);
             if (cloudThumb) {
                 await previewStore.setItem<StoredImagePreview>(storageKey, { version: IMAGE_PREVIEW_VERSION, blob: cloudThumb }).catch(() => undefined);
                 cacheImagePreview(storageKey, cloudThumb);
-                return;
+                continue;
             }
             const original = await getImageBlob(storageKey);
             if (original) await storeImagePreview(storageKey, original);
-        })
-        .catch(() => undefined);
+        } catch {
+            // 单张缩略图拉取失败静默跳过，不阻塞队列后续任务
+        } finally {
+            pendingPreviewKeys.delete(storageKey);
+        }
+    }
 }
 
 async function storeImagePreview(storageKey: string, original: Blob) {
@@ -254,8 +311,7 @@ async function storeImagePreview(storageKey: string, original: Blob) {
 function cacheImagePreview(storageKey: string, preview: Blob) {
     const url = URL.createObjectURL(preview);
     previewUrls.set(storageKey, url);
-    previewRevision += 1;
-    previewListeners.forEach((listener) => listener());
+    schedulePreviewNotify();
     return url;
 }
 
@@ -328,6 +384,9 @@ export async function clearLocalImageAndWorkbenchCaches() {
     objectUrls.clear();
     previewUrls.forEach((url) => URL.revokeObjectURL(url));
     previewUrls.clear();
+    pendingPreviewKeys.clear();
+    previewTaskQueue.length = 0;
+    clearCloudMediaUrlCache();
     previewListeners.forEach((listener) => listener());
     await Promise.all([
         store.clear().catch(() => undefined),

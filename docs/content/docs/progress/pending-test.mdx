@@ -7,6 +7,11 @@ description: Implemented changes that still need manual verification
 
 The current release needs manual verification in these areas:
 
+- 跨浏览器冷启动与全站大批量媒体加载渲染性能优化：
+  - 在包含大量节点、图片与连线的画布，以及拥有较多生成记录/资产的账号下，更换全新浏览器或清空本地 IndexedDB 后重新登录并分别打开画布、生图工作台（`/image`）、视频创作台（`/video`）、成果（`/results`）与我的资产（`/assets`）；
+  - 通过浏览器 Network 面板核对图片与视频签名 URL 已合并为 `POST /api/storage/urls` 批量请求（不再触发数百个单条 `/api/storage/url/:id`），且冷启动列表与画布默认先加载 WebP 缩略图、成果页 `/api/storage/list` 翻页响应流畅；
+  - 验证画布平移、缩放、开启左下角小地图与鼠标悬停连线高亮时的流畅度，以及生图/视频工作台历史记录分页切换、单条新增/刷新后显示正常。
+
 - 云端存储（MinIO/S3）删除一致性与错误拦截：
   - 在「成果」「我的云端媒体（单删/批量删）」或管理后台「媒体监控」删除文件后，核对 MinIO 存储桶内对应原文件与缩略图已同步物理删除；
   - 若模拟对象存储配置失效、权限不足或网络断开后再点击删除，确认前端会等待接口返回并明确弹出对象存储删除失败错误，数据库与已用空间配额不会被误删扣减（不再静默提示删除成功）。

@@ -829,8 +829,7 @@ function InfiniteCanvasPage() {
         const left = -viewport.x / viewport.k - padding;
         const top = -viewport.y / viewport.k - padding;
         return { left, top, right: left + width / viewport.k + padding * 2, bottom: top + height / viewport.k + padding * 2 };
-        // `nodes` keeps the container rect re-read on node changes, matching the previous behaviour when the container resizes without a size update.
-    }, [nodes, size.height, size.width, viewport.k, viewport.x, viewport.y]);
+    }, [size.height, size.width, viewport.k, viewport.x, viewport.y]);
 
     const visibleNodes = useMemo(
         () => nodes.filter((node) => node.position.x + node.width > viewBounds.left && node.position.x < viewBounds.right && node.position.y + node.height > viewBounds.top && node.position.y < viewBounds.bottom),
@@ -876,14 +875,32 @@ function InfiniteCanvasPage() {
     const canGroupSelection = canGroupSelectedNodes(selectedNodeIds, nodes);
     const canUngroupSelection = canUngroupSelectedNodes(selectedNodeIds, nodes);
     const activeNodeId = hasMultipleSelectedNodes ? null : hoveredNodeId || (selectedNodeIds.size === 1 ? Array.from(selectedNodeIds)[0] : null);
-    const groupChildCountById = useMemo(() => {
-        const map = new Map<string, number>();
+    const { groupChildCountById, groupChildIdsById } = useMemo(() => {
+        const counts = new Map<string, number>();
+        const childIds = new Map<string, string[]>();
         nodes.forEach((node) => {
             const groupId = node.metadata?.groupId;
-            if (groupId) map.set(groupId, (map.get(groupId) || 0) + 1);
+            if (!groupId) return;
+            counts.set(groupId, (counts.get(groupId) || 0) + 1);
+            const list = childIds.get(groupId);
+            if (list) list.push(node.id);
+            else childIds.set(groupId, [node.id]);
+        });
+        return { groupChildCountById: counts, groupChildIdsById: childIds };
+    }, [nodes]);
+    const connectionsByNodeId = useMemo(() => {
+        const map = new Map<string, CanvasConnection[]>();
+        const append = (id: string, conn: CanvasConnection) => {
+            const list = map.get(id);
+            if (list) list.push(conn);
+            else map.set(id, [conn]);
+        };
+        connections.forEach((connection) => {
+            append(connection.fromNodeId, connection);
+            if (connection.toNodeId !== connection.fromNodeId) append(connection.toNodeId, connection);
         });
         return map;
-    }, [nodes]);
+    }, [connections]);
     const relatedHighlight = useMemo(() => {
         const nodeIds = new Set<string>();
         const connectionIds = new Set<string>();
@@ -892,18 +909,19 @@ function InfiniteCanvasPage() {
 
         const addNode = (nodeId: string) => {
             nodeIds.add(nodeId);
-            if (nodeById.get(nodeId)?.type === CanvasNodeType.Group) nodes.forEach((node) => node.metadata?.groupId === nodeId && nodeIds.add(node.id));
+            if (nodeById.get(nodeId)?.type === CanvasNodeType.Group) {
+                groupChildIdsById.get(nodeId)?.forEach((childId) => nodeIds.add(childId));
+            }
         };
         addNode(activeNodeId);
-        connections.forEach((connection) => {
-            if (connection.fromNodeId !== activeNodeId && connection.toNodeId !== activeNodeId) return;
+        connectionsByNodeId.get(activeNodeId)?.forEach((connection) => {
             connectionIds.add(connection.id);
             addNode(connection.fromNodeId);
             addNode(connection.toNodeId);
         });
 
         return { nodeIds, connectionIds };
-    }, [activeNodeId, connections, nodeById, nodes]);
+    }, [activeNodeId, connectionsByNodeId, groupChildIdsById, nodeById]);
 
     const configInputsById = useMemo(() => {
         const map = new Map<string, NodeGenerationInput[]>();

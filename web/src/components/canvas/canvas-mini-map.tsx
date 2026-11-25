@@ -1,16 +1,18 @@
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { canvasThemes } from "@/lib/canvas-theme";
 import { getNodeDefinition } from "@/lib/canvas/node-registry";
 import { useThemeStore } from "@/stores/use-theme-store";
 import { type CanvasNodeData, type ViewportTransform } from "@/types/canvas";
 
+const MINIMAP_WIDTH = 240;
+const MINIMAP_HEIGHT = 160;
+
 export function Minimap({ nodes, viewport, viewportSize, onViewportChange }: { nodes: CanvasNodeData[]; viewport: ViewportTransform; viewportSize: { width: number; height: number }; onViewportChange: (viewport: ViewportTransform) => void }) {
     const theme = canvasThemes[useThemeStore((state) => state.theme)];
     const containerRef = useRef<HTMLDivElement>(null);
+    const canvasRef = useRef<HTMLCanvasElement>(null);
     const [isDragging, setIsDragging] = useState(false);
-    const width = 240;
-    const height = 160;
 
     const { worldBounds, scale, offset } = useMemo(() => {
         if (!nodes.length) {
@@ -36,36 +38,51 @@ export function Minimap({ nodes, viewport, viewportSize, onViewportChange }: { n
 
         const boundsWidth = maxX - minX;
         const boundsHeight = maxY - minY;
-        const nextScale = Math.min(width / boundsWidth, height / boundsHeight);
+        const nextScale = Math.min(MINIMAP_WIDTH / boundsWidth, MINIMAP_HEIGHT / boundsHeight);
         const mapContentW = boundsWidth * nextScale;
         const mapContentH = boundsHeight * nextScale;
 
         return {
             worldBounds: { x: minX, y: minY, w: boundsWidth, h: boundsHeight },
             scale: nextScale,
-            offset: { x: (width - mapContentW) / 2, y: (height - mapContentH) / 2 },
+            offset: { x: (MINIMAP_WIDTH - mapContentW) / 2, y: (MINIMAP_HEIGHT - mapContentH) / 2 },
         };
     }, [nodes]);
 
     const toMinimap = useCallback(
-        (worldX: number, worldY: number) => {
-            return {
-                x: (worldX - worldBounds.x) * scale + offset.x,
-                y: (worldY - worldBounds.y) * scale + offset.y,
-            };
-        },
+        (worldX: number, worldY: number) => ({
+            x: (worldX - worldBounds.x) * scale + offset.x,
+            y: (worldY - worldBounds.y) * scale + offset.y,
+        }),
         [offset.x, offset.y, scale, worldBounds.x, worldBounds.y],
     );
 
     const toWorld = useCallback(
-        (minimapX: number, minimapY: number) => {
-            return {
-                x: (minimapX - offset.x) / scale + worldBounds.x,
-                y: (minimapY - offset.y) / scale + worldBounds.y,
-            };
-        },
+        (minimapX: number, minimapY: number) => ({
+            x: (minimapX - offset.x) / scale + worldBounds.x,
+            y: (minimapY - offset.y) / scale + worldBounds.y,
+        }),
         [offset.x, offset.y, scale, worldBounds.x, worldBounds.y],
     );
+
+    useEffect(() => {
+        const canvas = canvasRef.current;
+        if (!canvas) return;
+        const dpr = window.devicePixelRatio || 1;
+        canvas.width = MINIMAP_WIDTH * dpr;
+        canvas.height = MINIMAP_HEIGHT * dpr;
+        const ctx = canvas.getContext("2d");
+        if (!ctx) return;
+        ctx.scale(dpr, dpr);
+        ctx.clearRect(0, 0, MINIMAP_WIDTH, MINIMAP_HEIGHT);
+        ctx.globalAlpha = 0.8;
+        for (const node of nodes) {
+            const x = (node.position.x - worldBounds.x) * scale + offset.x;
+            const y = (node.position.y - worldBounds.y) * scale + offset.y;
+            ctx.fillStyle = getNodeDefinition(node.type)?.minimapColor || theme.node.muted;
+            ctx.fillRect(x, y, Math.max(node.width * scale, 2), Math.max(node.height * scale, 2));
+        }
+    }, [nodes, offset.x, offset.y, scale, theme.node.muted, worldBounds.x, worldBounds.y]);
 
     const viewportRect = useMemo(() => {
         const vx = -viewport.x / viewport.k;
@@ -96,7 +113,7 @@ export function Minimap({ nodes, viewport, viewportSize, onViewportChange }: { n
     };
 
     return (
-        <div className="absolute bottom-24 left-6 z-50 overflow-hidden rounded-lg border shadow-2xl backdrop-blur-sm" style={{ width, height, background: theme.toolbar.panel, borderColor: theme.toolbar.border }}>
+        <div className="absolute bottom-24 left-6 z-50 overflow-hidden rounded-lg border shadow-2xl backdrop-blur-sm" style={{ width: MINIMAP_WIDTH, height: MINIMAP_HEIGHT, background: theme.toolbar.panel, borderColor: theme.toolbar.border }}>
             <div
                 ref={containerRef}
                 className="relative h-full w-full cursor-crosshair"
@@ -112,24 +129,7 @@ export function Minimap({ nodes, viewport, viewportSize, onViewportChange }: { n
                 onPointerUp={() => setIsDragging(false)}
                 onPointerLeave={() => setIsDragging(false)}
             >
-                {nodes.map((node) => {
-                    const pos = toMinimap(node.position.x, node.position.y);
-                    const color = getNodeDefinition(node.type)?.minimapColor || theme.node.muted;
-                    return (
-                        <div
-                            key={node.id}
-                            className="absolute rounded-[1px]"
-                            style={{
-                                left: pos.x,
-                                top: pos.y,
-                                width: Math.max(node.width * scale, 2),
-                                height: Math.max(node.height * scale, 2),
-                                backgroundColor: color,
-                                opacity: 0.8,
-                            }}
-                        />
-                    );
-                })}
+                <canvas ref={canvasRef} className="pointer-events-none block h-full w-full" />
                 <div className="pointer-events-none absolute border" style={{ left: viewportRect.x, top: viewportRect.y, width: viewportRect.w, height: viewportRect.h, borderColor: theme.node.activeStroke, background: `${theme.node.activeStroke}18` }} />
             </div>
         </div>

@@ -10,8 +10,8 @@ import {
     WORKSPACE_CHANGED_EVENT,
 } from "@/services/cloud-media";
 import { ensureCloudMediaUploaded, stripBlobUrls } from "@/services/cloud-media-sync";
-import { resolveMediaUrl, clearLocalMediaFileCache } from "@/services/file-storage";
-import { ensureImagePreview, resolveImageUrl, clearLocalImageAndWorkbenchCaches } from "@/services/image-storage";
+import { resolveMediaUrl, clearLocalMediaFileCache, prefetchUncachedMediaUrls } from "@/services/file-storage";
+import { resolveImageUrl, clearLocalImageAndWorkbenchCaches, prefetchUncachedImageUrls } from "@/services/image-storage";
 import { syncWorkbenchLogsWithCloud } from "@/services/workbench-sync";
 import { useCanvasStore, type CanvasDeletedProject, type CanvasProject } from "@/stores/canvas/use-canvas-store";
 import { useAssetStore, type Asset } from "@/stores/use-asset-store";
@@ -45,7 +45,6 @@ function waitForHydration(store: { getState: () => { hydrated: boolean }; subscr
 
 async function hydrateAsset(asset: Asset): Promise<Asset> {
     if (asset.kind === "image" && asset.data.storageKey) {
-        void ensureImagePreview(asset.data.storageKey);
         const dataUrl = await resolveImageUrl(asset.data.storageKey, asset.data.dataUrl || "");
         return {
             ...asset,
@@ -280,6 +279,8 @@ export async function syncCloudWorkspace() {
 
             const canvasPlan = mergeProjects(localCanvas.projects, localCanvas.deletedProjects, remoteProjects, remoteCanvas.deletedProjects);
             const assetPlan = mergeAssets(localAssets, remoteAssets, remoteAssetRes.deletedIds);
+            const assetKeys = assetPlan.merged.flatMap((asset) => (asset.kind === "image" || asset.kind === "video") && asset.data.storageKey ? [asset.data.storageKey] : []);
+            await Promise.all([prefetchUncachedImageUrls(assetKeys), prefetchUncachedMediaUrls(assetKeys)]);
             const hydratedAssets = await Promise.all(assetPlan.merged.map(hydrateAsset));
 
             applyingRemote = true;

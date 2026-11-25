@@ -4,7 +4,16 @@ import { nanoid } from "nanoid";
 import { createVideoThumbnail } from "@/lib/image-thumbnail";
 import { storageApi } from "@/services/api/server";
 import { withLocalProxy } from "@/stores/use-config-store";
-import { deleteCloudMedia, fetchCloudMediaBlob, inferCloudMediaKind, isCloudAuthenticated, resolveCloudMediaUrl, uploadBlobToCloud } from "@/services/cloud-media";
+import {
+    clearCloudMediaUrlCache,
+    deleteCloudMedia,
+    fetchCloudMediaBlob,
+    inferCloudMediaKind,
+    isCloudAuthenticated,
+    prefetchCloudMediaUrls,
+    resolveCloudMediaUrl,
+    uploadBlobToCloud,
+} from "@/services/cloud-media";
 
 export type UploadedFile = { url: string; storageKey: string; bytes: number; mimeType: string; width?: number; height?: number; durationMs?: number };
 
@@ -38,6 +47,15 @@ export async function uploadMediaFile(
         });
     }
     return { url, storageKey, bytes: blob.size, mimeType: blob.type || "application/octet-stream", ...meta };
+}
+
+/** 过滤本地已缓存的音视频/文件 key，批量预取剩余云端签名地址。 */
+export async function prefetchUncachedMediaUrls(keys: Iterable<string>) {
+    const unique = Array.from(new Set(keys)).filter((key) => key.includes(":") && !key.startsWith("image:") && !objectUrls.has(key));
+    if (!unique.length) return;
+    const localKeys = new Set(await store.keys().catch(() => [] as string[]));
+    const missing = unique.filter((key) => !localKeys.has(key));
+    if (missing.length) await prefetchCloudMediaUrls(missing);
 }
 
 export async function resolveMediaUrl(storageKey?: string, fallback = "") {
@@ -112,6 +130,7 @@ export function collectMediaStorageKeys(value: unknown, keys = new Set<string>()
 export async function clearLocalMediaFileCache() {
     objectUrls.forEach((url) => URL.revokeObjectURL(url));
     objectUrls.clear();
+    clearCloudMediaUrlCache();
     await store.clear().catch(() => undefined);
 }
 
