@@ -511,9 +511,12 @@ function LoadingContent({ theme }: Pick<NodeContentRendererProps, "theme">) {
 
 function ErrorContent({ node, theme, onRetry }: Pick<NodeContentRendererProps, "node" | "theme" | "onRetry">) {
     const { t } = useTranslation();
+    const errorText = node.metadata?.errorDetails || t("canvas.node.failed");
     return (
         <div className="flex max-w-[260px] flex-col items-center gap-3 px-5 text-center">
-            <div className="text-xs leading-5 text-red-300">{node.metadata?.errorDetails || t("canvas.node.failed")}</div>
+            <div className="line-clamp-4 break-words text-xs leading-5 text-red-300" title={errorText}>
+                {errorText}
+            </div>
             <button
                 type="button"
                 className="inline-flex h-8 items-center gap-1.5 rounded-full border px-3 text-xs font-medium transition hover:scale-[1.02]"

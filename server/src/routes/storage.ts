@@ -672,7 +672,7 @@ storageRoutes.get("/by-tasks", async (c) => {
       textByTask[cid] = row.result_text;
       continue;
     }
-    if (status === "failed" || status === "refunded") {
+    if (status === "failed" || status === "failed_refunded" || status === "refunded") {
       if (!hasMedia) {
         errorByTask[cid] = row.error_message || "任务执行失败";
       }

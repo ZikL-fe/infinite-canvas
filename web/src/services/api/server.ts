@@ -706,24 +706,36 @@ export const storageApi = {
             workspaceStats?: { canvasProjects: number; imageLogs: number; videoLogs: number; assets: number };
         }>(`/storage/list${suffix}`);
     },
-    getByTasks: (taskIds: string[]) => {
+    getByTasks: async (taskIds: string[]) => {
         const clean = Array.from(new Set(taskIds.map((id) => id.trim()).filter(Boolean)));
-        if (!clean.length) {
-            return Promise.resolve({
-                itemsByTask: {} as Record<string, MediaItem[]>,
-                processingTaskIds: [] as string[],
-                textByTask: {} as Record<string, string>,
-                videoTaskByClientTask: {} as Record<string, { taskId: string; provider?: string; model?: string; status?: string }>,
-                errorByTask: {} as Record<string, string>,
-            });
+        const empty = {
+            itemsByTask: {} as Record<string, MediaItem[]>,
+            processingTaskIds: [] as string[],
+            textByTask: {} as Record<string, string>,
+            videoTaskByClientTask: {} as Record<string, { taskId: string; provider?: string; model?: string; status?: string }>,
+            errorByTask: {} as Record<string, string>,
+        };
+        if (!clean.length) return empty;
+        type TasksResponse = typeof empty;
+        const chunks: string[][] = [];
+        for (let i = 0; i < clean.length; i += 50) {
+            chunks.push(clean.slice(i, i + 50));
         }
-        return requestServer<{
-            itemsByTask: Record<string, MediaItem[]>;
-            processingTaskIds: string[];
-            textByTask?: Record<string, string>;
-            videoTaskByClientTask?: Record<string, { taskId: string; provider?: string; model?: string; status?: string }>;
-            errorByTask?: Record<string, string>;
-        }>(`/storage/by-tasks?taskIds=${encodeURIComponent(clean.join(","))}`);
+        const results = await Promise.all(
+            chunks.map((chunk) => requestServer<TasksResponse>(`/storage/by-tasks?taskIds=${encodeURIComponent(chunk.join(","))}`)),
+        );
+        if (results.length === 1) return results[0];
+        const merged: TasksResponse = { itemsByTask: {}, processingTaskIds: [], textByTask: {}, videoTaskByClientTask: {}, errorByTask: {} };
+        const procSet = new Set<string>();
+        for (const res of results) {
+            Object.assign(merged.itemsByTask, res.itemsByTask);
+            Object.assign(merged.textByTask, res.textByTask);
+            Object.assign(merged.videoTaskByClientTask, res.videoTaskByClientTask);
+            Object.assign(merged.errorByTask, res.errorByTask);
+            res.processingTaskIds.forEach((id) => procSet.add(id));
+        }
+        merged.processingTaskIds = [...procSet];
+        return merged;
     },
     getUrl: (mediaId: string) => requestServer<{ mediaId: string; url: string; expiresIn: number }>(`/storage/url/${encodeURIComponent(mediaId)}`),
     downloadBlob: async (mediaId: string) => {

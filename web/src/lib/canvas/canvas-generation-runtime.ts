@@ -20,6 +20,24 @@ const activeRequests = new Map<string, CanvasGenerationRequest>();
 const activeVideoPolls = new Set<string>();
 const projectListeners = new Map<string, ProjectNodesListener>();
 const projectConnectionListeners = new Map<string, ProjectConnectionsListener>();
+let pageUnloading = false;
+
+if (typeof window !== "undefined") {
+    const markUnloading = () => {
+        pageUnloading = true;
+    };
+    const clearUnloading = () => {
+        pageUnloading = false;
+    };
+    window.addEventListener("beforeunload", markUnloading);
+    window.addEventListener("pagehide", markUnloading);
+    window.addEventListener("pageshow", clearUnloading);
+}
+
+/** 浏览器正在刷新或关闭标签页时返回 true，避免卸载瞬间浏览器中断网络将进行中的节点误写为失败。 */
+export function isPageUnloading() {
+    return pageUnloading;
+}
 
 function keyFor(projectId: string, nodeId: string) {
     return `${projectId}:${nodeId}`;

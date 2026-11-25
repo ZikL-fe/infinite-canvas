@@ -46,6 +46,23 @@ const CANVAS_STORE_KEY = "infinite-canvas:canvas_store";
 type PersistedCanvasState = Pick<CanvasStore, "projects" | "deletedProjects">;
 let saveTimer: ReturnType<typeof setTimeout> | null = null;
 let queuedPersistState: PersistedCanvasState | null = null;
+let queuedSerializedValue: string | null = null;
+
+function flushCanvasStorage() {
+    if (saveTimer) {
+        clearTimeout(saveTimer);
+        saveTimer = null;
+    }
+    if (!queuedSerializedValue) return;
+    const payload = queuedSerializedValue;
+    queuedSerializedValue = null;
+    void localForageStorage.setItem(CANVAS_STORE_KEY, payload);
+}
+
+if (typeof window !== "undefined") {
+    window.addEventListener("pagehide", flushCanvasStorage);
+    window.addEventListener("beforeunload", flushCanvasStorage);
+}
 
 const canvasStorage: PersistStorage<CanvasStore> = {
     getItem: async (name) => {
@@ -59,10 +76,23 @@ const canvasStorage: PersistStorage<CanvasStore> = {
         const nextState = value.state as PersistedCanvasState;
         if (queuedPersistState && queuedPersistState.projects === nextState.projects && queuedPersistState.deletedProjects === nextState.deletedProjects) return;
         queuedPersistState = nextState;
+        const serialized = JSON.stringify(value);
+        const hasPendingTask = nextState.projects.some((project) => project.nodes.some((node) => node.metadata?.status === "loading"));
+        if (hasPendingTask) {
+            if (saveTimer) {
+                clearTimeout(saveTimer);
+                saveTimer = null;
+            }
+            queuedSerializedValue = null;
+            void localForageStorage.setItem(name, serialized);
+            return;
+        }
+        queuedSerializedValue = serialized;
         if (saveTimer) clearTimeout(saveTimer);
         saveTimer = setTimeout(() => {
             saveTimer = null;
-            void localForageStorage.setItem(name, JSON.stringify(value));
+            queuedSerializedValue = null;
+            void localForageStorage.setItem(name, serialized);
         }, 400);
     },
     removeItem: (name) => localForageStorage.removeItem(name),

@@ -159,31 +159,69 @@ export function hasResumableVideoTask(node: CanvasNodeData) {
     return node.type === CanvasNodeType.Video && Boolean(node.metadata?.videoTaskId) && !node.metadata?.content;
 }
 
-export function collectInterruptedImageTaskIds(nodes: CanvasNodeData[], activeNodeIds?: Set<string>) {
-    const taskIds: string[] = [];
-    for (const node of nodes) {
-        if (node.metadata?.status !== "loading" || activeNodeIds?.has(node.id)) continue;
-        if (node.type === CanvasNodeType.Image) {
-            const slotIds = (node.metadata.images || []).filter((img) => img.status === "loading").map((img) => img.id);
-            if (slotIds.length) {
-                taskIds.push(...slotIds);
-            } else {
-                if (node.metadata.primaryImageId) taskIds.push(node.metadata.primaryImageId);
-                taskIds.push(node.id);
-            }
-        } else if (node.type === CanvasNodeType.Text) {
-            const slotIds = (node.metadata.texts || []).filter((text) => text.status === "loading").map((text) => text.id);
-            if (slotIds.length) {
-                taskIds.push(...slotIds);
-            } else {
-                if (node.metadata.primaryTextId) taskIds.push(node.metadata.primaryTextId);
-                taskIds.push(node.id);
-            }
-        } else if (node.type === CanvasNodeType.Video || node.type === CanvasNodeType.Audio) {
-            taskIds.push(node.id);
-        }
+function isRecoverableSlotStatus(status: string | undefined, content: string | undefined) {
+    return status === "loading" || (status === "error" && !content);
+}
+
+function shouldBackfillGenericError(currentError: string | undefined) {
+    if (!currentError) return true;
+    const genericMessages = new Set([
+        i18n.t("canvas.node.failed"),
+        i18n.t("canvas.projectPage.generationFailed"),
+        i18n.t("canvas.projectPage.allFailed"),
+        i18n.t("canvas.generation.interrupted"),
+    ]);
+    return genericMessages.has(currentError);
+}
+
+function collectNodeTaskIds(node: CanvasNodeData): string[] {
+    const ids: string[] = [];
+    if (node.type === CanvasNodeType.Image) {
+        const slotIds = (node.metadata?.images || [])
+            .filter((img) => isRecoverableSlotStatus(img.status, img.content))
+            .map((img) => img.id);
+        ids.push(...slotIds);
+        if (node.metadata?.primaryImageId) ids.push(node.metadata.primaryImageId);
+        ids.push(node.id);
+    } else if (node.type === CanvasNodeType.Text) {
+        const slotIds = (node.metadata?.texts || [])
+            .filter((text) => isRecoverableSlotStatus(text.status, text.content))
+            .map((text) => text.id);
+        ids.push(...slotIds);
+        if (node.metadata?.primaryTextId) ids.push(node.metadata.primaryTextId);
+        ids.push(node.id);
+    } else if (node.type === CanvasNodeType.Video || node.type === CanvasNodeType.Audio) {
+        ids.push(node.id);
     }
-    return Array.from(new Set(taskIds));
+    return ids;
+}
+
+function isRecoverableCanvasNode(node: CanvasNodeData, activeNodeIds?: Set<string>) {
+    if (activeNodeIds?.has(node.id)) return false;
+    const status = node.metadata?.status;
+    if (status === "loading") return true;
+    if (status !== "error") return false;
+    if (node.type === CanvasNodeType.Image) {
+        return !node.metadata?.content || Boolean(node.metadata.images?.some((img) => img.status === "error" && !img.content));
+    }
+    if (node.type === CanvasNodeType.Text) {
+        return !node.metadata?.content || Boolean(node.metadata.texts?.some((text) => text.status === "error" && !text.content));
+    }
+    if (node.type === CanvasNodeType.Video || node.type === CanvasNodeType.Audio) {
+        return !node.metadata?.content;
+    }
+    return false;
+}
+
+export function collectInterruptedImageTaskIds(nodes: CanvasNodeData[], activeNodeIds?: Set<string>) {
+    const loadingIds: string[] = [];
+    const errorIds: string[] = [];
+    for (const node of nodes) {
+        if (!isRecoverableCanvasNode(node, activeNodeIds)) continue;
+        const target = node.metadata?.status === "loading" ? loadingIds : errorIds;
+        target.push(...collectNodeTaskIds(node));
+    }
+    return Array.from(new Set([...loadingIds, ...errorIds]));
 }
 
 async function resolveRecoveredCloudImage(
@@ -207,7 +245,7 @@ async function resolveRecoveredCloudImage(
 export async function recoverCloudInterruptedImages(
     nodes: CanvasNodeData[],
     activeNodeIds?: Set<string>,
-): Promise<{ nodes: CanvasNodeData[]; processingTaskIds: string[] }> {
+): Promise<{ nodes: CanvasNodeData[]; processingTaskIds: string[]; requestFailed?: boolean }> {
     if (!isCloudAuthenticated()) return { nodes, processingTaskIds: [] };
     const candidateIds = collectInterruptedImageTaskIds(nodes, activeNodeIds);
     if (!candidateIds.length) return { nodes, processingTaskIds: [] };
@@ -221,21 +259,26 @@ export async function recoverCloudInterruptedImages(
         let anyChanged = false;
         const nextNodes = await Promise.all(
             nodes.map(async (node) => {
-                if (node.metadata?.status !== "loading" || activeNodeIds?.has(node.id)) return node;
+                if (!isRecoverableCanvasNode(node, activeNodeIds)) return node;
+                const wasErrorNode = node.metadata?.status === "error";
 
                 if (node.type === CanvasNodeType.Text) {
-                    const texts = node.metadata.texts;
+                    const texts = node.metadata?.texts;
                     if (texts?.length) {
                         let changed = false;
                         const nextTexts = texts.map((item) => {
-                            if (item.status !== "loading") return item;
+                            if (!isRecoverableSlotStatus(item.status, item.content)) return item;
                             const recoveredText = textByTask[item.id];
                             if (recoveredText) {
                                 changed = true;
                                 return { id: item.id, status: "success" as const, content: recoveredText };
                             }
+                            if (processingSet.has(item.id) && item.status !== "loading") {
+                                changed = true;
+                                return { ...item, status: "loading" as const, errorDetails: undefined };
+                            }
                             const failedMsg = errorByTask[item.id];
-                            if (failedMsg) {
+                            if (failedMsg && (item.status === "loading" || shouldBackfillGenericError(item.errorDetails)) && item.errorDetails !== failedMsg) {
                                 changed = true;
                                 return { id: item.id, status: "error" as const, content: "", errorDetails: failedMsg };
                             }
@@ -247,22 +290,22 @@ export async function recoverCloudInterruptedImages(
                         const hasLoadingSlot = nextTexts.some((item) => item.status === "loading");
                         const successTexts = nextTexts.filter((item) => item.status === "success");
                         const primaryText =
-                            (node.metadata.primaryTextId ? successTexts.find((item) => item.id === node.metadata?.primaryTextId) : undefined) ||
+                            (node.metadata?.primaryTextId ? successTexts.find((item) => item.id === node.metadata?.primaryTextId) : undefined) ||
                             successTexts[0];
                         return {
                             ...node,
                             metadata: {
                                 ...node.metadata,
-                                content: primaryText?.content || node.metadata.content || "",
-                                primaryTextId: primaryText?.id || node.metadata.primaryTextId,
+                                content: primaryText?.content || node.metadata?.content || "",
+                                primaryTextId: primaryText?.id || node.metadata?.primaryTextId,
                                 texts: nextTexts,
                                 status: stillLoading || hasLoadingSlot ? ("loading" as const) : successTexts.length ? ("success" as const) : ("error" as const),
-                                errorDetails: successTexts.length ? undefined : nextTexts.find((item) => item.errorDetails)?.errorDetails,
+                                errorDetails: successTexts.length || stillLoading || hasLoadingSlot ? undefined : nextTexts.find((item) => item.errorDetails)?.errorDetails,
                             },
                         };
                     }
 
-                    const singleTaskId = node.metadata.primaryTextId || node.id;
+                    const singleTaskId = node.metadata?.primaryTextId || node.id;
                     const singleText = textByTask[singleTaskId] ?? textByTask[node.id];
                     if (singleText) {
                         anyChanged = true;
@@ -276,8 +319,19 @@ export async function recoverCloudInterruptedImages(
                             },
                         };
                     }
+                    if (wasErrorNode && (processingSet.has(singleTaskId) || processingSet.has(node.id))) {
+                        anyChanged = true;
+                        return {
+                            ...node,
+                            metadata: {
+                                ...node.metadata,
+                                status: "loading" as const,
+                                errorDetails: undefined,
+                            },
+                        };
+                    }
                     const singleErr = errorByTask[singleTaskId] ?? errorByTask[node.id];
-                    if (singleErr) {
+                    if (singleErr && (!wasErrorNode || (shouldBackfillGenericError(node.metadata?.errorDetails) && node.metadata?.errorDetails !== singleErr))) {
                         anyChanged = true;
                         return {
                             ...node,
@@ -318,20 +372,33 @@ export async function recoverCloudInterruptedImages(
                         }
                     }
                     const upstreamVideo = videoTaskByClientTask[node.id];
-                    if (upstreamVideo?.taskId && !node.metadata.videoTaskId) {
+                    if (upstreamVideo?.taskId && !node.metadata?.videoTaskId) {
                         anyChanged = true;
                         return {
                             ...node,
                             metadata: {
                                 ...node.metadata,
+                                status: "loading" as const,
+                                errorDetails: undefined,
                                 videoTaskId: upstreamVideo.taskId,
                                 videoTaskProvider: upstreamVideo.provider === "gemini" ? ("gemini" as const) : ("openai" as const),
                                 ...(upstreamVideo.model ? { model: upstreamVideo.model } : {}),
                             },
                         };
                     }
+                    if (wasErrorNode && processingSet.has(node.id)) {
+                        anyChanged = true;
+                        return {
+                            ...node,
+                            metadata: {
+                                ...node.metadata,
+                                status: "loading" as const,
+                                errorDetails: undefined,
+                            },
+                        };
+                    }
                     const videoErr = errorByTask[node.id];
-                    if (videoErr) {
+                    if (videoErr && (!wasErrorNode || (shouldBackfillGenericError(node.metadata?.errorDetails) && node.metadata?.errorDetails !== videoErr))) {
                         anyChanged = true;
                         return {
                             ...node,
@@ -366,8 +433,19 @@ export async function recoverCloudInterruptedImages(
                             };
                         }
                     }
+                    if (wasErrorNode && processingSet.has(node.id)) {
+                        anyChanged = true;
+                        return {
+                            ...node,
+                            metadata: {
+                                ...node.metadata,
+                                status: "loading" as const,
+                                errorDetails: undefined,
+                            },
+                        };
+                    }
                     const audioErr = errorByTask[node.id];
-                    if (audioErr) {
+                    if (audioErr && (!wasErrorNode || (shouldBackfillGenericError(node.metadata?.errorDetails) && node.metadata?.errorDetails !== audioErr))) {
                         anyChanged = true;
                         return {
                             ...node,
@@ -383,27 +461,58 @@ export async function recoverCloudInterruptedImages(
 
                 if (node.type !== CanvasNodeType.Image) return node;
 
-                const images = node.metadata.images;
+                const images = node.metadata?.images;
                 if (images?.length) {
                     let changed = false;
+                    const singleSlot = images.length === 1;
                     const nextImages = await Promise.all(
                         images.map(async (img) => {
-                            if (img.status !== "loading") return img;
-                            const media = res.itemsByTask[img.id]?.[0];
-                            if (!media) return img;
-                            const recovered = await resolveRecoveredCloudImage(media, node.width, node.height);
-                            if (!recovered.content) return img;
-                            changed = true;
-                            return {
-                                id: img.id,
-                                status: "success" as const,
-                                ...recovered,
-                            };
+                            if (!isRecoverableSlotStatus(img.status, img.content)) return img;
+                            const media =
+                                res.itemsByTask[img.id]?.[0] ||
+                                (singleSlot
+                                    ? (node.metadata?.primaryImageId ? res.itemsByTask[node.metadata.primaryImageId]?.[0] : undefined) ||
+                                      res.itemsByTask[node.id]?.[0]
+                                    : undefined);
+                            if (media) {
+                                const recovered = await resolveRecoveredCloudImage(media, node.width, node.height);
+                                if (recovered.content) {
+                                    changed = true;
+                                    return {
+                                        id: img.id,
+                                        status: "success" as const,
+                                        ...recovered,
+                                    };
+                                }
+                            }
+                            const slotStillProcessing =
+                                processingSet.has(img.id) ||
+                                (singleSlot &&
+                                    (processingSet.has(node.id) || Boolean(node.metadata?.primaryImageId && processingSet.has(node.metadata.primaryImageId))));
+                            if (slotStillProcessing) {
+                                if (img.status !== "loading") {
+                                    changed = true;
+                                    return { ...img, status: "loading" as const, errorDetails: undefined };
+                                }
+                                return img;
+                            }
+                            const slotErr = errorByTask[img.id] ?? (singleSlot ? errorByTask[node.id] : undefined);
+                            if (slotErr && (img.status === "loading" || (shouldBackfillGenericError(img.errorDetails) && img.errorDetails !== slotErr))) {
+                                changed = true;
+                                return { ...img, status: "error" as const, errorDetails: slotErr };
+                            }
+                            return img;
                         }),
                     );
-                    const stillLoading = nextImages.some((img) => img.status === "loading" && processingSet.has(img.id));
+                    const stillLoading = nextImages.some(
+                        (img) =>
+                            img.status === "loading" &&
+                            (processingSet.has(img.id) ||
+                                (singleSlot &&
+                                    (processingSet.has(node.id) || Boolean(node.metadata?.primaryImageId && processingSet.has(node.metadata.primaryImageId))))),
+                    );
                     const hasLoadingSlot = nextImages.some((img) => img.status === "loading");
-                    if (!changed && hasLoadingSlot) return node;
+                    if (!changed && (hasLoadingSlot || wasErrorNode)) return node;
                     anyChanged = true;
 
                     const hasSuccess = nextImages.some((img) => img.status === "success");
@@ -436,6 +545,7 @@ export async function recoverCloudInterruptedImages(
                           })()
                         : null;
                     const baseMeta = primaryPatch?.metadata || node.metadata;
+                    const firstSlotErr = nextImages.find((img) => img.status === "error" && img.errorDetails)?.errorDetails;
                     return {
                         ...node,
                         ...(primaryPatch ? { position: primaryPatch.position, width: primaryPatch.width, height: primaryPatch.height } : {}),
@@ -443,35 +553,63 @@ export async function recoverCloudInterruptedImages(
                             ...baseMeta,
                             images: nextImages,
                             status: stillLoading ? ("loading" as const) : hasSuccess ? ("success" as const) : ("error" as const),
-                            errorDetails: hasSuccess ? undefined : baseMeta.errorDetails,
+                            errorDetails: hasSuccess || stillLoading ? undefined : firstSlotErr || baseMeta?.errorDetails,
                         },
                     };
                 }
 
                 const media =
-                    (node.metadata.primaryImageId ? res.itemsByTask[node.metadata.primaryImageId]?.[0] : undefined) ||
+                    (node.metadata?.primaryImageId ? res.itemsByTask[node.metadata.primaryImageId]?.[0] : undefined) ||
                     res.itemsByTask[node.id]?.[0];
-                if (!media) return node;
-                const recovered = await resolveRecoveredCloudImage(media, node.width, node.height);
-                if (!recovered.content) return node;
-                anyChanged = true;
-                const imageSize = fitNodeSize(recovered.naturalWidth, recovered.naturalHeight, node.width, node.height);
-                return {
-                    ...node,
-                    width: imageSize.width,
-                    height: imageSize.height,
-                    metadata: {
-                        ...node.metadata,
-                        ...recovered,
-                        status: "success" as const,
-                        errorDetails: undefined,
-                    },
-                };
+                if (media) {
+                    const recovered = await resolveRecoveredCloudImage(media, node.width, node.height);
+                    if (!recovered.content) return node;
+                    anyChanged = true;
+                    const imageSize = fitNodeSize(recovered.naturalWidth, recovered.naturalHeight, node.width, node.height);
+                    return {
+                        ...node,
+                        width: imageSize.width,
+                        height: imageSize.height,
+                        metadata: {
+                            ...node.metadata,
+                            ...recovered,
+                            status: "success" as const,
+                            errorDetails: undefined,
+                        },
+                    };
+                }
+                const singleImageProcessing =
+                    processingSet.has(node.id) || Boolean(node.metadata?.primaryImageId && processingSet.has(node.metadata.primaryImageId));
+                if (wasErrorNode && singleImageProcessing) {
+                    anyChanged = true;
+                    return {
+                        ...node,
+                        metadata: {
+                            ...node.metadata,
+                            status: "loading" as const,
+                            errorDetails: undefined,
+                        },
+                    };
+                }
+                const singleImageErr =
+                    (node.metadata?.primaryImageId ? errorByTask[node.metadata.primaryImageId] : undefined) ?? errorByTask[node.id];
+                if (singleImageErr && (!wasErrorNode || (shouldBackfillGenericError(node.metadata?.errorDetails) && node.metadata?.errorDetails !== singleImageErr))) {
+                    anyChanged = true;
+                    return {
+                        ...node,
+                        metadata: {
+                            ...node.metadata,
+                            status: "error" as const,
+                            errorDetails: singleImageErr,
+                        },
+                    };
+                }
+                return node;
             }),
         );
-        return { nodes: anyChanged ? nextNodes : nodes, processingTaskIds: res.processingTaskIds };
+        return { nodes: anyChanged ? nextNodes : nodes, processingTaskIds: res.processingTaskIds, requestFailed: false };
     } catch {
-        return { nodes, processingTaskIds: [] };
+        return { nodes, processingTaskIds: [], requestFailed: true };
     }
 }
 
