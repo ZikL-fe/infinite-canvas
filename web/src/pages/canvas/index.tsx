@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { App, Button } from "antd";
-import { Download, FileUp, Plus } from "lucide-react";
+import { Download, FileUp, Plus, Trash2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { readZip } from "@/lib/zip";
@@ -98,13 +98,13 @@ export default function CanvasPage() {
                                 <Button disabled={!hydrated} loading={exporting} icon={<Download className="size-4" />} onClick={() => void handleExportSelected()}>
                                     {t("canvas.exportSelected")}
                                 </Button>
-                                <Button disabled={!hydrated} onClick={() => setDeleteIds(selectedIds)}>
+                                <Button disabled={!hydrated} icon={<Trash2 className="size-4" />} onClick={() => setDeleteIds(selectedIds)}>
                                     {t("canvas.deleteSelected")}
                                 </Button>
                             </>
                         ) : null}
                         {projects.length ? (
-                            <Button disabled={!hydrated} onClick={() => setDeleteIds(projects.map((project) => project.id))}>
+                            <Button disabled={!hydrated} icon={<Trash2 className="size-4" />} onClick={() => setDeleteIds(projects.map((project) => project.id))}>
                                 {t("canvas.deleteAll")}
                             </Button>
                         ) : null}

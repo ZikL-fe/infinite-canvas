@@ -1,7 +1,7 @@
 /** 生图工作台批量编辑器面板：场景化引导（多图同词 / 一图多词 / 自由队列），所见即所得免多余同步点击。 */
 import { useRef, useState } from "react";
 import { Alert, App, Button, Input, InputNumber, Segmented, Tag, Tooltip } from "antd";
-import { ArrowLeft, ArrowRight, BookOpen, ClipboardPaste, Copy, FolderPlus, Plus, SlidersHorizontal, Trash2, Upload } from "lucide-react";
+import { ArrowLeft, ArrowRight, BookOpen, ClipboardPaste, Copy, Eraser, FolderPlus, Plus, SlidersHorizontal, Trash2, Upload } from "lucide-react";
 import { nanoid } from "nanoid";
 import { Trans, useTranslation } from "react-i18next";
 
@@ -127,7 +127,7 @@ function ImageDropBox({
                         {t("imageBatch.assetsBtn")}
                     </Button>
                     {images.length && onClearImages ? (
-                        <Button size="small" type="text" danger disabled={disabled} onClick={onClearImages}>
+                        <Button size="small" type="text" danger icon={<Eraser className="size-3.5" />} disabled={disabled} onClick={onClearImages}>
                             {t("common.clear")}
                         </Button>
                     ) : null}

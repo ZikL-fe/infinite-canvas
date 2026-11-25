@@ -1,7 +1,7 @@
 import { javascript } from "@codemirror/lang-javascript";
 import CodeMirror from "@uiw/react-codemirror";
 import { Button, Modal } from "antd";
-import { Copy } from "lucide-react";
+import { Copy, Plus, RotateCcw } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 
@@ -157,11 +157,11 @@ export function ModelScriptEditor({ open, capability, modelName, value, onSave, 
                     <div className="flex flex-wrap items-center gap-2">
                         <span className="text-xs text-stone-400">{t("config.scriptEditor.startFromTemplate")}</span>
                         {templates.map((template) => (
-                            <Button key={template.label} size="small" onClick={() => setDraft(template.script)}>
+                            <Button key={template.label} size="small" icon={<Plus className="size-3.5" />} onClick={() => setDraft(template.script)}>
                                 {t("config.scriptEditor.insertTemplate", { name: template.label })}
                             </Button>
                         ))}
-                        <Button size="small" danger onClick={() => setDraft("")}>
+                        <Button size="small" danger icon={<RotateCcw className="size-3.5" />} onClick={() => setDraft("")}>
                             {t("config.scriptEditor.restoreDefault")}
                         </Button>
                     </div>

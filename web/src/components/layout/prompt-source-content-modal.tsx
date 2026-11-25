@@ -1,5 +1,5 @@
 import { App, Button, Empty, Modal, Space, Table, Tag } from "antd";
-import { Copy, FolderPlus, RefreshCw } from "lucide-react";
+import { Copy, Eye, FolderPlus, RefreshCw } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 
@@ -109,7 +109,7 @@ export function PromptSourceContentModal({ source, onClose }: { source: PromptSo
                                     <Button size="small" type="text" icon={<Copy className="size-3.5" />} onClick={() => copyText(item.prompt, t("common.promptCopied"))}>
                                         {t("common.copy")}
                                     </Button>
-                                    <Button size="small" type="text" onClick={() => setDetail(item)}>
+                                    <Button size="small" type="text" icon={<Eye className="size-3.5" />} onClick={() => setDetail(item)}>
                                         {t("common.details")}
                                     </Button>
                                     <Button size="small" type="text" icon={<FolderPlus className="size-3.5" />} onClick={() => saveAsset(item)}>

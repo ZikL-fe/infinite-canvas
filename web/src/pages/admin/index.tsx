@@ -4,7 +4,7 @@ import { Alert, App, Button, Card, Col, DatePicker, Descriptions, Drawer, Form, 
 import type { MenuProps, UploadProps } from "antd";
 import dayjs, { type Dayjs } from "dayjs";
 import type { TFunction } from "i18next";
-import { AudioLines, BarChart3, Copy, Coins, Cpu, Database, Download, FileIcon, FolderKanban, Gift, HardDrive, ImageIcon, LayoutDashboard, Mail, Megaphone, Menu as MenuIcon, Plus, RefreshCw, ScrollText, Send, Shield, Sliders, Trash2, UploadCloud, UserCheck, Users, Video, Wifi } from "lucide-react";
+import { AudioLines, BarChart3, Copy, Coins, Cpu, Database, Download, FileIcon, FolderKanban, Gift, HardDrive, ImageIcon, LayoutDashboard, Mail, Megaphone, Menu as MenuIcon, Plus, RefreshCw, Save, ScrollText, Send, Shield, Sliders, Trash2, UploadCloud, UserCheck, Users, Video, Wifi, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 
@@ -1040,7 +1040,16 @@ export default function AdminPage() {
     const handleSaveStorageExpiryPolicy = async (values: AdminStorageExpiryPolicyForm) => {
         setStorageExpirySaving(true);
         try {
-            const res = await adminApi.saveStorageExpirySettings(values);
+            const stored = storageExpiryForm.getFieldsValue(true);
+            const payload: AdminStorageExpiryPolicyForm = {
+                enabled: Boolean(values.enabled ?? stored.enabled ?? storageExpiryEnabled),
+                gracePeriodDays: Number(values.gracePeriodDays ?? stored.gracePeriodDays ?? 7),
+                preExpiryWarnDays: Number(values.preExpiryWarnDays ?? stored.preExpiryWarnDays ?? 3),
+                cleanupWorkspaceData: Boolean(values.cleanupWorkspaceData ?? stored.cleanupWorkspaceData ?? true),
+                exemptAdmins: Boolean(values.exemptAdmins ?? stored.exemptAdmins ?? true),
+                cleanupOverQuotaWithoutExpiry: Boolean(values.cleanupOverQuotaWithoutExpiry ?? stored.cleanupOverQuotaWithoutExpiry ?? true),
+            };
+            const res = await adminApi.saveStorageExpirySettings(payload);
             setStorageExpiryEnabled(res.enabled);
             setMailReady(res.mailReady);
             storageExpiryForm.setFieldsValue({
@@ -2029,7 +2038,7 @@ export default function AdminPage() {
                                                             </Popconfirm>
                                                         )}
                                                     </Tooltip>
-                                                    <Button size="small" type="text" onClick={() => setSelectedRedeemIds([])}>
+                                                    <Button size="small" type="text" icon={<X className="size-3.5" />} onClick={() => setSelectedRedeemIds([])}>
                                                         {t("admin.redeemTab.deselect")}
                                                     </Button>
                                                 </Space>
@@ -2550,10 +2559,10 @@ export default function AdminPage() {
                                                 </Col>
                                             </Row>
                                             <Space>
-                                                <Button onClick={handleTestStorage} loading={storageTesting}>
+                                                <Button icon={<Wifi className="size-4" />} onClick={handleTestStorage} loading={storageTesting}>
                                                     {t("admin.storageTab.testProbeBtn")}
                                                 </Button>
-                                                <Button type="primary" htmlType="submit" loading={storageSaving}>
+                                                <Button type="primary" htmlType="submit" icon={<Save className="size-4" />} loading={storageSaving}>
                                                     {t("admin.storageTab.saveConfigBtn")}
                                                 </Button>
                                             </Space>
@@ -2736,7 +2745,7 @@ export default function AdminPage() {
                                                             {t("admin.settingsTab.mail.sendTestBtn")}
                                                         </Button>
                                                     </Space>
-                                                    <Button type="primary" htmlType="submit" loading={mailSaving}>
+                                                    <Button type="primary" htmlType="submit" icon={<Save className="size-4" />} loading={mailSaving}>
                                                         {t("admin.settingsTab.mail.saveBtn")}
                                                     </Button>
                                                 </div>
@@ -2800,7 +2809,7 @@ export default function AdminPage() {
                                                     <Button icon={<Wifi className="size-4" />} onClick={() => void handleTestPlatformWebdav()} loading={webdavTesting}>
                                                         {t("admin.settingsTab.webdav.testBtn")}
                                                     </Button>
-                                                    <Button type="primary" htmlType="submit" loading={webdavSaving}>
+                                                    <Button type="primary" htmlType="submit" icon={<Save className="size-4" />} loading={webdavSaving}>
                                                         {t("admin.settingsTab.webdav.saveBtn")}
                                                     </Button>
                                                 </Space>
@@ -2888,7 +2897,7 @@ export default function AdminPage() {
                                                 </Row>
                                                 <div className="flex flex-wrap items-center justify-between gap-3">
                                                     <Space wrap>
-                                                        <Button type="primary" htmlType="submit" loading={storageExpirySaving}>
+                                                        <Button type="primary" htmlType="submit" icon={<Save className="size-4" />} loading={storageExpirySaving}>
                                                             {t("admin.settingsTab.storageExpiry.savePolicyBtn")}
                                                         </Button>
                                                         <Button
@@ -3161,7 +3170,7 @@ export default function AdminPage() {
                                                             placeholder={t("admin.settingsTab.announcements.globalContentPlaceholder")}
                                                         />
                                                     </Form.Item>
-                                                    <Button type="primary" htmlType="submit" loading={noticeSaving}>
+                                                    <Button type="primary" htmlType="submit" icon={<Save className="size-4" />} loading={noticeSaving}>
                                                         {t("admin.settingsTab.announcements.saveGlobalBtn")}
                                                     </Button>
                                                 </Form>
@@ -3351,7 +3360,7 @@ export default function AdminPage() {
                                                     </Col>
                                                 </Row>
                                                 <Space wrap>
-                                                    <Button type="primary" htmlType="submit" loading={analyticsSaving}>
+                                                    <Button type="primary" htmlType="submit" icon={<Save className="size-4" />} loading={analyticsSaving}>
                                                         {t("admin.storageTab.saveConfigBtn")}
                                                     </Button>
                                                     <Popconfirm
@@ -3359,7 +3368,7 @@ export default function AdminPage() {
                                                         description={t("admin.settingsTab.analytics.confirmCleanupDesc")}
                                                         onConfirm={() => void handleCleanupExpiredLogs()}
                                                     >
-                                                        <Button danger loading={cleaningLogs}>
+                                                        <Button danger icon={<Trash2 className="size-4" />} loading={cleaningLogs}>
                                                             {t("admin.settingsTab.analytics.cleanupBtn")}
                                                         </Button>
                                                     </Popconfirm>
@@ -3495,11 +3504,6 @@ export default function AdminPage() {
                                 {activeSection?.pageTitle || activeSection?.label}
                             </Typography.Title>
                         </div>
-                        {isAdmin && isAdminRoute ? (
-                            <Button icon={<RefreshCw className="size-4" />} loading={overviewLoading} onClick={() => void loadOverview(overviewDays)}>
-                                {t("admin.nav.refreshData")}
-                            </Button>
-                        ) : null}
                     </div>
 
                     <div className="w-full min-w-0">{activeSection?.children}</div>

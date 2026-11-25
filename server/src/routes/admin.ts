@@ -1264,12 +1264,12 @@ adminRoutes.post("/settings/mail/test", zValidator("json", testMailSchema), asyn
 });
 
 const saveStorageExpiryPolicySchema = z.object({
-  enabled: z.boolean(),
-  gracePeriodDays: z.number().int().min(1).max(365),
-  preExpiryWarnDays: z.number().int().min(0).max(30),
-  cleanupWorkspaceData: z.boolean(),
-  exemptAdmins: z.boolean(),
-  cleanupOverQuotaWithoutExpiry: z.boolean().optional().default(true),
+  enabled: z.boolean().optional(),
+  gracePeriodDays: z.number().int().min(1).max(365).optional(),
+  preExpiryWarnDays: z.number().int().min(0).max(30).optional(),
+  cleanupWorkspaceData: z.boolean().optional(),
+  exemptAdmins: z.boolean().optional(),
+  cleanupOverQuotaWithoutExpiry: z.boolean().optional(),
 });
 
 const runStorageExpirySweepSchema = z.object({
@@ -1288,7 +1288,18 @@ adminRoutes.get("/settings/storage-expiry", async (c) => {
 adminRoutes.put("/settings/storage-expiry", zValidator("json", saveStorageExpiryPolicySchema), async (c) => {
   const user = c.get("user");
   const body = c.req.valid("json");
-  const saved = await savePlatformStorageExpiryPolicy(body, user.id);
+  const prev = await getPlatformStorageExpiryPolicy();
+  const saved = await savePlatformStorageExpiryPolicy(
+    {
+      enabled: body.enabled ?? prev.enabled,
+      gracePeriodDays: body.gracePeriodDays ?? prev.gracePeriodDays,
+      preExpiryWarnDays: body.preExpiryWarnDays ?? prev.preExpiryWarnDays,
+      cleanupWorkspaceData: body.cleanupWorkspaceData ?? prev.cleanupWorkspaceData,
+      exemptAdmins: body.exemptAdmins ?? prev.exemptAdmins,
+      cleanupOverQuotaWithoutExpiry: body.cleanupOverQuotaWithoutExpiry ?? prev.cleanupOverQuotaWithoutExpiry,
+    },
+    user.id,
+  );
   const mailConfig = await getPlatformMailConfig();
   return c.json({
     ok: true,

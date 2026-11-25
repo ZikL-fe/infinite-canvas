@@ -1,4 +1,4 @@
-import { CheckSquare, Copy, Download, HardDrive, PencilLine, Search, Trash2, Upload } from "lucide-react";
+import { CheckSquare, Copy, Download, Eye, HardDrive, PencilLine, Search, Trash2, Upload } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { App, Button, Card, Checkbox, Drawer, Empty, Form, Image, Input, Modal, Pagination, Progress, Select, Space, Tag, Typography } from "antd";
 import { saveAs } from "file-saver";
@@ -662,7 +662,7 @@ function AssetCard({ asset, selected, downloading, onSelectedChange, onOpen, onE
             </button>
             <div className="mt-auto flex items-center justify-between gap-1.5 border-t border-black/5 px-3.5 py-2.5 dark:border-white/5">
                 <div className="flex min-w-0 flex-wrap items-center gap-1.5">
-                    <Button size="small" onClick={onOpen}>
+                    <Button size="small" icon={<Eye className="size-3.5" />} onClick={onOpen}>
                         {t("common.view")}
                     </Button>
                     {asset.kind !== "video" ? (

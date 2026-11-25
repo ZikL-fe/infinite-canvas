@@ -1,5 +1,5 @@
 import { Alert, App, Button, Form, Input, Modal, Radio, Select, Switch, Tabs } from "antd";
-import { Download, RefreshCw, Upload } from "lucide-react";
+import { ArrowRight, Download, LogIn, RefreshCw, Upload } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
@@ -115,7 +115,7 @@ export function AppConfigPanel({ showDoneButton = false, initialTab = "preferenc
                                         message={t("configPanel.loginRequiredTitle")}
                                         description={t("configPanel.loginRequiredDescription")}
                                         action={
-                                            <Button size="small" type="primary" onClick={() => goToPage("/auth")}>
+                                            <Button size="small" type="primary" icon={<LogIn className="size-3.5" />} onClick={() => goToPage("/auth")}>
                                                 {t("configPanel.goToLogin")}
                                             </Button>
                                         }
@@ -133,7 +133,7 @@ export function AppConfigPanel({ showDoneButton = false, initialTab = "preferenc
                                                     {t("configPanel.refreshChannels")}
                                                 </Button>
                                                 {user.role === "admin" ? (
-                                                    <Button size="small" type="primary" onClick={() => goToPage("/admin")}>
+                                                    <Button size="small" type="primary" icon={<ArrowRight className="size-3.5" />} onClick={() => goToPage("/admin")}>
                                                         {t("configPanel.goToAdmin")}
                                                     </Button>
                                                 ) : null}

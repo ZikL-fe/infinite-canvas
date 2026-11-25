@@ -1,5 +1,5 @@
 import { Button, Drawer, Input, Segmented, Select, Space, Tag } from "antd";
-import { Coins, ListPlus, Trash2 } from "lucide-react";
+import { Code2, Coins, ListPlus, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 
@@ -128,7 +128,7 @@ export function ChannelEditorDrawer({
                                 <Button size="small" icon={<Coins className="size-3.5" />} onClick={() => setPricingTarget({ name: model.name, capability: model.capability, value: model.pricing })}>
                                     {t("config.channelEditor.pricing")}
                                 </Button>
-                                <Button size="small" type={model.script ? "primary" : "default"} ghost={Boolean(model.script)} onClick={() => setScriptTarget({ name: model.name, capability: model.capability, value: model.script || "" })}>
+                                <Button size="small" icon={<Code2 className="size-3.5" />} type={model.script ? "primary" : "default"} ghost={Boolean(model.script)} onClick={() => setScriptTarget({ name: model.name, capability: model.capability, value: model.script || "" })}>
                                     {t(model.script ? "config.channelEditor.scriptReady" : "config.channelEditor.script")}
                                 </Button>
                                 <Button size="small" danger type="text" icon={<Trash2 className="size-3.5" />} onClick={() => removeModel(model.name)} />

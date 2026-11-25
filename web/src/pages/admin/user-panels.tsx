@@ -4,7 +4,7 @@ import { Alert, App, Avatar, Button, Card, Col, DatePicker, Descriptions, Empty,
 import type { Dayjs } from "dayjs";
 import type { TFunction } from "i18next";
 import localforage from "localforage";
-import { AudioLines, Bell, Download, Eye, FileIcon, Gift, ImageIcon, KeyRound, Laptop, Megaphone, Pin, RefreshCw, Search, TrendingUp, User, Video } from "lucide-react";
+import { AudioLines, Bell, Download, Eye, FileIcon, Gift, ImageIcon, KeyRound, Laptop, LogOut, Megaphone, Pin, RefreshCw, RotateCcw, Save, Search, TrendingUp, User, Video } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
 
@@ -901,7 +901,7 @@ export function ProfileSecurityPanel() {
                             <Form.Item name="avatarUrl" label={t("userPanels.profile.avatarUrl")}>
                                 <Input placeholder="https://..." />
                             </Form.Item>
-                            <Button type="primary" htmlType="submit" loading={savingProfile}>
+                            <Button type="primary" htmlType="submit" icon={<Save className="size-4" />} loading={savingProfile}>
                                 {t("userPanels.profile.saveProfile")}
                             </Button>
                         </Form>
@@ -999,7 +999,7 @@ export function ProfileSecurityPanel() {
                             <Form.Item name="revokeOtherSessions" label={t("userPanels.profile.revokeOtherSessions")} valuePropName="checked">
                                 <Switch />
                             </Form.Item>
-                            <Button type="primary" htmlType="submit" loading={changingPassword}>
+                            <Button type="primary" htmlType="submit" icon={<KeyRound className="size-4" />} loading={changingPassword}>
                                 {t("userPanels.profile.updatePassword")}
                             </Button>
                         </Form>
@@ -1067,7 +1067,7 @@ export function ProfileSecurityPanel() {
                         ) : null}
                         <Col xs={24} md={6}>
                             <Form.Item>
-                                <Button type="primary" htmlType="submit" loading={savingAlert}>
+                                <Button type="primary" htmlType="submit" icon={<Save className="size-4" />} loading={savingAlert}>
                                     {t("userPanels.profile.saveAlertSettings")}
                                 </Button>
                             </Form.Item>
@@ -1094,7 +1094,9 @@ export function ProfileSecurityPanel() {
                 extra={
                     <Space>
                         <Popconfirm title={t("userPanels.profile.confirmRevokeOthers")} onConfirm={() => void handleRevokeOtherSessions()}>
-                            <Button size="small">{t("userPanels.profile.revokeOthers")}</Button>
+                            <Button size="small" icon={<LogOut className="size-3.5" />}>
+                                {t("userPanels.profile.revokeOthers")}
+                            </Button>
                         </Popconfirm>
                         <Button size="small" icon={<RefreshCw className="size-3.5" />} loading={sessionsLoading} onClick={() => void loadSessions()}>
                             {t("common.refresh")}
@@ -1867,7 +1869,11 @@ export function MyWalletPanel({ compact = false, onOpenLogs }: { compact?: boole
                         }}
                         placeholder={[t("userPanels.wallet.startDate"), t("userPanels.wallet.endDate")]}
                     />
-                    {reasonFilter || dateRange ? <Button onClick={resetFilters}>{t("userPanels.wallet.resetFilters")}</Button> : null}
+                    {reasonFilter || dateRange ? (
+                        <Button icon={<RotateCcw className="size-4" />} onClick={resetFilters}>
+                            {t("userPanels.wallet.resetFilters")}
+                        </Button>
+                    ) : null}
                 </div>
 
                 <Table<CreditLedgerItem>
@@ -2208,7 +2214,9 @@ export function UsageLogsPanel({ defaultScope = "self" }: { defaultScope?: "all"
                         placeholder={[t("userPanels.wallet.startDate"), t("userPanels.wallet.endDate")]}
                     />
                     {reasonFilter || statusFilter || modelFilter || userQueryFilter || logIdFilter || dateRange ? (
-                        <Button onClick={resetFilters}>{t("userPanels.wallet.resetFilters")}</Button>
+                        <Button icon={<RotateCcw className="size-4" />} onClick={resetFilters}>
+                            {t("userPanels.wallet.resetFilters")}
+                        </Button>
                     ) : null}
                 </div>
 

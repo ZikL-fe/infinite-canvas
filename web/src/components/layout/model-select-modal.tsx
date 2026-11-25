@@ -1,5 +1,5 @@
 import { App, Button, Checkbox, Input, Modal, Tabs } from "antd";
-import { RefreshCw, Search } from "lucide-react";
+import { CheckSquare, Eraser, Plus, RefreshCw, Search } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 
@@ -122,7 +122,9 @@ export function ModelSelectModal({
             <div className="flex flex-wrap items-center gap-3">
                 <Input className="min-w-[200px] flex-1" value={search} onChange={(event) => setSearch(event.target.value)} placeholder={t("config.modelSelect.search")} prefix={<Search className="size-4 text-stone-400" />} allowClear />
                 <Input className="min-w-[180px] flex-1" value={manual} onChange={(event) => setManual(event.target.value)} onPressEnter={addManual} placeholder={t("config.modelSelect.modelName")} />
-                <Button onClick={addManual}>{t("config.modelSelect.add")}</Button>
+                <Button icon={<Plus className="size-4" />} onClick={addManual}>
+                    {t("config.modelSelect.add")}
+                </Button>
                 <Button icon={<RefreshCw className="size-4" />} loading={loading} onClick={() => void fetchModels()}>
                     {t("config.modelSelect.fetch")}
                 </Button>
@@ -142,10 +144,10 @@ export function ModelSelectModal({
             <div className="mb-3 flex items-center justify-between gap-2">
                 <span className="text-xs text-stone-500">{t("config.modelSelect.visibleSelected", { selected: visibleSelectedCount, total: visibleList.length })}</span>
                 <div className="flex gap-2">
-                    <Button size="small" disabled={!visibleList.length} onClick={() => selectVisible(true)}>
+                    <Button size="small" icon={<CheckSquare className="size-3.5" />} disabled={!visibleList.length} onClick={() => selectVisible(true)}>
                         {t("config.modelSelect.selectVisible")}
                     </Button>
-                    <Button size="small" disabled={!visibleSelectedCount} onClick={() => selectVisible(false)}>
+                    <Button size="small" icon={<Eraser className="size-3.5" />} disabled={!visibleSelectedCount} onClick={() => selectVisible(false)}>
                         {t("config.modelSelect.clearVisible")}
                     </Button>
                 </div>

@@ -2,7 +2,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { App, Avatar, Button, Descriptions, Drawer, Form, Input, Popconfirm, Progress, Space, Spin, Switch, Table, Tabs, Tag, Tooltip, Typography, theme as antdTheme } from "antd";
 import type { TFunction } from "i18next";
-import { Coins, HardDrive, KeyRound, RefreshCw, Shield, User } from "lucide-react";
+import { Ban, CheckCircle2, Coins, HardDrive, KeyRound, RefreshCw, Shield, User } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { formatCompactCredits, formatExactCredits } from "@/lib/format-number";
@@ -264,7 +264,12 @@ export function UserDetailDrawer({
                                         title={u.status === "active" ? t("userDetail.confirmDisable") : t("userDetail.confirmEnable")}
                                         onConfirm={() => void handleQuickUpdate({ status: u.status === "active" ? "disabled" : "active" })}
                                     >
-                                        <Button size="small" danger={u.status === "active"} loading={updating}>
+                                        <Button
+                                            size="small"
+                                            danger={u.status === "active"}
+                                            icon={u.status === "active" ? <Ban className="size-3.5" /> : <CheckCircle2 className="size-3.5" />}
+                                            loading={updating}
+                                        >
                                             {u.status === "active" ? t("userDetail.disable") : t("userDetail.enable")}
                                         </Button>
                                     </Popconfirm>

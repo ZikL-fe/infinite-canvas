@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { Button, Modal, Segmented, Tooltip } from "antd";
-import { Check, X, ZoomIn, ZoomOut } from "lucide-react";
+import { Check, RotateCcw, X, ZoomIn, ZoomOut } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { useImageEditorViewport } from "@/components/canvas/use-image-editor-viewport";
@@ -145,7 +145,9 @@ export function CanvasNodeCropDialog({ dataUrl, open, onClose, onConfirm }: { da
                 </div>
 
                 <div className="flex items-center justify-end gap-2">
-                    <Button onClick={() => setCrop(defaultCrop)}>{t("canvas.editors.reset")}</Button>
+                    <Button icon={<RotateCcw className="size-4" />} onClick={() => setCrop(defaultCrop)}>
+                        {t("canvas.editors.reset")}
+                    </Button>
                     <Button icon={<X className="size-4" />} onClick={onClose}>
                         {t("canvas.editors.cancel")}
                     </Button>

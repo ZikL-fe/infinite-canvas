@@ -1,4 +1,4 @@
-import { ArrowLeft, ArrowRight, BookOpen, CheckSquare, ClipboardPaste, Download, FolderPlus, History, ImagePlus, LoaderCircle, PenLine, Plus, SlidersHorizontal, Sparkles, Square, Trash2, Upload } from "lucide-react";
+import { ArrowLeft, ArrowRight, BookOpen, CheckSquare, ClipboardPaste, Download, Eye, FolderPlus, History, ImagePlus, LoaderCircle, PenLine, Plus, RotateCcw, SlidersHorizontal, Sparkles, Square, Trash2, Upload } from "lucide-react";
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { App, Button, Checkbox, Drawer, Empty, Image, Input, Modal, Segmented, Tag, Tooltip, Typography } from "antd";
 import localforage from "localforage";
@@ -1487,7 +1487,7 @@ export default function ImagePage() {
                                     </Tag>
                                 ) : null}
                                 {workbenchMode === "batch" && batchGroups.length ? (
-                                    <Button size="small" onClick={() => setBatchShowPreview((prev) => !prev)}>
+                                    <Button size="small" icon={<Eye className="size-3.5" />} onClick={() => setBatchShowPreview((prev) => !prev)}>
                                         {batchShowPreview ? t("imageBatch.viewBatchResults") : t("imageBatch.backToQueuePreview")}
                                     </Button>
                                 ) : null}
@@ -1855,7 +1855,7 @@ function FailedImageCard({ error, onRetry }: { error: string; onRetry: () => voi
                 </Typography.Paragraph>
             </div>
             <div className="flex justify-end border-t border-red-200 p-3 dark:border-red-950">
-                <Button size="small" danger onClick={onRetry}>
+                <Button size="small" danger icon={<RotateCcw className="size-3.5" />} onClick={onRetry}>
                     {t("workbench.retry")}
                 </Button>
             </div>
