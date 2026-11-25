@@ -31,6 +31,8 @@ import { BatchEditorPanel } from "./batch-editor-panel";
 import {
     DEFAULT_BATCH_CONCURRENCY,
     MAX_BATCH_IMAGES,
+    MAX_SAME_PROMPT_SLOTS,
+    appendSequentialSlotImages,
     buildMultiPromptBatchTasks,
     buildSamePromptBatchTasks,
     createEmptyBatchItem,
@@ -41,6 +43,7 @@ import {
     type BatchTaskItem,
     type PromptSplitMode,
     type ResolvedBatchTask,
+    type SamePromptRefMode,
 } from "./batch-utils";
 
 type GeneratedImage = {
@@ -125,6 +128,7 @@ export default function ImagePage() {
     const [liveSingleJobs, setLiveSingleJobs] = useState<Record<string, { startedAt: number; running: boolean; results: GenerationResult[] }>>({});
     const [activeSingleLogId, setActiveSingleLogId] = useState<string | null>(null);
     const [batchScenario, setBatchScenario] = useState<BatchScenario>("same-prompt");
+    const [batchSamePromptRefMode, setBatchSamePromptRefMode] = useState<SamePromptRefMode>("sequential");
     const [batchConcurrency, setBatchConcurrency] = useState(DEFAULT_BATCH_CONCURRENCY);
     const [batchSharedPrompt, setBatchSharedPrompt] = useState("");
     const [batchSamePromptSlots, setBatchSamePromptSlots] = useState<ReferenceImage[][]>(() => [[]]);
@@ -140,6 +144,7 @@ export default function ImagePage() {
     const [assetPickerTarget, setAssetPickerTarget] = useState<
         | { mode: "single" }
         | { mode: "same-prompt-text" }
+        | { mode: "same-sequential" }
         | { mode: "same-slot"; slotIndex: number }
         | { mode: "multi-ref" }
         | { mode: "custom-item"; itemId: string }
@@ -433,8 +438,24 @@ export default function ImagePage() {
             const nextRef: ReferenceImage = { id: nanoid(), name: `result-${index + 1}.png`, type: stored.mimeType, dataUrl: stored.url, storageKey: stored.storageKey };
             if (addToBatch) {
                 if (batchScenario === "same-prompt") {
-                    setBatchSamePromptSlots((prev) => prev.map((list, idx) => (idx === 0 ? [...list, nextRef] : list)));
-                    message.success(t("imageBatch.addedToSlot1"));
+                    if (batchSamePromptRefMode === "sequential") {
+                        const { nextSlots, firstSlotIndex, overflowCount } = appendSequentialSlotImages(
+                            batchSamePromptSlots,
+                            [nextRef],
+                            MAX_SAME_PROMPT_SLOTS,
+                        );
+                        if (overflowCount > 0) {
+                            message.warning(t("imageBatch.slotLimitWarning", { max: MAX_SAME_PROMPT_SLOTS }));
+                            return;
+                        }
+                        setBatchSamePromptSlots(nextSlots);
+                        setBatchShowPreview(true);
+                        message.success(t("imageBatch.addedToSlotN", { label: imageReferenceLabel(firstSlotIndex) }));
+                    } else {
+                        setBatchSamePromptSlots((prev) => prev.map((list, idx) => (idx === 0 ? [...list, nextRef] : list)));
+                        setBatchShowPreview(true);
+                        message.success(t("imageBatch.addedToSlot1"));
+                    }
                 } else if (batchScenario === "multi-prompt") {
                     setBatchSharedRefs((prev) => [...prev, nextRef]);
                     message.success(t("imageBatch.addedToSharedRefs"));
@@ -490,7 +511,20 @@ export default function ImagePage() {
         try {
             const stored = await resolvePickedImage(payload);
             const nextRef: ReferenceImage = { id: nanoid(), name: payload.title, type: stored.mimeType, dataUrl: stored.url, storageKey: stored.storageKey };
-            if (assetPickerTarget.mode === "same-slot") {
+            if (assetPickerTarget.mode === "same-sequential") {
+                const { nextSlots, overflowCount } = appendSequentialSlotImages(
+                    batchSamePromptSlots,
+                    [nextRef],
+                    MAX_SAME_PROMPT_SLOTS,
+                );
+                if (overflowCount > 0) {
+                    message.warning(t("imageBatch.slotLimitWarning", { max: MAX_SAME_PROMPT_SLOTS }));
+                    setAssetPickerOpen(false);
+                    return;
+                }
+                setBatchSamePromptSlots(nextSlots);
+                setBatchShowPreview(true);
+            } else if (assetPickerTarget.mode === "same-slot") {
                 const targetSlot = assetPickerTarget.slotIndex;
                 setBatchSamePromptSlots((prev) => prev.map((list, idx) => (idx === targetSlot ? [...list, nextRef] : list)));
             } else if (assetPickerTarget.mode === "multi-ref") {
@@ -1272,6 +1306,8 @@ export default function ImagePage() {
                                         setBatchSharedPrompt(val);
                                         setBatchShowPreview(true);
                                     }}
+                                    samePromptRefMode={batchSamePromptRefMode}
+                                    onSamePromptRefModeChange={setBatchSamePromptRefMode}
                                     samePromptSlots={batchSamePromptSlots}
                                     onSamePromptSlotsChange={(updater) => {
                                         setBatchSamePromptSlots(updater);

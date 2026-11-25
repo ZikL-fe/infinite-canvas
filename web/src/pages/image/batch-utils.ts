@@ -7,9 +7,53 @@ import type { ReferenceImage } from "@/types/image";
 export const MAX_BATCH_IMAGES = 100;
 export const DEFAULT_BATCH_CONCURRENCY = 3;
 export const MAX_BATCH_CONCURRENCY = 10;
+export const MAX_SAME_PROMPT_SLOTS = 12;
 
 export type BatchScenario = "same-prompt" | "multi-prompt" | "custom";
+export type SamePromptRefMode = "sequential" | "paired";
 export type PromptSplitMode = "line" | "blank";
+
+/** 顺延把新参考图填入空图位或追加新图位（每张图占一个图位，上限 maxSlots） */
+export function appendSequentialSlotImages(
+    slots: ReferenceImage[][],
+    incoming: ReferenceImage[],
+    maxSlots = MAX_SAME_PROMPT_SLOTS,
+): {
+    nextSlots: ReferenceImage[][];
+    addedCount: number;
+    firstSlotIndex: number;
+    lastSlotIndex: number;
+    overflowCount: number;
+} {
+    if (incoming.length === 0) {
+        return { nextSlots: slots, addedCount: 0, firstSlotIndex: -1, lastSlotIndex: -1, overflowCount: 0 };
+    }
+    const nextSlots = slots.map((list) => [...list]);
+    let addedCount = 0;
+    let firstSlotIndex = -1;
+    let lastSlotIndex = -1;
+    let overflowCount = 0;
+
+    for (const img of incoming) {
+        const emptyIdx = nextSlots.findIndex((list) => list.length === 0);
+        if (emptyIdx >= 0) {
+            nextSlots[emptyIdx] = [img];
+            if (firstSlotIndex === -1) firstSlotIndex = emptyIdx;
+            lastSlotIndex = emptyIdx;
+            addedCount += 1;
+        } else if (nextSlots.length < maxSlots) {
+            nextSlots.push([img]);
+            const idx = nextSlots.length - 1;
+            if (firstSlotIndex === -1) firstSlotIndex = idx;
+            lastSlotIndex = idx;
+            addedCount += 1;
+        } else {
+            overflowCount += 1;
+        }
+    }
+
+    return { nextSlots, addedCount, firstSlotIndex, lastSlotIndex, overflowCount };
+}
 
 export type BatchSlotReference = ReferenceImage | null;
 
