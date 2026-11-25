@@ -1,7 +1,7 @@
 import type { CSSProperties } from "react";
 import { useState } from "react";
 import { Dropdown, Modal, Popover, Progress, Tooltip, type MenuProps, theme as antdTheme } from "antd";
-import { Coins, HardDrive, Keyboard, LogIn, LogOut, Puzzle, Settings2, Shield, User } from "lucide-react";
+import { Coins, HardDrive, Keyboard, LogIn, LogOut, Puzzle, Shield, User } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
 
@@ -14,24 +14,21 @@ import { canvasThemes } from "@/lib/canvas-theme";
 import { MyWalletPanel } from "@/pages/admin/user-panels";
 import { authApi } from "@/services/api/server";
 import { flushPendingCanvasSyncs } from "@/services/cloud-sync";
-import { useConfigStore } from "@/stores/use-config-store";
 import { useThemeStore } from "@/stores/use-theme-store";
 import { useUserStore } from "@/stores/use-user-store";
 
 type UserStatusActionsProps = {
-    showConfig?: boolean;
     variant?: "default" | "canvas";
     onOpenShortcuts?: () => void;
     onOpenPlugins?: () => void;
 };
 
-export function UserStatusActions({ showConfig = true, variant = "default", onOpenShortcuts, onOpenPlugins }: UserStatusActionsProps) {
+export function UserStatusActions({ variant = "default", onOpenShortcuts, onOpenPlugins }: UserStatusActionsProps) {
     const { i18n, t } = useTranslation();
     const { token } = antdTheme.useToken();
     const navigate = useNavigate();
     const theme = useThemeStore((state) => state.theme);
     const setTheme = useThemeStore((state) => state.setTheme);
-    const openConfigDialog = useConfigStore((state) => state.openConfigDialog);
     const user = useUserStore((state) => state.user);
     const clearSession = useUserStore((state) => state.clearSession);
 
@@ -95,11 +92,6 @@ export function UserStatusActions({ showConfig = true, variant = "default", onOp
                 {onOpenPlugins ? (
                     <button type="button" className={naturalIconClass} style={iconStyle} onClick={onOpenPlugins} aria-label={t("topNav.plugins")} title={t("topNav.plugins")}>
                         <Puzzle className="size-4" />
-                    </button>
-                ) : null}
-                {showConfig && user ? (
-                    <button type="button" className={naturalIconClass} style={iconStyle} onClick={() => openConfigDialog(false)} aria-label={t("navigation.config")} title={t("navigation.config")}>
-                        <Settings2 className="size-4" />
                     </button>
                 ) : null}
                 <NotificationBellModal className={naturalIconClass} style={iconStyle} />

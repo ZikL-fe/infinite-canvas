@@ -4,10 +4,11 @@ import { Alert, App, Button, Card, Col, DatePicker, Descriptions, Drawer, Form, 
 import type { MenuProps, UploadProps } from "antd";
 import dayjs, { type Dayjs } from "dayjs";
 import type { TFunction } from "i18next";
-import { AudioLines, BarChart3, Copy, Coins, Cpu, Database, Download, FileIcon, FolderKanban, Gift, HardDrive, ImageIcon, LayoutDashboard, Mail, Megaphone, Menu as MenuIcon, Plus, RefreshCw, Save, ScrollText, Send, Shield, Sliders, Trash2, UploadCloud, UserCheck, Users, Video, Wifi, X } from "lucide-react";
+import { AudioLines, BarChart3, Copy, Coins, Cpu, Database, Download, FileIcon, FolderKanban, Gift, HardDrive, ImageIcon, LayoutDashboard, Mail, Megaphone, Menu as MenuIcon, Plus, RefreshCw, Save, ScrollText, Send, Settings2, Shield, Sliders, Trash2, UploadCloud, UserCheck, Users, Video, Wifi, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 
+import { AppConfigPanel } from "@/components/layout/app-config-modal";
 import { ChannelEditorDrawer } from "@/components/layout/channel-editor-drawer";
 import { VersionReleaseModal } from "@/components/layout/version-release-modal";
 import { formatCompactCredits, formatExactCredits } from "@/lib/format-number";
@@ -1366,6 +1367,17 @@ export default function AdminPage() {
                 </span>
             ),
             children: <MyMediaPanel />,
+        },
+        {
+            key: "config",
+            label: (
+                <span className="inline-flex items-center gap-1.5">
+                    <Settings2 className="size-4" />
+                    {t("admin.nav.config")}
+                </span>
+            ),
+            pageTitle: t("config.title"),
+            children: <AppConfigPanel />,
         },
     ];
 
