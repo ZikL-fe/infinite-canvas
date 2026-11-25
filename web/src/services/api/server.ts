@@ -714,6 +714,7 @@ export const storageApi = {
             textByTask: {} as Record<string, string>,
             videoTaskByClientTask: {} as Record<string, { taskId: string; provider?: string; model?: string; status?: string }>,
             errorByTask: {} as Record<string, string>,
+            durationByTask: {} as Record<string, number>,
         };
         if (!clean.length) return empty;
         type TasksResponse = typeof empty;
@@ -725,13 +726,14 @@ export const storageApi = {
             chunks.map((chunk) => requestServer<TasksResponse>(`/storage/by-tasks?taskIds=${encodeURIComponent(chunk.join(","))}`)),
         );
         if (results.length === 1) return results[0];
-        const merged: TasksResponse = { itemsByTask: {}, processingTaskIds: [], textByTask: {}, videoTaskByClientTask: {}, errorByTask: {} };
+        const merged: TasksResponse = { itemsByTask: {}, processingTaskIds: [], textByTask: {}, videoTaskByClientTask: {}, errorByTask: {}, durationByTask: {} };
         const procSet = new Set<string>();
         for (const res of results) {
             Object.assign(merged.itemsByTask, res.itemsByTask);
             Object.assign(merged.textByTask, res.textByTask);
             Object.assign(merged.videoTaskByClientTask, res.videoTaskByClientTask);
             Object.assign(merged.errorByTask, res.errorByTask);
+            Object.assign(merged.durationByTask, res.durationByTask || {});
             res.processingTaskIds.forEach((id) => procSet.add(id));
         }
         merged.processingTaskIds = [...procSet];
@@ -910,7 +912,10 @@ export const workbenchApi = {
 export const assetsApi = {
     list: () => requestServer<{ assets: Record<string, unknown>[]; deletedIds: { id: string; deletedAt: string }[] }>("/assets"),
     save: (id: string, payload: Record<string, unknown>) =>
-        requestServer<{ ok: boolean }>(`/assets/${encodeURIComponent(id)}`, { method: "PUT", body: JSON.stringify(payload) }),
+        requestServer<{ ok: boolean; skippedDeleted?: boolean; deletedMediaCount?: number }>(`/assets/${encodeURIComponent(id)}`, {
+            method: "PUT",
+            body: JSON.stringify(payload),
+        }),
     remove: (id: string) => requestServer<{ ok: boolean }>(`/assets/${encodeURIComponent(id)}`, { method: "DELETE" }),
 };
 

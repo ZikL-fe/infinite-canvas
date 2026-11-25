@@ -3,6 +3,7 @@ import type LocalForage from "localforage";
 
 import { authApi, workbenchApi } from "@/services/api/server";
 import { isCloudAuthenticated, notifyCloudWorkspaceChanged } from "@/services/cloud-media";
+import { ensureCloudMediaUploaded, stripBlobUrls } from "@/services/cloud-media-sync";
 import { useUserStore } from "@/stores/use-user-store";
 
 const deletedWorkbenchLogIds = new Set<string>();
@@ -17,21 +18,6 @@ type BaseWorkbenchLog = {
     status: "pending" | "success" | "failed";
     durationMs: number;
 };
-
-function stripBlobUrls<T>(value: T): T {
-    if (typeof value === "string") {
-        return (value.startsWith("blob:") ? "" : value) as unknown as T;
-    }
-    if (!value || typeof value !== "object") return value;
-    if (Array.isArray(value)) {
-        return value.map((item) => stripBlobUrls(item)) as unknown as T;
-    }
-    const next: Record<string, unknown> = {};
-    for (const [k, v] of Object.entries(value)) {
-        next[k] = stripBlobUrls(v);
-    }
-    return next as T;
-}
 
 function buildWorkbenchPayload<T extends BaseWorkbenchLog>(kind: "image" | "video", log: T) {
     const clean = stripBlobUrls(log);
@@ -49,9 +35,10 @@ function buildWorkbenchPayload<T extends BaseWorkbenchLog>(kind: "image" | "vide
     };
 }
 
-/** 将单条工作台生成记录推送到云端。 */
+/** 将单条工作台生成记录推送到云端（仅在真正生成写入记录时才把暂存参考图上传到对象存储）。 */
 export async function pushWorkbenchLogToCloud<T extends BaseWorkbenchLog>(kind: "image" | "video", log: T) {
     if (!isCloudAuthenticated() || deletedWorkbenchLogIds.has(log.id)) return;
+    await ensureCloudMediaUploaded(log).catch(() => false);
     const res = await workbenchApi.saveLog(log.id, buildWorkbenchPayload(kind, log)).catch((err) => {
         console.warn("[workbench-sync] 同步工作台记录失败:", err);
         return null;

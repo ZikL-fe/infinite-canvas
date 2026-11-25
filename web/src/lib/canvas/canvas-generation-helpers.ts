@@ -93,7 +93,7 @@ export async function hydrateCanvasImages(nodes: CanvasNodeData[]) {
                 };
             }
             if (!content.startsWith("data:image/")) return node;
-            return { ...node, metadata: { ...metadata, ...imageMetadata(await uploadImage(content)) } };
+            return { ...node, metadata: { ...metadata, ...imageMetadata(await uploadImage(content, { localOnly: true })) } };
         }),
     );
 }
@@ -102,7 +102,7 @@ export async function hydrateAssistantImages(sessions: CanvasAssistantSession[])
     const hydrateItem = async <T extends { dataUrl?: string; storageKey?: string }>(item: T) => {
         if (item.storageKey) return { ...item, dataUrl: await resolveImageUrl(item.storageKey, item.dataUrl) };
         if (item.dataUrl?.startsWith("data:image/")) {
-            const image = await uploadImage(item.dataUrl);
+            const image = await uploadImage(item.dataUrl, { localOnly: true });
             return { ...item, dataUrl: image.url, storageKey: image.storageKey };
         }
         return item;

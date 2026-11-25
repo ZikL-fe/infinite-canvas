@@ -159,7 +159,7 @@ export default function AssetsPage() {
         if (!file || !file.type.startsWith("image/")) return;
         setUploadingImage(true);
         try {
-            const image = await uploadImage(file);
+            const image = await uploadImage(file, { localOnly: true });
             const draft = { dataUrl: image.url, storageKey: image.storageKey, width: image.width, height: image.height, bytes: image.bytes, mimeType: image.mimeType };
             setImageDraft(draft);
             if (!form.getFieldValue("coverUrl")) form.setFieldValue("coverUrl", draft.dataUrl);

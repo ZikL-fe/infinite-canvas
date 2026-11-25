@@ -177,7 +177,7 @@ export default function VideoPage() {
         try {
             const nextReferences = await Promise.all(
                 imageFiles.map(async (file) => {
-                    const image = await uploadImage(file);
+                    const image = await uploadImage(file, { localOnly: true });
                     return { id: nanoid(), name: file.name, type: image.mimeType, dataUrl: image.url, storageKey: image.storageKey };
                 }),
             );
@@ -219,7 +219,7 @@ export default function VideoPage() {
             }
             const nextReferences = await Promise.all(
                 blobs.slice(0, 7 - references.length).map(async (blob, index) => {
-                    const image = await uploadImage(blob);
+                    const image = await uploadImage(blob, { localOnly: true });
                     return { id: nanoid(), name: `clipboard-${index + 1}.png`, type: image.mimeType, dataUrl: image.url, storageKey: image.storageKey };
                 }),
             );
@@ -330,7 +330,7 @@ export default function VideoPage() {
         }
         const hide = message.loading(t("workbench.importingReference"), 0);
         try {
-            const stored = await resolvePickedImage(payload);
+            const stored = await resolvePickedImage(payload, { localOnly: true });
             setReferences((value) => [...value, { id: nanoid(), name: payload.title, type: stored.mimeType, dataUrl: stored.url, storageKey: stored.storageKey }].slice(0, 7));
             setAssetPickerOpen(false);
             message.success(t("videoWorkbench.addedReference"));
@@ -356,7 +356,7 @@ export default function VideoPage() {
         const deletingIds = [...selectedLogIds];
         setDeletingLogs(true);
         try {
-            await deleteWorkbenchLogsWithCloud(logStore, deletingIds, () => cleanupImages(), "video");
+            await deleteWorkbenchLogsWithCloud(logStore, deletingIds, () => cleanupImages({ references }), "video");
             await refreshLogs();
             if (previewLog && deletingIds.includes(previewLog.id)) {
                 setPreviewLog(null);
@@ -416,7 +416,10 @@ export default function VideoPage() {
                         id: nanoid(),
                         url: stored.url,
                         storageKey: stored.storageKey,
-                        durationMs: Date.now() - log.createdAt,
+                        durationMs:
+                            typeof state.result.durationMs === "number" && state.result.durationMs > 0
+                                ? state.result.durationMs
+                                : Date.now() - log.createdAt,
                         width: stored.width || 1280,
                         height: stored.height || 720,
                         bytes: stored.bytes,

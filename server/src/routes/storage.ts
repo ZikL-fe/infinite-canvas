@@ -1,6 +1,6 @@
 /** 云端媒体存储接口：S3 预签名直传、远端抓取转存、WebDAV 生成素材自动归档及配额统计。 */
 import { zValidator } from "@hono/zod-validator";
-import { and, asc, count, desc, eq, ilike, inArray, isNull, or, sql, type SQL } from "drizzle-orm";
+import { and, asc, count, desc, eq, ilike, inArray, isNull, notInArray, or, sql, type SQL } from "drizzle-orm";
 import { Hono } from "hono";
 import { nanoid } from "nanoid";
 import { z } from "zod";
@@ -461,7 +461,7 @@ storageRoutes.get("/list", async (c) => {
   const pageSize = Math.min(100, Math.max(1, Number(c.req.query("pageSize") || 20)));
   const offset = (page - 1) * pageSize;
 
-  const [{ moduleMap }, [canvasCount], [imageLogCount], [videoLogCount], [assetCount]] = await Promise.all([
+  const [{ moduleMap, activeKeySet }, [canvasCount], [imageLogCount], [videoLogCount], [assetCount]] = await Promise.all([
     collectUserMediaReferences([user.id]),
     db.select({ total: count() }).from(canvasProjects).where(and(eq(canvasProjects.userId, user.id), isNull(canvasProjects.deletedAt))),
     db.select({ total: count() }).from(workbenchLogs).where(and(eq(workbenchLogs.userId, user.id), eq(workbenchLogs.kind, "image"), isNull(workbenchLogs.deletedAt))),
@@ -483,7 +483,12 @@ storageRoutes.get("/list", async (c) => {
   if (sourceType === "upload" || sourceType === "ai_generated" || sourceType === "canvas_import") {
     filters.push(eq(mediaObjects.sourceType, sourceType));
   }
-  if (moduleFilter === "canvas" || moduleFilter === "image_workbench" || moduleFilter === "video_workbench" || moduleFilter === "assets") {
+  if (moduleFilter === "standalone") {
+    const referencedIds = Array.from(activeKeySet);
+    if (referencedIds.length) {
+      filters.push(notInArray(mediaObjects.id, referencedIds));
+    }
+  } else if (moduleFilter === "canvas" || moduleFilter === "image_workbench" || moduleFilter === "video_workbench" || moduleFilter === "assets") {
     const matchedIds = Array.from(moduleMap.entries())
       .filter(([, mods]) => mods.has(moduleFilter as MediaSourceModule))
       .map(([id]) => id);
@@ -621,6 +626,8 @@ storageRoutes.get("/by-tasks", async (c) => {
       upstream_task_id: string | null;
       provider: string | null;
       model: string | null;
+      duration_ms: string | null;
+      ledger_created_at: Date | string;
     }>(
       sql`SELECT
         meta->>'clientTaskId' AS client_task_id,
@@ -629,7 +636,9 @@ storageRoutes.get("/by-tasks", async (c) => {
         meta->>'errorMessage' AS error_message,
         meta->>'taskId' AS upstream_task_id,
         meta->>'provider' AS provider,
-        meta->>'model' AS model
+        meta->>'model' AS model,
+        meta->>'durationMs' AS duration_ms,
+        created_at AS ledger_created_at
       FROM credit_ledger
       WHERE user_id = ${user.id}
         AND meta->>'clientTaskId' IN (${sql.join(
@@ -641,6 +650,7 @@ storageRoutes.get("/by-tasks", async (c) => {
   ]);
 
   const itemsByTask: Record<string, Array<Record<string, unknown>>> = {};
+  const mediaCreatedAtByTask: Record<string, number> = {};
   await Promise.all(
     rows.map(async (row) => {
       const taskId = typeof row.meta?.clientTaskId === "string" ? row.meta.clientTaskId : "";
@@ -652,6 +662,10 @@ storageRoutes.get("/by-tasks", async (c) => {
       ]);
       if (!itemsByTask[taskId]) itemsByTask[taskId] = [];
       itemsByTask[taskId].push({ ...row, url, thumbnailUrl });
+      const createdMs = row.createdAt instanceof Date ? row.createdAt.getTime() : new Date(row.createdAt).getTime();
+      if (Number.isFinite(createdMs) && createdMs > (mediaCreatedAtByTask[taskId] || 0)) {
+        mediaCreatedAtByTask[taskId] = createdMs;
+      }
     }),
   );
 
@@ -659,12 +673,26 @@ storageRoutes.get("/by-tasks", async (c) => {
   const textByTask: Record<string, string> = {};
   const videoTaskByClientTask: Record<string, { taskId: string; provider?: string; model?: string; status?: string }> = {};
   const errorByTask: Record<string, string> = {};
+  const durationByTask: Record<string, number> = {};
   const seenLedgerTasks = new Set<string>();
 
   for (const row of ledgerRows) {
     const cid = row.client_task_id;
     if (!cid || seenLedgerTasks.has(cid)) continue;
     seenLedgerTasks.add(cid);
+
+    const metaDuration = Number(row.duration_ms);
+    if (Number.isFinite(metaDuration) && metaDuration > 0) {
+      durationByTask[cid] = Math.round(metaDuration);
+    } else if (mediaCreatedAtByTask[cid]) {
+      const startMs =
+        row.ledger_created_at instanceof Date
+          ? row.ledger_created_at.getTime()
+          : new Date(row.ledger_created_at).getTime();
+      if (Number.isFinite(startMs) && mediaCreatedAtByTask[cid] > startMs) {
+        durationByTask[cid] = Math.round(mediaCreatedAtByTask[cid] - startMs);
+      }
+    }
 
     const status = row.task_status || "";
     const hasMedia = Boolean(itemsByTask[cid]?.length);
@@ -697,6 +725,7 @@ storageRoutes.get("/by-tasks", async (c) => {
     textByTask,
     videoTaskByClientTask,
     errorByTask,
+    durationByTask,
   });
 });
 

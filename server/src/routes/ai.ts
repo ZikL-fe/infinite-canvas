@@ -425,7 +425,14 @@ async function handleVideoPollTaskState(userId: string, taskId: string, payload:
   });
   if (!task || task.status !== "pending") return;
 
-  await patchLedgerMetaByTaskId(userId, taskId, { taskStatus: nextStatus }).catch(() => undefined);
+  const durationMs =
+    nextStatus === "completed" || nextStatus === "failed"
+      ? Math.max(1, Date.now() - task.createdAt.getTime())
+      : undefined;
+  await patchLedgerMetaByTaskId(userId, taskId, {
+    taskStatus: nextStatus,
+    ...(durationMs ? { durationMs } : {}),
+  }).catch(() => undefined);
 
   if (nextStatus === "failed") {
     const [updated] = await db
@@ -440,7 +447,10 @@ async function handleVideoPollTaskState(userId: string, taskId: string, payload:
         refId: task.taskId,
         refundAmount: updated.chargedCredits,
         markFailed: true,
-        metaPatch: { refundDetail: "视频生成任务失败自动退回积分" },
+        metaPatch: {
+          refundDetail: "视频生成任务失败自动退回积分",
+          ...(durationMs ? { durationMs } : {}),
+        },
       });
     }
   } else if (nextStatus === "completed") {

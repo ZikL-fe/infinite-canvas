@@ -16,7 +16,7 @@ const objectUrls = new Map<string, string>();
 export async function uploadMediaFile(
     input: string | Blob,
     prefix = "file",
-    options?: { sourceType?: "upload" | "ai_generated" | "canvas_import"; filename?: string; existingStorageKey?: string },
+    options?: { sourceType?: "upload" | "ai_generated" | "canvas_import"; filename?: string; existingStorageKey?: string; localOnly?: boolean },
 ): Promise<UploadedFile> {
     const blob = typeof input === "string" ? await (await fetch(withLocalProxy(input))).blob() : input;
     const storageKey = options?.existingStorageKey || `${prefix}:${nanoid()}`;
@@ -26,10 +26,10 @@ export async function uploadMediaFile(
     const meta = blob.type.startsWith("video/") ? await readVideoMeta(url) : blob.type.startsWith("audio/") ? await readAudioMeta(url) : {};
     const thumbnailBlob = blob.type.startsWith("video/") ? await createVideoThumbnail(blob, 480).catch(() => undefined) : undefined;
     if (options?.existingStorageKey) {
-        if (thumbnailBlob && isCloudAuthenticated()) {
+        if (!options?.localOnly && thumbnailBlob && isCloudAuthenticated()) {
             void storageApi.uploadThumbnail(storageKey, thumbnailBlob).catch(() => undefined);
         }
-    } else {
+    } else if (!options?.localOnly) {
         await uploadBlobToCloud(storageKey, blob, inferCloudMediaKind(storageKey, blob.type), {
             ...meta,
             filename: options?.filename,

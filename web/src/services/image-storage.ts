@@ -33,9 +33,12 @@ const IMAGE_TIMEOUT_ERROR = "ImageTimeoutError";
 
 type StoredImagePreview = { version: number; blob?: Blob };
 
-type ImageReadOptions = { signal?: AbortSignal; sourceType?: "upload" | "ai_generated" | "canvas_import"; filename?: string; existingStorageKey?: string };
+type ImageReadOptions = { signal?: AbortSignal; sourceType?: "upload" | "ai_generated" | "canvas_import"; filename?: string; existingStorageKey?: string; localOnly?: boolean };
 
-export async function resolvePickedImage(payload: { dataUrl: string; storageKey?: string }): Promise<{ url: string; storageKey?: string; mimeType: string }> {
+export async function resolvePickedImage(
+    payload: { dataUrl: string; storageKey?: string },
+    options?: { localOnly?: boolean },
+): Promise<{ url: string; storageKey?: string; mimeType: string }> {
     if (payload.storageKey) {
         const blob = await getImageBlob(payload.storageKey).catch(() => null);
         if (blob) {
@@ -49,7 +52,7 @@ export async function resolvePickedImage(payload: { dataUrl: string; storageKey?
         }
     }
     if (!payload.dataUrl) throw new Error(i18n.t("common.imageReadFailed"));
-    const stored = await uploadImage(payload.dataUrl, { existingStorageKey: payload.storageKey });
+    const stored = await uploadImage(payload.dataUrl, { existingStorageKey: payload.storageKey, localOnly: options?.localOnly });
     return { url: stored.url, storageKey: stored.storageKey, mimeType: stored.mimeType };
 }
 
@@ -85,15 +88,17 @@ async function storeImage(blob: Blob, options?: ImageReadOptions): Promise<Uploa
         throwIfAborted(options?.signal);
         objectUrls.set(storageKey, url);
         await storeImagePreview(storageKey, blob);
-        const cloudThumb = (await createImageThumbnail(blob, 480).catch(() => undefined)) || blob;
-        await uploadBlobToCloud(storageKey, blob, "image", {
-            width: meta.width,
-            height: meta.height,
-            filename: options?.filename,
-            sourceType: options?.sourceType,
-            alreadyInS3,
-            thumbnailBlob: cloudThumb,
-        });
+        if (!options?.localOnly) {
+            const cloudThumb = (await createImageThumbnail(blob, 480).catch(() => undefined)) || blob;
+            await uploadBlobToCloud(storageKey, blob, "image", {
+                width: meta.width,
+                height: meta.height,
+                filename: options?.filename,
+                sourceType: options?.sourceType,
+                alreadyInS3,
+                thumbnailBlob: cloudThumb,
+            });
+        }
         return { url, storageKey, width: meta.width, height: meta.height, bytes: blob.size, mimeType: blob.type.startsWith("image/") ? blob.type : "" };
     } catch (error) {
         URL.revokeObjectURL(url);

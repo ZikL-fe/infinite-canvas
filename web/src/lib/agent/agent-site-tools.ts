@@ -312,7 +312,7 @@ async function addAsset(input: SiteToolInput) {
         if (!imageUrl) throw new Error(siteText("imageUrlRequired"));
         let stored;
         try {
-            stored = await uploadImage(imageUrl);
+            stored = await uploadImage(imageUrl, { localOnly: true });
         } catch {
             throw new Error(siteText("imageReadFailed"));
         }

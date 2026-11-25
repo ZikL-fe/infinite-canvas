@@ -64,13 +64,14 @@ function getKindLabel(kind: string, t: TFunction) {
     return kind;
 }
 
-export function getMediaModuleOptions(t: TFunction): Array<{ value: "" | MediaSourceModule; label: string }> {
+export function getMediaModuleOptions(t: TFunction): Array<{ value: "" | MediaSourceModule | "standalone"; label: string }> {
     return [
         { value: "", label: t("userPanels.mediaModules.all") },
         { value: "canvas", label: t("userPanels.mediaModules.canvas") },
         { value: "image_workbench", label: t("userPanels.mediaModules.image_workbench") },
         { value: "video_workbench", label: t("userPanels.mediaModules.video_workbench") },
         { value: "assets", label: t("userPanels.mediaModules.assets") },
+        { value: "standalone", label: t("userPanels.mediaModules.standalone") },
     ];
 }
 

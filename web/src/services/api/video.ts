@@ -13,14 +13,25 @@ import { runModelPlugin } from "./model-plugin";
 import type { ReferenceImage } from "@/types/image";
 import type { ReferenceAudio, ReferenceVideo } from "@/types/media";
 
-type VideoResponse = { id: string; status?: string; error?: { message?: string }; url?: string; result_url?: string; video_url?: string; content?: { video_url?: string; url?: string } | null };
+type VideoResponse = {
+    id: string;
+    status?: string;
+    created_at?: number | string;
+    completed_at?: number | string;
+    finished_at?: number | string;
+    error?: { message?: string };
+    url?: string;
+    result_url?: string;
+    video_url?: string;
+    content?: { video_url?: string; url?: string } | null;
+};
 type ApiVideoResponse = VideoResponse | { code?: number | string; data?: VideoResponse | null; msg?: string; message?: string; error?: { message?: string } };
 type ApiEnvelope<T> = T | { code?: number | string; data?: T | null; msg?: string; message?: string; error?: { message?: string } };
 type RequestOptions = { signal?: AbortSignal; clientTaskId?: string };
 type VideoMediaOptions = RequestOptions & { videos?: ReferenceVideo[]; audios?: ReferenceAudio[] };
 const apiText = (key: string, options?: Record<string, unknown>) => i18n.t(`apiErrors.${key}`, options);
 
-export type VideoGenerationResult = { blob?: Blob; url?: string; mimeType?: string; storageKey?: string };
+export type VideoGenerationResult = { blob?: Blob; url?: string; mimeType?: string; storageKey?: string; durationMs?: number };
 export type VideoGenerationTask = { id: string; provider: "openai" | "gemini" | "plugin"; model: string };
 type GeminiInlineData = { bytesBase64Encoded: string; mimeType: string };
 type GeminiVideoOperation = {
@@ -206,20 +217,57 @@ async function createOpenAIVideoTask(config: AiConfig, model: string, prompt: st
     }
 }
 
+function parseUpstreamTimestampMs(value: unknown): number | undefined {
+    if (typeof value === "number" && Number.isFinite(value) && value > 0) {
+        return value < 1e12 ? value * 1000 : value;
+    }
+    if (typeof value === "string" && value.trim()) {
+        const numeric = Number(value);
+        if (Number.isFinite(numeric) && numeric > 0) return numeric < 1e12 ? numeric * 1000 : numeric;
+        const parsed = Date.parse(value);
+        if (Number.isFinite(parsed) && parsed > 0) return parsed;
+    }
+    return undefined;
+}
+
+function extractVideoDurationMs(video: VideoResponse): number | undefined {
+    const completedMs = parseUpstreamTimestampMs(video.completed_at ?? video.finished_at);
+    const createdMs = parseUpstreamTimestampMs(video.created_at);
+    if (completedMs && createdMs && completedMs > createdMs) {
+        return Math.round(completedMs - createdMs);
+    }
+    return undefined;
+}
+
 async function pollOpenAIVideoTask(config: AiConfig, task: VideoGenerationTask, options?: RequestOptions): Promise<VideoGenerationTaskState> {
     try {
         const pollRes = await aiAxios.get<ApiVideoResponse>(aiApiUrl(config, `/videos/${task.id}`), { headers: aiHeaders(config), signal: options?.signal });
         const cloudMediaId = readCloudMediaIdsHeader(pollRes.headers)[0] || undefined;
         const video = unwrapVideoResponse(pollRes.data);
+        const upstreamDurationMs = extractVideoDurationMs(video);
         const url = videoResultUrl(video);
         if (url) {
             const result = await videoResultFromUrl(url, options);
-            return { status: "completed", result: cloudMediaId ? { ...result, storageKey: cloudMediaId } : result };
+            return {
+                status: "completed",
+                result: {
+                    ...result,
+                    ...(cloudMediaId ? { storageKey: cloudMediaId } : {}),
+                    ...(upstreamDurationMs ? { durationMs: upstreamDurationMs } : {}),
+                },
+            };
         }
         if (video.status === "completed") {
             const content = await aiAxios.get<Blob>(aiApiUrl(config, `/videos/${task.id}/content`), { headers: aiHeaders(config), responseType: "blob", signal: options?.signal });
             await assertVideoBlob(content.data);
-            return { status: "completed", result: { blob: content.data, ...(cloudMediaId ? { storageKey: cloudMediaId } : {}) } };
+            return {
+                status: "completed",
+                result: {
+                    blob: content.data,
+                    ...(cloudMediaId ? { storageKey: cloudMediaId } : {}),
+                    ...(upstreamDurationMs ? { durationMs: upstreamDurationMs } : {}),
+                },
+            };
         }
         if (video.status === "failed" || video.status === "cancelled") {
             scheduleRefreshUserBalance();

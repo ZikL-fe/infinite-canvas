@@ -263,7 +263,7 @@ export function BatchEditorPanel({
         try {
             return await Promise.all(
                 imageFiles.map(async (file) => {
-                    const image = await uploadImage(file);
+                    const image = await uploadImage(file, { localOnly: true });
                     return { id: nanoid(), name: file.name, type: image.mimeType, dataUrl: image.url, storageKey: image.storageKey };
                 }),
             );
@@ -285,7 +285,7 @@ export function BatchEditorPanel({
             }
             const uploaded = await Promise.all(
                 blobs.map(async (blob, index) => {
-                    const image = await uploadImage(blob);
+                    const image = await uploadImage(blob, { localOnly: true });
                     return { id: nanoid(), name: `clipboard-${index + 1}.png`, type: image.mimeType, dataUrl: image.url, storageKey: image.storageKey };
                 }),
             );

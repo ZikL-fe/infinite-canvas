@@ -66,6 +66,10 @@ assetRoutes.put("/:id", zValidator("json", upsertAssetSchema), async (c) => {
     return c.json({ error: "无权修改该素材" }, 403);
   }
 
+  const oldKeys = new Set<string>();
+  if (existing?.mediaId) oldKeys.add(existing.mediaId);
+  if (existing?.data) extractStorageKeys(existing.data, oldKeys);
+
   const rawStorageKey = typeof body.data.storageKey === "string" ? body.data.storageKey : null;
   let validMediaId: string | null = null;
   if (rawStorageKey) {
@@ -99,26 +103,33 @@ assetRoutes.put("/:id", zValidator("json", upsertAssetSchema), async (c) => {
       createdAt,
       updatedAt,
     });
+    return c.json({ ok: true, deletedMediaCount: 0 });
   } else if (existing.deletedAt) {
-    return c.json({ ok: true, skippedDeleted: true });
-  } else {
-    await db
-      .update(userAssets)
-      .set({
-        kind: body.kind,
-        title: body.title,
-        mediaId: validMediaId,
-        coverUrl: body.coverUrl,
-        tags: body.tags,
-        source: body.source ?? null,
-        note: body.note ?? null,
-        data: mergedData,
-        updatedAt,
-      })
-      .where(and(eq(userAssets.id, id), eq(userAssets.userId, user.id)));
+    return c.json({ ok: true, skippedDeleted: true, deletedMediaCount: 0 });
   }
 
-  return c.json({ ok: true });
+  const newKeys = new Set<string>();
+  if (validMediaId) newKeys.add(validMediaId);
+  extractStorageKeys(mergedData, newKeys);
+  const removedKeys = Array.from(oldKeys).filter((key) => !newKeys.has(key));
+
+  await db
+    .update(userAssets)
+    .set({
+      kind: body.kind,
+      title: body.title,
+      mediaId: validMediaId,
+      coverUrl: body.coverUrl,
+      tags: body.tags,
+      source: body.source ?? null,
+      note: body.note ?? null,
+      data: mergedData,
+      updatedAt,
+    })
+    .where(and(eq(userAssets.id, id), eq(userAssets.userId, user.id)));
+
+  const deletedMediaCount = await cleanupOrphanedUserMedia(user.id, removedKeys);
+  return c.json({ ok: true, deletedMediaCount });
 });
 
 assetRoutes.delete("/:id", async (c) => {

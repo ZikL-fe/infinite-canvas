@@ -295,7 +295,7 @@ export default function ImagePage() {
         try {
             const nextReferences = await Promise.all(
                 imageFiles.map(async (file) => {
-                    const image = await uploadImage(file);
+                    const image = await uploadImage(file, { localOnly: true });
                     return { id: nanoid(), name: file.name, type: image.mimeType, dataUrl: image.url, storageKey: image.storageKey };
                 }),
             );
@@ -318,7 +318,7 @@ export default function ImagePage() {
             }
             const nextReferences = await Promise.all(
                 blobs.map(async (blob, index) => {
-                    const image = await uploadImage(blob);
+                    const image = await uploadImage(blob, { localOnly: true });
                     return { id: nanoid(), name: `clipboard-${index + 1}.png`, type: image.mimeType, dataUrl: image.url, storageKey: image.storageKey };
                 }),
             );
@@ -434,7 +434,7 @@ export default function ImagePage() {
 
     const addResultToReferences = async (image: GeneratedImage, index: number, addToBatch?: boolean) => {
         try {
-            const stored = await resolvePickedImage(image);
+            const stored = await resolvePickedImage(image, { localOnly: true });
             const nextRef: ReferenceImage = { id: nanoid(), name: `result-${index + 1}.png`, type: stored.mimeType, dataUrl: stored.url, storageKey: stored.storageKey };
             if (addToBatch) {
                 if (batchScenario === "same-prompt") {
@@ -474,7 +474,7 @@ export default function ImagePage() {
 
     const saveResultToAssets = async (image: GeneratedImage, index: number, promptOverride?: string) => {
         try {
-            const stored = image.storageKey ? await resolvePickedImage(image) : await uploadImage(image.dataUrl);
+            const stored = image.storageKey ? await resolvePickedImage(image, { localOnly: true }) : await uploadImage(image.dataUrl, { localOnly: true });
             addAsset({
                 kind: "image",
                 title: t("imageWorkbench.resultTitle", { count: index + 1 }),
@@ -509,7 +509,7 @@ export default function ImagePage() {
         }
         const hide = message.loading(t("workbench.importingReference"), 0);
         try {
-            const stored = await resolvePickedImage(payload);
+            const stored = await resolvePickedImage(payload, { localOnly: true });
             const nextRef: ReferenceImage = { id: nanoid(), name: payload.title, type: stored.mimeType, dataUrl: stored.url, storageKey: stored.storageKey };
             if (assetPickerTarget.mode === "same-sequential") {
                 const { nextSlots, overflowCount } = appendSequentialSlotImages(
@@ -569,7 +569,12 @@ export default function ImagePage() {
         const deletingIds = [...selectedLogIds];
         setDeletingLogs(true);
         try {
-            await deleteWorkbenchLogsWithCloud(logStore, deletingIds, () => cleanupImages(), "image");
+            await deleteWorkbenchLogsWithCloud(
+                logStore,
+                deletingIds,
+                () => cleanupImages({ references, batchSamePromptSlots, batchSharedRefs, batchCustomItems }),
+                "image",
+            );
             await refreshLogs();
             if (previewLog && deletingIds.includes(previewLog.id)) {
                 setPreviewLog(null);
@@ -618,6 +623,7 @@ export default function ImagePage() {
                 const res = await storageApi.getByTasks(taskIds);
                 if (cancelled) return;
                 const errorByTask = res.errorByTask || {};
+                const durationByTask = res.durationByTask || {};
 
                 let changed = false;
                 for (const log of pendingLogs) {
@@ -633,11 +639,18 @@ export default function ImagePage() {
                                 if (!media.url) continue;
                                 const stored = await uploadImage(media.url, { existingStorageKey: media.id, sourceType: "ai_generated" }).catch(() => null);
                                 if (stored) {
+                                    const mediaCreatedMs = media.createdAt ? new Date(media.createdAt).getTime() : NaN;
+                                    const taskDurationMs =
+                                        typeof durationByTask[tid] === "number" && durationByTask[tid] > 0
+                                            ? durationByTask[tid]
+                                            : Number.isFinite(mediaCreatedMs) && mediaCreatedMs > log.createdAt
+                                              ? mediaCreatedMs - log.createdAt
+                                              : Math.max(1, Date.now() - log.createdAt);
                                     recoveredImages.push({
                                         id: media.id,
                                         dataUrl: stored.url,
                                         storageKey: stored.storageKey || media.id,
-                                        durationMs: Date.now() - log.createdAt,
+                                        durationMs: taskDurationMs,
                                         width: stored.width || media.width || 0,
                                         height: stored.height || media.height || 0,
                                         bytes: stored.bytes || media.bytes || 0,
@@ -652,14 +665,17 @@ export default function ImagePage() {
                         }
                     }
 
+                    const ledgerMaxDurationMs = Math.max(0, ...slotIds.map((tid) => (typeof durationByTask[tid] === "number" ? durationByTask[tid] : 0)));
+
                     if (recoveredImages.length > 0 && (!hasStillProcessing || attempt >= 20)) {
+                        const recoveredMaxDurationMs = Math.max(ledgerMaxDurationMs, ...recoveredImages.map((img) => img.durationMs || 0));
                         const updated: GenerationLog = {
                             ...log,
                             updatedAt: new Date().toISOString(),
                             status: "success",
                             successCount: recoveredImages.length,
                             failCount: Math.max(0, slotIds.length - recoveredImages.length),
-                            durationMs: Date.now() - log.createdAt,
+                            durationMs: recoveredMaxDurationMs > 0 ? recoveredMaxDurationMs : Date.now() - log.createdAt,
                             ...(recoveredErrors.length ? { error: recoveredErrors[0], errors: recoveredErrors } : {}),
                             images: recoveredImages,
                         };
@@ -674,6 +690,7 @@ export default function ImagePage() {
                             updatedAt: new Date().toISOString(),
                             status: "failed",
                             failCount: slotIds.length,
+                            ...(ledgerMaxDurationMs > 0 ? { durationMs: ledgerMaxDurationMs } : {}),
                             ...(recoveredErrors.length ? { error: recoveredErrors[0], errors: recoveredErrors } : {}),
                         };
                         const serialized = serializeLog(failedLog);

@@ -1,7 +1,7 @@
 /** 管理员后台接口：系统概览、公告发布、用户管控、兑换码、渠道模型、对象存储、WebDAV 与全站使用日志。 */
 import { randomBytes } from "node:crypto";
 import { zValidator } from "@hono/zod-validator";
-import { and, asc, count, desc, eq, ilike, inArray, isNull, ne, or, sql, type SQL } from "drizzle-orm";
+import { and, asc, count, desc, eq, ilike, inArray, isNull, ne, notInArray, or, sql, type SQL } from "drizzle-orm";
 import { Hono } from "hono";
 import { nanoid } from "nanoid";
 import { z } from "zod";
@@ -1497,16 +1497,29 @@ adminRoutes.get("/media", async (c) => {
   if (kind === "image" || kind === "video" || kind === "audio" || kind === "file") {
     filters.push(eq(mediaObjects.kind, kind));
   }
-  if (moduleFilter === "canvas" || moduleFilter === "image_workbench" || moduleFilter === "video_workbench" || moduleFilter === "assets") {
+  if (
+    moduleFilter === "standalone" ||
+    moduleFilter === "canvas" ||
+    moduleFilter === "image_workbench" ||
+    moduleFilter === "video_workbench" ||
+    moduleFilter === "assets"
+  ) {
     const allUserRows = await db.select({ id: users.id }).from(users);
-    const { moduleMap: allMap } = await collectUserMediaReferences(allUserRows.map((u) => u.id));
-    const matchedIds = Array.from(allMap.entries())
-      .filter(([, mods]) => mods.has(moduleFilter as MediaSourceModule))
-      .map(([id]) => id);
-    if (!matchedIds.length) {
-      return c.json({ items: [], total: 0, filteredBytes: 0, page, pageSize, workspaceStats });
+    const { moduleMap: allMap, activeKeySet } = await collectUserMediaReferences(allUserRows.map((u) => u.id));
+    if (moduleFilter === "standalone") {
+      const referencedIds = Array.from(activeKeySet);
+      if (referencedIds.length) {
+        filters.push(notInArray(mediaObjects.id, referencedIds));
+      }
+    } else {
+      const matchedIds = Array.from(allMap.entries())
+        .filter(([, mods]) => mods.has(moduleFilter as MediaSourceModule))
+        .map(([id]) => id);
+      if (!matchedIds.length) {
+        return c.json({ items: [], total: 0, filteredBytes: 0, page, pageSize, workspaceStats });
+      }
+      filters.push(inArray(mediaObjects.id, matchedIds));
     }
-    filters.push(inArray(mediaObjects.id, matchedIds));
   }
   if (q) {
     const searchCond = or(ilike(mediaObjects.objectKey, `%${q}%`), ilike(users.username, `%${q}%`));
