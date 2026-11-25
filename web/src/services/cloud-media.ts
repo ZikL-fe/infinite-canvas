@@ -14,6 +14,8 @@ const inFlightUrls = new Map<string, Promise<string>>();
 const inFlightBlobs = new Map<string, Promise<Blob | null>>();
 const urlCache = new Map<string, { url: string; expiresAt: number }>();
 const thumbnailUrlCache = new Map<string, { url: string; expiresAt: number }>();
+const missingCloudMediaKeys = new Set<string>();
+const missingCloudThumbKeys = new Set<string>();
 const URLS_BATCH_LIMIT = 100;
 const DEFAULT_PRESIGN_EXPIRES_SECONDS = 900;
 const PRESIGN_CACHE_BUFFER_SECONDS = 60;
@@ -136,6 +138,8 @@ export async function uploadBlobToCloud(
         try {
             await storageApi.uploadBlobWithKey(storageKey, blob, kind, meta);
             uploadedToS3 = true;
+            missingCloudMediaKeys.delete(storageKey);
+            missingCloudThumbKeys.delete(storageKey);
         } catch (error) {
             const msg = error instanceof Error ? error.message : "";
             if (msg.includes("配额不足") || msg.includes("已过期") || msg.includes("扩容") || msg.includes("续期")) {
@@ -194,10 +198,25 @@ export function getCachedCloudThumbnailUrl(storageKey?: string) {
     return readCachedUrl(thumbnailUrlCache, storageKey);
 }
 
+/** 判断当前会话是否已确认云端桶中不存在该媒体文件（避免重复轮询/重试）。 */
+export function isCloudMediaMissing(storageKey?: string) {
+    return Boolean(storageKey && missingCloudMediaKeys.has(storageKey));
+}
+
+function isNotFoundCloudError(error: unknown) {
+    if (!error || typeof error !== "object") return false;
+    const status = (error as { status?: unknown }).status;
+    if (status === 404 || status === 410) return true;
+    const message = error instanceof Error ? error.message : String(error);
+    return message.includes("NoSuchKey") || message.includes("The specified key does not exist") || message.includes("未找到该文件");
+}
+
 /** 清理云端预签名 URL 内存缓存（退出登录或切换账号时调用）。 */
 export function clearCloudMediaUrlCache() {
     urlCache.clear();
     thumbnailUrlCache.clear();
+    missingCloudMediaKeys.clear();
+    missingCloudThumbKeys.clear();
 }
 
 /** 批量预取云端媒体原图与缩略图签名地址并写入会话缓存，避免冷启动逐条请求。 */
@@ -253,24 +272,38 @@ export async function resolveCloudMediaUrl(storageKey: string, fallback = ""): P
 }
 
 export async function fetchCloudMediaBlob(storageKey: string, cacheLocal: (blob: Blob) => Promise<void>): Promise<Blob | null> {
-    if (!isCloudAuthenticated() || !storageKey) return null;
+    if (!isCloudAuthenticated() || !storageKey || missingCloudMediaKeys.has(storageKey)) return null;
     const pending = inFlightBlobs.get(storageKey);
     if (pending) return pending;
 
     const promise = (async () => {
         try {
             let blob: Blob | null = null;
+            let confirmedMissing = false;
             const url = await resolveCloudMediaUrl(storageKey);
             if (url) {
                 try {
                     const res = await fetch(url);
                     if (res.ok) blob = await res.blob();
+                    else if (res.status === 404 || res.status === 410) confirmedMissing = true;
                 } catch {
                     // 对象存储未开启 GET CORS 时降级走服务端同源下载接口
                 }
             }
+            if (confirmedMissing) {
+                missingCloudMediaKeys.add(storageKey);
+                return null;
+            }
             if (!blob) {
-                blob = await storageApi.downloadBlob(storageKey);
+                try {
+                    blob = await storageApi.downloadBlob(storageKey);
+                } catch (error) {
+                    if (isNotFoundCloudError(error)) {
+                        missingCloudMediaKeys.add(storageKey);
+                        return null;
+                    }
+                    throw error;
+                }
             }
             if (!blob || !blob.size) return null;
             await cacheLocal(blob);
@@ -286,7 +319,9 @@ export async function fetchCloudMediaBlob(storageKey: string, cacheLocal: (blob:
 }
 
 export async function fetchCloudThumbnailBlob(storageKey: string): Promise<Blob | null> {
-    if (!isCloudAuthenticated() || !storageKey) return null;
+    if (!isCloudAuthenticated() || !storageKey || missingCloudMediaKeys.has(storageKey) || missingCloudThumbKeys.has(storageKey)) {
+        return null;
+    }
     try {
         let thumbnailUrl = readCachedUrl(thumbnailUrlCache, storageKey);
         if (!thumbnailUrl) {
@@ -296,9 +331,15 @@ export async function fetchCloudThumbnailBlob(storageKey: string): Promise<Blob 
                 thumbnailUrlCache.set(storageKey, { url: thumbnailUrl, expiresAt: computeCacheExpiresAt() });
             }
         }
-        if (!thumbnailUrl) return null;
+        if (!thumbnailUrl) {
+            missingCloudThumbKeys.add(storageKey);
+            return null;
+        }
         const res = await fetch(thumbnailUrl);
-        if (!res.ok) return null;
+        if (!res.ok) {
+            if (res.status === 404 || res.status === 410) missingCloudThumbKeys.add(storageKey);
+            return null;
+        }
         return await res.blob();
     } catch {
         return null;

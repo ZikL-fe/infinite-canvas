@@ -10,6 +10,7 @@ import {
     fetchCloudMediaBlob,
     fetchCloudThumbnailBlob,
     getCachedCloudThumbnailUrl,
+    isCloudMediaMissing,
     prefetchCloudMediaUrls,
     resolveCloudMediaUrl,
     uploadBlobToCloud,
@@ -34,6 +35,7 @@ const previewListeners = new Set<() => void>();
 let previewRevision = 0;
 const PREVIEW_CONCURRENCY = 4;
 const pendingPreviewKeys = new Set<string>();
+const failedPreviewKeys = new Set<string>();
 const previewTaskQueue: string[] = [];
 let activePreviewWorkers = 0;
 let previewNotifyScheduled = false;
@@ -259,7 +261,7 @@ function schedulePreviewNotify() {
 }
 
 export async function ensureImagePreview(storageKey?: string) {
-    if (!storageKey) return undefined;
+    if (!storageKey || failedPreviewKeys.has(storageKey) || isCloudMediaMissing(storageKey)) return undefined;
     const cached = previewUrlFor(storageKey);
     if (cached) return cached;
     const stored = await previewStore.getItem<StoredImagePreview>(storageKey).catch(() => null);
@@ -270,7 +272,7 @@ export async function ensureImagePreview(storageKey?: string) {
 
 // 缩略图生成按并发上限排队执行，并按 storageKey 去重；云端图片优先拉取云端缩略图，避免下载原图。
 function queueImagePreview(storageKey: string) {
-    if (pendingPreviewKeys.has(storageKey)) return;
+    if (pendingPreviewKeys.has(storageKey) || failedPreviewKeys.has(storageKey)) return;
     pendingPreviewKeys.add(storageKey);
     previewTaskQueue.push(storageKey);
     while (activePreviewWorkers < PREVIEW_CONCURRENCY && previewTaskQueue.length) {
@@ -293,9 +295,14 @@ async function runPreviewWorker() {
                 continue;
             }
             const original = await getImageBlob(storageKey);
-            if (original) await storeImagePreview(storageKey, original);
+            if (original) {
+                await storeImagePreview(storageKey, original);
+            } else {
+                failedPreviewKeys.add(storageKey);
+            }
         } catch {
-            // 单张缩略图拉取失败静默跳过，不阻塞队列后续任务
+            // 拉取失败后记入当前会话失败集合，避免页面重渲染或翻页反复重试缺失文件
+            failedPreviewKeys.add(storageKey);
         } finally {
             pendingPreviewKeys.delete(storageKey);
         }
@@ -385,6 +392,7 @@ export async function clearLocalImageAndWorkbenchCaches() {
     previewUrls.forEach((url) => URL.revokeObjectURL(url));
     previewUrls.clear();
     pendingPreviewKeys.clear();
+    failedPreviewKeys.clear();
     previewTaskQueue.length = 0;
     clearCloudMediaUrlCache();
     previewListeners.forEach((listener) => listener());

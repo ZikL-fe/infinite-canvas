@@ -17,6 +17,7 @@ import {
   deleteS3ObjectStrict,
   getS3Object,
   headS3Object,
+  isS3NotFoundError,
   putS3Object,
 } from "../lib/s3.ts";
 import { getPlatformWebdavConfig, getS3StorageConfig, resolveEffectiveUserWebdav } from "../lib/settings.ts";
@@ -840,7 +841,15 @@ storageRoutes.get("/download/:mediaId", async (c) => {
     return c.json({ error: "无权访问该文件" }, 403);
   }
 
-  const obj = await getS3Object(config, media.objectKey);
+  let obj: Awaited<ReturnType<typeof getS3Object>>;
+  try {
+    obj = await getS3Object(config, media.objectKey);
+  } catch (error) {
+    if (isS3NotFoundError(error)) {
+      return c.json({ error: "对象存储中未找到该文件，可能已切换存储桶或文件已丢失" }, 404);
+    }
+    throw error;
+  }
   const stream = obj.Body?.transformToWebStream();
   if (!stream) {
     return c.json({ error: "媒体文件流不可用" }, 502);

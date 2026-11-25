@@ -496,7 +496,9 @@ async function fetchServer(path: string, init: RequestInit = {}, auth = true): P
     }
 
     if (!response.ok) {
-        throw new Error(await parseErrorMessage(response));
+        const error = new Error(await parseErrorMessage(response)) as Error & { status?: number };
+        error.status = response.status;
+        throw error;
     }
 
     return response;
