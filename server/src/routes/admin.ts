@@ -18,7 +18,7 @@ import {
   summarizeWorkspaceMedia,
   type MediaSourceModule,
 } from "../lib/media-cleanup.ts";
-import { createMediaReadUrl, deleteS3Object, testS3Connection } from "../lib/s3.ts";
+import { createMediaReadUrl, deleteS3ObjectStrict, testS3Connection } from "../lib/s3.ts";
 import { isMailConfigReady, sendTestMail } from "../lib/mail.ts";
 import {
   getAuthPolicy,
@@ -222,7 +222,7 @@ const mailConfigSchema = z.object({
   secure: z.boolean().default(true),
   username: z.string().trim().default(""),
   password: z.string().optional().default(""),
-  fromName: z.string().trim().max(64).default("无限画布"),
+  fromName: z.string().trim().max(64).default("ZIKL画布"),
   fromAddress: z.string().trim().email("发件人邮箱格式不正确").optional().or(z.literal("")),
   lowBalanceAlertEnabled: z.boolean().default(true),
   lowBalanceThreshold: z.number().nonnegative("低余额阈值不能小于 0").max(1_000_000).default(10),
@@ -1219,7 +1219,7 @@ adminRoutes.put("/settings/mail", zValidator("json", mailConfigSchema), async (c
     secure: body.secure,
     username: body.username,
     password: body.password.trim() || existing.password,
-    fromName: body.fromName || "无限画布",
+    fromName: body.fromName || "ZIKL画布",
     fromAddress: body.fromAddress || "",
     lowBalanceAlertEnabled: body.lowBalanceAlertEnabled,
     lowBalanceThreshold: body.lowBalanceThreshold,
@@ -1248,7 +1248,7 @@ adminRoutes.post("/settings/mail/test", zValidator("json", testMailSchema), asyn
     secure: body.secure,
     username: body.username,
     password: body.password.trim() || existing.password,
-    fromName: body.fromName || "无限画布",
+    fromName: body.fromName || "ZIKL画布",
     fromAddress: body.fromAddress || "",
     lowBalanceAlertEnabled: body.lowBalanceAlertEnabled,
     lowBalanceThreshold: body.lowBalanceThreshold,
@@ -1739,12 +1739,20 @@ adminRoutes.delete("/media/:id", async (c) => {
   }
 
   const config = await getS3StorageConfig();
-  if (config) {
-    await deleteS3Object(config, media.objectKey).catch(() => undefined);
-    const thumbKey = typeof media.meta?.thumbObjectKey === "string" ? media.meta.thumbObjectKey : "";
-    if (thumbKey) {
-      await deleteS3Object(config, thumbKey).catch(() => undefined);
-    }
+  if (!config) {
+    return c.json({ error: "管理员尚未配置对象存储，无法从存储桶删除文件" }, 503);
+  }
+  try {
+    await deleteS3ObjectStrict(config, media.objectKey);
+  } catch (error) {
+    return c.json(
+      { error: `对象存储删除失败：${error instanceof Error ? error.message : "未知错误"}` },
+      502,
+    );
+  }
+  const thumbKey = typeof media.meta?.thumbObjectKey === "string" ? media.meta.thumbObjectKey : "";
+  if (thumbKey) {
+    await deleteS3ObjectStrict(config, thumbKey).catch(() => undefined);
   }
 
   await db.transaction(async (tx) => {

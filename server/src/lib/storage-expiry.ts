@@ -3,7 +3,7 @@ import { and, asc, eq, inArray, isNull, sql } from "drizzle-orm";
 
 import { canvasProjects, db, mediaObjects, userAssets, userStorageGrants, users, workbenchLogs } from "../db/index.ts";
 import { isMailConfigReady, sendStorageCleanedEmail, sendStorageExpiredNoticeEmail, sendStoragePreExpiryEmail } from "./mail.ts";
-import { deleteS3Object } from "./s3.ts";
+import { deleteS3ObjectStrict } from "./s3.ts";
 import { getPlatformMailConfig, getPlatformStorageExpiryPolicy, getS3StorageConfig, type PlatformStorageExpiryPolicy } from "./settings.ts";
 import { getEarliestPreExpiryWarningTimestamp, resolveEffectiveStorageQuota } from "./storage-quota.ts";
 
@@ -386,18 +386,20 @@ async function runSweepInternal(options?: {
     const s3Errors: string[] = [];
     const cleanedIds: string[] = [];
     for (const row of plan.targets) {
-      if (s3Config) {
-        try {
-          await deleteS3Object(s3Config, row.objectKey);
-        } catch (error) {
-          s3Errors.push(`${row.objectKey}: ${error instanceof Error ? error.message : "S3删除失败"}`);
-        }
+      if (!s3Config) {
+        s3Errors.push(`${row.objectKey}: 管理员尚未配置对象存储`);
+        continue;
+      }
+      try {
+        await deleteS3ObjectStrict(s3Config, row.objectKey);
         const thumbObjectKey = typeof row.meta?.thumbObjectKey === "string" ? row.meta.thumbObjectKey : "";
         if (thumbObjectKey) {
-          await deleteS3Object(s3Config, thumbObjectKey).catch(() => undefined);
+          await deleteS3ObjectStrict(s3Config, thumbObjectKey).catch(() => undefined);
         }
+        cleanedIds.push(row.id);
+      } catch (error) {
+        s3Errors.push(`${row.objectKey}: ${error instanceof Error ? error.message : "S3删除失败"}`);
       }
-      cleanedIds.push(row.id);
     }
 
     if (cleanedIds.length > 0) {

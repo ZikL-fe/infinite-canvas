@@ -4,6 +4,7 @@ import type { TFunction } from "i18next";
 import { useTranslation } from "react-i18next";
 import { useVersionCheck } from "@/hooks/use-version-check";
 import { APP_VERSION } from "@/constant/env";
+import { useUserStore } from "@/stores/use-user-store";
 
 function getTagColor(type: string) {
     if (type === "新增" || type === "Added") return "green";
@@ -28,15 +29,18 @@ type VersionReleaseModalProps = {
 
 export function VersionReleaseModal({ className, style, open: controlledOpen, onOpenChange, hideTrigger = false }: VersionReleaseModalProps) {
     const { t } = useTranslation();
+    const isAdmin = useUserStore((state) => state.user?.role === "admin");
     const { open, setOpen, openReleaseModal, latestVersion, releases, checking, hasNewVersion, checkLatestRelease } = useVersionCheck();
     const isControlled = controlledOpen !== undefined;
     const modalOpen = isControlled ? controlledOpen : open;
 
     useEffect(() => {
-        if (isControlled && controlledOpen) {
+        if (isAdmin && isControlled && controlledOpen) {
             void checkLatestRelease(false);
         }
-    }, [checkLatestRelease, controlledOpen, isControlled]);
+    }, [checkLatestRelease, controlledOpen, isAdmin, isControlled]);
+
+    if (!isAdmin) return null;
 
     const handleClose = () => {
         if (isControlled) {

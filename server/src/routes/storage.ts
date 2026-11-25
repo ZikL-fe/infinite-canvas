@@ -14,6 +14,7 @@ import {
   createMediaReadUrl,
   createPresignedUploadUrl,
   deleteS3Object,
+  deleteS3ObjectStrict,
   getS3Object,
   headS3Object,
   putS3Object,
@@ -877,25 +878,49 @@ async function deleteMediaRowsWithQuota(
   rows: Array<{ id: string; userId: string; objectKey: string; bytes: number; status: string; meta: Record<string, unknown> | null }>,
 ) {
   const activeRows = rows.filter((row) => row.status === "active");
-  if (!activeRows.length) return { deletedCount: 0, freedBytesTotal: 0 };
+  if (!activeRows.length) return { deletedCount: 0, freedBytesTotal: 0, failedCount: 0, firstError: "" };
 
   const config = await getS3StorageConfig();
-  if (config) {
-    await Promise.all(
-      activeRows.flatMap((media) => {
-        const thumbKey = typeof media.meta?.thumbObjectKey === "string" ? media.meta.thumbObjectKey : "";
-        const jobs = [deleteS3Object(config, media.objectKey).catch(() => undefined)];
-        if (thumbKey) jobs.push(deleteS3Object(config, thumbKey).catch(() => undefined));
-        return jobs;
-      }),
-    );
+  if (!config) {
+    return {
+      deletedCount: 0,
+      freedBytesTotal: 0,
+      failedCount: activeRows.length,
+      firstError: "管理员尚未配置对象存储，无法从存储桶删除文件",
+    };
   }
 
-  return db.transaction(async (tx) => {
+  const deletedRows: typeof activeRows = [];
+  let failedCount = 0;
+  let firstError = "";
+
+  await Promise.all(
+    activeRows.map(async (media) => {
+      try {
+        await deleteS3ObjectStrict(config, media.objectKey);
+        const thumbKey = typeof media.meta?.thumbObjectKey === "string" ? media.meta.thumbObjectKey : "";
+        if (thumbKey) {
+          await deleteS3ObjectStrict(config, thumbKey).catch(() => undefined);
+        }
+        deletedRows.push(media);
+      } catch (error) {
+        failedCount += 1;
+        if (!firstError) {
+          firstError = error instanceof Error ? error.message : "对象存储删除失败";
+        }
+      }
+    }),
+  );
+
+  if (!deletedRows.length) {
+    return { deletedCount: 0, freedBytesTotal: 0, failedCount, firstError };
+  }
+
+  const dbResult = await db.transaction(async (tx) => {
     const updated = await tx
       .update(mediaObjects)
       .set({ status: "deleted" })
-      .where(and(inArray(mediaObjects.id, activeRows.map((row) => row.id)), eq(mediaObjects.status, "active")))
+      .where(and(inArray(mediaObjects.id, deletedRows.map((row) => row.id)), eq(mediaObjects.status, "active")))
       .returning({ id: mediaObjects.id, userId: mediaObjects.userId, bytes: mediaObjects.bytes });
 
     if (!updated.length) return { deletedCount: 0, freedBytesTotal: 0 };
@@ -920,6 +945,8 @@ async function deleteMediaRowsWithQuota(
 
     return { deletedCount: updated.length, freedBytesTotal };
   });
+
+  return { ...dbResult, failedCount, firstError };
 }
 
 storageRoutes.post("/batch-delete", zValidator("json", batchDeleteMediaSchema), async (c) => {
@@ -932,8 +959,16 @@ storageRoutes.post("/batch-delete", zValidator("json", batchDeleteMediaSchema), 
         : and(inArray(mediaObjects.id, uniqueIds), eq(mediaObjects.userId, user.id), eq(mediaObjects.status, "active")),
   });
 
-  const { deletedCount, freedBytesTotal } = await deleteMediaRowsWithQuota(rows);
-  return c.json({ ok: true, deletedCount, freedBytes: freedBytesTotal });
+  const { deletedCount, freedBytesTotal, failedCount, firstError } = await deleteMediaRowsWithQuota(rows);
+  if (rows.length > 0 && deletedCount === 0 && failedCount > 0) {
+    return c.json({ error: `对象存储删除失败：${firstError}` }, 502);
+  }
+  return c.json({
+    ok: true,
+    deletedCount,
+    freedBytes: freedBytesTotal,
+    ...(failedCount > 0 ? { failedCount, firstError } : {}),
+  });
 });
 
 storageRoutes.delete("/:mediaId", async (c) => {
@@ -947,7 +982,10 @@ storageRoutes.delete("/:mediaId", async (c) => {
     return c.json({ error: "无权删除该文件" }, 403);
   }
 
-  await deleteMediaRowsWithQuota([media]);
+  const { failedCount, firstError } = await deleteMediaRowsWithQuota([media]);
+  if (failedCount > 0) {
+    return c.json({ error: `对象存储删除失败：${firstError}` }, 502);
+  }
   return c.json({ ok: true });
 });
 

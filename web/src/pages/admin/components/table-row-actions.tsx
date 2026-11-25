@@ -8,6 +8,7 @@ export type TableActionItem = {
     label: string;
     danger?: boolean;
     disabled?: boolean;
+    loading?: boolean;
     confirm?: string;
     href?: string;
     onClick?: () => void;
@@ -48,6 +49,7 @@ export function TableRowActions({ items }: { items: TableActionItem[] }) {
                 size="small"
                 danger={item.danger}
                 disabled={item.disabled}
+                loading={item.loading}
                 className="!h-6 !px-1 !text-xs whitespace-nowrap"
                 onClick={
                     item.confirm

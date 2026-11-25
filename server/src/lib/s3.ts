@@ -122,6 +122,13 @@ export async function putS3Object(
   );
 }
 
+export function isS3NotFoundError(error: unknown) {
+  if (!error || typeof error !== "object") return false;
+  const err = error as { name?: unknown; Code?: unknown; code?: unknown; $metadata?: { httpStatusCode?: unknown } };
+  const code = String(err.name || err.Code || err.code || "");
+  return code === "NoSuchKey" || code === "NotFound" || err.$metadata?.httpStatusCode === 404;
+}
+
 export async function deleteS3Object(config: S3StorageConfig, objectKey: string) {
   const client = getReusableS3Client(config);
   return client.send(
@@ -130,6 +137,16 @@ export async function deleteS3Object(config: S3StorageConfig, objectKey: string)
       Key: objectKey,
     }),
   );
+}
+
+/** 严格删除 S3/MinIO 对象：对象已不存在（404/NoSuchKey）视为已删除，其余错误向上抛出以避免误标数据库状态。 */
+export async function deleteS3ObjectStrict(config: S3StorageConfig, objectKey: string) {
+  try {
+    await deleteS3Object(config, objectKey);
+  } catch (error) {
+    if (isS3NotFoundError(error)) return;
+    throw error;
+  }
 }
 
 /** 探针式校验对象存储连通性：依次验证桶访问、写入、读取元信息与清理探针文件。 */

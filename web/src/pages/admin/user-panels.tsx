@@ -2658,6 +2658,7 @@ export function MyMediaPanel() {
     const [previewItem, setPreviewItem] = useState<MediaItem | null>(null);
     const [previewOriginalUrl, setPreviewOriginalUrl] = useState("");
     const [downloadingId, setDownloadingId] = useState<string | null>(null);
+    const [deletingMediaId, setDeletingMediaId] = useState<string | null>(null);
     const [selectedMediaIds, setSelectedMediaIds] = useState<string[]>([]);
     const [batchDeleting, setBatchDeleting] = useState(false);
     const { downloading: batchDownloading, downloadZip } = useBatchZipDownload();
@@ -2745,6 +2746,8 @@ export function MyMediaPanel() {
     }, [activeSubTab, loadData, loadWorkspaceTab]);
 
     const handleDelete = async (mediaId: string) => {
+        if (deletingMediaId) return;
+        setDeletingMediaId(mediaId);
         try {
             await storageApi.remove(mediaId);
             notifyCloudWorkspaceChanged("media", { sync: false });
@@ -2756,6 +2759,8 @@ export function MyMediaPanel() {
             }
         } catch (error) {
             message.error(error instanceof Error ? error.message : t("common.deleteFailed"));
+        } finally {
+            setDeletingMediaId(null);
         }
     };
 
@@ -2791,7 +2796,13 @@ export function MyMediaPanel() {
         try {
             const res = await storageApi.batchRemove(selectedMediaIds);
             notifyCloudWorkspaceChanged("media", { sync: false });
-            message.success(t("userPanels.myMedia.batchDeletedMedia", { count: res.deletedCount }));
+            if (res.failedCount && res.failedCount > 0) {
+                message.warning(
+                    `${t("userPanels.myMedia.batchDeletedMedia", { count: res.deletedCount })}（另有 ${res.failedCount} 个文件对象存储删除失败${res.firstError ? `：${res.firstError}` : ""}）`,
+                );
+            } else {
+                message.success(t("userPanels.myMedia.batchDeletedMedia", { count: res.deletedCount }));
+            }
             setSelectedMediaIds([]);
             if (res.deletedCount >= items.length && page > 1) {
                 setPage((prev) => Math.max(1, prev - 1));
@@ -3216,6 +3227,8 @@ export function MyMediaPanel() {
                                                                 key: "delete",
                                                                 label: t("common.delete"),
                                                                 danger: true,
+                                                                loading: deletingMediaId === record.id,
+                                                                disabled: Boolean(deletingMediaId && deletingMediaId !== record.id),
                                                                 confirm: t("userPanels.myMedia.confirmDeleteMedia"),
                                                                 onClick: () => void handleDelete(record.id),
                                                             },

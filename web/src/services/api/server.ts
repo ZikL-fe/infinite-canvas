@@ -757,7 +757,7 @@ export const storageApi = {
     getUrls: (mediaIds: string[]) => requestServer<{ urls: Record<string, string> }>("/storage/urls", { method: "POST", body: JSON.stringify({ mediaIds }) }),
     remove: (mediaId: string) => requestServer<{ ok: boolean }>(`/storage/${encodeURIComponent(mediaId)}`, { method: "DELETE" }),
     batchRemove: (mediaIds: string[]) =>
-        requestServer<{ ok: boolean; deletedCount: number; freedBytes: number }>("/storage/batch-delete", {
+        requestServer<{ ok: boolean; deletedCount: number; freedBytes: number; failedCount?: number; firstError?: string }>("/storage/batch-delete", {
             method: "POST",
             body: JSON.stringify({ mediaIds }),
         }),

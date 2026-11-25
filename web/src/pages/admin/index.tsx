@@ -262,6 +262,7 @@ export default function AdminPage() {
     const [uploadingTest, setUploadingTest] = useState(false);
     const [previewMediaItem, setPreviewMediaItem] = useState<MediaItem | null>(null);
     const [downloadingPreviewMedia, setDownloadingPreviewMedia] = useState(false);
+    const [deletingMediaId, setDeletingMediaId] = useState<string | null>(null);
 
     const [allowRegister, setAllowRegister] = useState(true);
     const [requireEmailOnRegister, setRequireEmailOnRegister] = useState(false);
@@ -968,6 +969,8 @@ export default function AdminPage() {
     };
 
     const handleDeleteMedia = async (mediaId: string) => {
+        if (deletingMediaId) return;
+        setDeletingMediaId(mediaId);
         try {
             await adminApi.deleteMedia(mediaId);
             notifyCloudWorkspaceChanged("media", { sync: false });
@@ -976,6 +979,8 @@ export default function AdminPage() {
             void loadOverview();
         } catch (error) {
             message.error(error instanceof Error ? error.message : t("common.deleteFailed"));
+        } finally {
+            setDeletingMediaId(null);
         }
     };
 
@@ -2382,6 +2387,8 @@ export default function AdminPage() {
                                                                                 key: "delete",
                                                                                 label: t("common.delete"),
                                                                                 danger: true,
+                                                                                loading: deletingMediaId === record.id,
+                                                                                disabled: Boolean(deletingMediaId && deletingMediaId !== record.id),
                                                                                 confirm: t("admin.mediaTab.confirmDeleteMedia"),
                                                                                 onClick: () => void handleDeleteMedia(record.id),
                                                                             },
@@ -3487,15 +3494,17 @@ export default function AdminPage() {
                         onClick={handleMenuSelect}
                         style={{ borderInlineEnd: 0, background: "transparent" }}
                     />
-                    <div
-                        className="mt-auto flex items-center justify-between border-t px-2 pt-3 text-xs"
-                        style={{ borderColor: token.colorBorderSecondary }}
-                    >
-                        <Typography.Text type="secondary" className="text-xs">
-                            {t("admin.nav.currentVersion")}
-                        </Typography.Text>
-                        <VersionReleaseModal />
-                    </div>
+                    {isAdmin ? (
+                        <div
+                            className="mt-auto flex items-center justify-between border-t px-2 pt-3 text-xs"
+                            style={{ borderColor: token.colorBorderSecondary }}
+                        >
+                            <Typography.Text type="secondary" className="text-xs">
+                                {t("admin.nav.currentVersion")}
+                            </Typography.Text>
+                            <VersionReleaseModal />
+                        </div>
+                    ) : null}
                 </aside>
 
                 <main
@@ -3530,12 +3539,14 @@ export default function AdminPage() {
                 onClose={() => setMobileMenuOpen(false)}
                 styles={{ body: { padding: 12 } }}
                 footer={
-                    <div className="flex items-center justify-between text-xs">
-                        <Typography.Text type="secondary" className="text-xs">
-                            {t("admin.nav.currentVersion")}
-                        </Typography.Text>
-                        <VersionReleaseModal />
-                    </div>
+                    isAdmin ? (
+                        <div className="flex items-center justify-between text-xs">
+                            <Typography.Text type="secondary" className="text-xs">
+                                {t("admin.nav.currentVersion")}
+                            </Typography.Text>
+                            <VersionReleaseModal />
+                        </div>
+                    ) : undefined
                 }
             >
                 <Menu

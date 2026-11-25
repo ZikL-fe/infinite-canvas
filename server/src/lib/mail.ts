@@ -96,7 +96,7 @@ export async function sendVerificationCodeEmail(params: {
   config?: PlatformMailConfig;
 }) {
   const meta = PURPOSE_META[params.purpose];
-  const subject = `${meta.title} - 无限画布`;
+  const subject = `${meta.title} - ZIKL画布`;
   const html = renderEmailShell(
     meta.title,
     `
@@ -107,7 +107,7 @@ export async function sendVerificationCodeEmail(params: {
       <p style="margin:0;font-size:13px;color:#4b5563;">验证码有效期为 <strong>${params.ttlMinutes} 分钟</strong>，请勿泄露给他人。</p>
     `,
   );
-  const text = `【无限画布】${meta.title}验证码：${params.code}，有效期 ${params.ttlMinutes} 分钟，用于${meta.action}。请勿泄露给他人。`;
+  const text = `【ZIKL画布】${meta.title}验证码：${params.code}，有效期 ${params.ttlMinutes} 分钟，用于${meta.action}。请勿泄露给他人。`;
   await sendMail({ to: params.to, subject, html, text, configOverride: params.config });
 }
 
@@ -119,29 +119,29 @@ export async function sendLowBalanceAlertEmail(params: {
   threshold: number;
   config?: PlatformMailConfig;
 }) {
-  const subject = "积分余额不足提醒 - 无限画布";
+  const subject = "积分余额不足提醒 - ZIKL画布";
   const html = renderEmailShell(
     "积分余额不足提醒",
     `
       <p style="margin:0 0 12px;font-size:14px;line-height:1.6;">您好，${escapeHtml(params.displayName)}：</p>
       <p style="margin:0 0 12px;font-size:14px;line-height:1.6;">
-        您的无限画布账号当前积分余额为 <strong style="color:#dc2626;">${params.balance}</strong>，已低于提醒阈值 <strong>${params.threshold}</strong> 积分。
+        您的 ZIKL画布 账号当前积分余额为 <strong style="color:#dc2626;">${params.balance}</strong>，已低于提醒阈值 <strong>${params.threshold}</strong> 积分。
       </p>
       <p style="margin:0;font-size:13px;color:#4b5563;">为避免影响 AI 生成任务，请及时前往「积分钱包」兑换积分码或联系管理员充值。</p>
     `,
   );
-  const text = `【无限画布】您好 ${params.displayName}，您的账号当前积分余额为 ${params.balance}，已低于提醒阈值 ${params.threshold} 积分，请及时充值或兑换积分码。`;
+  const text = `【ZIKL画布】您好 ${params.displayName}，您的账号当前积分余额为 ${params.balance}，已低于提醒阈值 ${params.threshold} 积分，请及时充值或兑换积分码。`;
   await sendMail({ to: params.to, subject, html, text, configOverride: params.config });
 }
 
 /** 发送管理员后台 SMTP 测试邮件。 */
 export async function sendTestMail(params: { to: string; config: PlatformMailConfig }) {
-  const subject = "邮件服务测试 - 无限画布";
+  const subject = "邮件服务测试 - ZIKL画布";
   const html = renderEmailShell(
     "邮件服务测试成功",
-    `<p style="margin:0;font-size:14px;line-height:1.6;">这是一封来自无限画布管理后台的测试邮件。如果您收到此邮件，说明当前 SMTP 发信配置工作正常。</p>`,
+    `<p style="margin:0;font-size:14px;line-height:1.6;">这是一封来自 ZIKL画布 管理后台的测试邮件。如果您收到此邮件，说明当前 SMTP 发信配置工作正常。</p>`,
   );
-  const text = "【无限画布】这是一封测试邮件，说明当前 SMTP 发信配置工作正常。";
+  const text = "【ZIKL画布】这是一封测试邮件，说明当前 SMTP 发信配置工作正常。";
   await sendMail({ to: params.to, subject, html, text, configOverride: params.config });
 }
 
@@ -174,14 +174,14 @@ export async function sendStoragePreExpiryEmail(params: {
   expiresAt: Date;
   gracePeriodDays: number;
 }) {
-  const subject = "云存储配额即将到期提醒 - 无限画布";
+  const subject = "云存储配额即将到期提醒 - ZIKL画布";
   const expiresLabel = formatEmailDate(params.expiresAt);
   const html = renderEmailShell(
     "云存储配额即将到期提醒",
     `
       <p style="margin:0 0 12px;font-size:14px;line-height:1.6;">您好，${escapeHtml(params.displayName)}：</p>
       <p style="margin:0 0 12px;font-size:14px;line-height:1.6;">
-        您的无限画布云存储配额（当前已用 <strong>${escapeHtml(formatEmailBytes(params.usedBytes))}</strong> / 总配额 <strong>${escapeHtml(formatEmailBytes(params.quotaBytes))}</strong>）
+        您的 ZIKL画布 云存储配额（当前已用 <strong>${escapeHtml(formatEmailBytes(params.usedBytes))}</strong> / 总配额 <strong>${escapeHtml(formatEmailBytes(params.quotaBytes))}</strong>）
         将于 <strong style="color:#d97706;">${escapeHtml(expiresLabel)}</strong> 到期。
       </p>
       <p style="margin:0 0 12px;font-size:13px;color:#4b5563;">
@@ -190,7 +190,7 @@ export async function sendStoragePreExpiryEmail(params: {
       <p style="margin:0;font-size:13px;color:#4b5563;">请及时前往「个人中心」兑换存储容量码、续期或提前下载备份重要资产。</p>
     `,
   );
-  const text = `【无限画布】您好 ${params.displayName}，您的云存储配额（已用 ${formatEmailBytes(params.usedBytes)} / ${formatEmailBytes(params.quotaBytes)}）将于 ${expiresLabel} 到期，到期宽限期为 ${params.gracePeriodDays} 天，请及时续期或备份数据。`;
+  const text = `【ZIKL画布】您好 ${params.displayName}，您的云存储配额（已用 ${formatEmailBytes(params.usedBytes)} / ${formatEmailBytes(params.quotaBytes)}）将于 ${expiresLabel} 到期，到期宽限期为 ${params.gracePeriodDays} 天，请及时续期或备份数据。`;
   await sendMail({ to: params.to, subject, html, text });
 }
 
@@ -204,7 +204,7 @@ export async function sendStorageExpiredNoticeEmail(params: {
   graceEndsAt: Date;
   gracePeriodDays: number;
 }) {
-  const subject = "云存储已到期，请及时续期或备份数据 - 无限画布";
+  const subject = "云存储已到期，请及时续期或备份数据 - ZIKL画布";
   const expiredLabel = formatEmailDate(params.expiredAt);
   const graceEndsLabel = formatEmailDate(params.graceEndsAt);
   const html = renderEmailShell(
@@ -223,7 +223,7 @@ export async function sendStorageExpiredNoticeEmail(params: {
       </p>
     `,
   );
-  const text = `【无限画布】您好 ${params.displayName}，您的云存储配额已于 ${expiredLabel} 到期（当前已用 ${formatEmailBytes(params.usedBytes)}，剩余有效配额 ${formatEmailBytes(params.remainingQuotaBytes)}），请在宽限期截止（${graceEndsLabel}）前完成续期或数据备份。`;
+  const text = `【ZIKL画布】您好 ${params.displayName}，您的云存储配额已于 ${expiredLabel} 到期（当前已用 ${formatEmailBytes(params.usedBytes)}，剩余有效配额 ${formatEmailBytes(params.remainingQuotaBytes)}），请在宽限期截止（${graceEndsLabel}）前完成续期或数据备份。`;
   await sendMail({ to: params.to, subject, html, text });
 }
 
@@ -238,7 +238,7 @@ export async function sendStorageCleanedEmail(params: {
   deletedAssetCount: number;
   remainingQuotaBytes: number;
 }) {
-  const subject = "云存储逾期数据已自动清理通知 - 无限画布";
+  const subject = "云存储逾期数据已自动清理通知 - ZIKL画布";
   const workspaceParts: string[] = [];
   if (params.deletedCanvasCount > 0) workspaceParts.push(`云端画布 ${params.deletedCanvasCount} 个`);
   if (params.deletedWorkbenchCount > 0) workspaceParts.push(`工作台记录 ${params.deletedWorkbenchCount} 条`);
@@ -260,6 +260,6 @@ export async function sendStorageCleanedEmail(params: {
       <p style="margin:0;font-size:13px;color:#4b5563;">如需继续使用云存储服务，可在登录后前往「个人中心」兑换存储容量码或联系管理员开通新配额。</p>
     `,
   );
-  const text = `【无限画布】您好 ${params.displayName}，您的云存储配额到期且超过宽限期未续期，系统已清理媒体文件 ${params.deletedMediaCount} 个（释放 ${formatEmailBytes(params.freedBytes)}），关联数据：${workspaceSummary}。`;
+  const text = `【ZIKL画布】您好 ${params.displayName}，您的云存储配额到期且超过宽限期未续期，系统已清理媒体文件 ${params.deletedMediaCount} 个（释放 ${formatEmailBytes(params.freedBytes)}），关联数据：${workspaceSummary}。`;
   await sendMail({ to: params.to, subject, html, text });
 }

@@ -2,7 +2,7 @@
 import { and, eq, inArray, isNull, sql } from "drizzle-orm";
 
 import { canvasProjects, db, mediaObjects, userAssets, users, workbenchLogs } from "../db/index.ts";
-import { deleteS3Object } from "./s3.ts";
+import { deleteS3ObjectStrict } from "./s3.ts";
 import { getS3StorageConfig } from "./settings.ts";
 
 export type MediaSourceModule = "canvas" | "image_workbench" | "video_workbench" | "assets";
@@ -89,19 +89,27 @@ export async function cleanupOrphanedUserMedia(userId: string, candidateIds: Ite
   if (!rows.length) return 0;
 
   const config = await getS3StorageConfig();
-  if (config) {
-    await Promise.all(
-      rows.flatMap((row) => {
-        const tasks = [deleteS3Object(config, row.objectKey).catch(() => undefined)];
-        const thumbKey = typeof row.meta?.thumbObjectKey === "string" ? row.meta.thumbObjectKey : "";
-        if (thumbKey) tasks.push(deleteS3Object(config, thumbKey).catch(() => undefined));
-        return tasks;
-      }),
-    );
-  }
+  if (!config) return 0;
 
-  const totalBytes = rows.reduce((sum, row) => sum + Math.max(0, row.bytes || 0), 0);
-  const rowIds = rows.map((row) => row.id);
+  const deletedRows: typeof rows = [];
+  await Promise.all(
+    rows.map(async (row) => {
+      try {
+        await deleteS3ObjectStrict(config, row.objectKey);
+        const thumbKey = typeof row.meta?.thumbObjectKey === "string" ? row.meta.thumbObjectKey : "";
+        if (thumbKey) {
+          await deleteS3ObjectStrict(config, thumbKey).catch(() => undefined);
+        }
+        deletedRows.push(row);
+      } catch (error) {
+        console.warn(`[media-cleanup] 删除对象存储文件失败 (${row.objectKey}):`, error);
+      }
+    }),
+  );
+  if (!deletedRows.length) return 0;
+
+  const totalBytes = deletedRows.reduce((sum, row) => sum + Math.max(0, row.bytes || 0), 0);
+  const rowIds = deletedRows.map((row) => row.id);
   await db.transaction(async (tx) => {
     await tx.update(mediaObjects).set({ status: "deleted" }).where(and(eq(mediaObjects.userId, userId), inArray(mediaObjects.id, rowIds)));
     if (totalBytes > 0) {
@@ -115,7 +123,7 @@ export async function cleanupOrphanedUserMedia(userId: string, candidateIds: Ite
     }
   });
 
-  return rows.length;
+  return deletedRows.length;
 }
 
 /** 加载指定用户的活跃云端媒体字节映射（键为 `${userId}:${mediaId}`）。 */
