@@ -4,7 +4,7 @@ import { Alert, App, Avatar, Button, Card, Col, DatePicker, Descriptions, Empty,
 import type { Dayjs } from "dayjs";
 import type { TFunction } from "i18next";
 import localforage from "localforage";
-import { AudioLines, Bell, Download, Eye, FileIcon, Gift, ImageIcon, KeyRound, Laptop, LogOut, Megaphone, Pin, RefreshCw, RotateCcw, Save, Search, TrendingUp, User, Video } from "lucide-react";
+import { AudioLines, Bell, Download, Eye, FileIcon, Gift, ImageIcon, KeyRound, Laptop, LogOut, Megaphone, Pin, RefreshCw, RotateCcw, Save, Search, Trash2, TrendingUp, User, Video } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
 
@@ -15,6 +15,7 @@ import { createImageThumbnail, createVideoThumbnail } from "@/lib/image-thumbnai
 import {
     formatCreditAlertCopy,
     formatStorageAlertCopy,
+    formatStorageQuotaCaption,
     resolveCreditAlert,
     resolveStorageAlert,
 } from "@/lib/quota-alerts";
@@ -480,6 +481,9 @@ export function UserOverviewPanel({ onOpenWallet, onOpenMedia }: { onOpenWallet?
               quotaBytes: data.storageQuotaBytes,
               expiresAt: data.storageQuotaExpiresAt,
               expiringAt: data.storageExpiringAt ?? user?.storageExpiringAt,
+              expiringBytes: data.storageExpiringBytes ?? user?.storageExpiringBytes,
+              remainingAfterExpiryBytes: data.storageRemainingAfterExpiryBytes ?? user?.storageRemainingAfterExpiryBytes,
+              expiringWillExceed: data.storageExpiringWillExceed ?? user?.storageExpiringWillExceed,
               warningDays: data.storageWarningDays ?? user?.storageWarningDays,
           })
         : null;
@@ -833,9 +837,20 @@ export function ProfileSecurityPanel() {
                                 {t("userPanels.profile.usedAndQuota", {
                                     used: formatBytes(detail?.storageUsedBytes ?? 0),
                                     quota: formatBytes(detail?.storageQuotaBytes ?? 0),
-                                    expiry: detail?.storageQuotaExpiresAt
-                                        ? t("userPanels.profile.expiryUntil", { time: new Date(detail.storageQuotaExpiresAt).toLocaleString(locale) })
-                                        : t("userPanels.profile.expiryNone"),
+                                    expiry:
+                                        detail?.storagePermanentBytes && detail?.storageTimedBytes && detail?.storageTimedExpiresAt
+                                            ? ` · ${formatStorageQuotaCaption(
+                                                  t,
+                                                  {
+                                                      permanentBytes: detail.storagePermanentBytes,
+                                                      timedBytes: detail.storageTimedBytes,
+                                                      timedExpiresAt: detail.storageTimedExpiresAt,
+                                                  },
+                                                  locale,
+                                              )}`
+                                            : detail?.storageQuotaExpiresAt
+                                              ? t("userPanels.profile.expiryUntil", { time: new Date(detail.storageQuotaExpiresAt).toLocaleString(locale) })
+                                              : t("userPanels.profile.expiryNone"),
                                 })}
                             </span>
                             {detail?.storageQuotaExpiresAt && new Date(detail.storageQuotaExpiresAt).getTime() <= Date.now() ? (
@@ -2621,6 +2636,14 @@ export function MyMediaPanel() {
     const [quotaExpiresAt, setQuotaExpiresAt] = useState<string | null>(user?.storageQuotaExpiresAt ?? null);
     const [storageWarningDays, setStorageWarningDays] = useState(user?.storageWarningDays ?? 0);
     const [storageExpiringAt, setStorageExpiringAt] = useState<string | null>(user?.storageExpiringAt ?? null);
+    const [storageExpiringBytes, setStorageExpiringBytes] = useState(user?.storageExpiringBytes ?? 0);
+    const [storageRemainingAfterExpiryBytes, setStorageRemainingAfterExpiryBytes] = useState<number | null>(
+        user?.storageRemainingAfterExpiryBytes ?? null,
+    );
+    const [storageExpiringWillExceed, setStorageExpiringWillExceed] = useState(Boolean(user?.storageExpiringWillExceed));
+    const [storagePermanentBytes, setStoragePermanentBytes] = useState(user?.storagePermanentBytes ?? 0);
+    const [storageTimedBytes, setStorageTimedBytes] = useState(user?.storageTimedBytes ?? 0);
+    const [storageTimedExpiresAt, setStorageTimedExpiresAt] = useState<string | null>(user?.storageTimedExpiresAt ?? null);
     const [baseQuotaBytes, setBaseQuotaBytes] = useState(0);
     const [baseQuotaExpiresAt, setBaseQuotaExpiresAt] = useState<string | null>(null);
     const [storageGrants, setStorageGrants] = useState<StorageGrantItem[]>([]);
@@ -2635,6 +2658,7 @@ export function MyMediaPanel() {
     const [previewOriginalUrl, setPreviewOriginalUrl] = useState("");
     const [downloadingId, setDownloadingId] = useState<string | null>(null);
     const [selectedMediaIds, setSelectedMediaIds] = useState<string[]>([]);
+    const [batchDeleting, setBatchDeleting] = useState(false);
     const { downloading: batchDownloading, downloadZip } = useBatchZipDownload();
 
     const loadData = useCallback(async () => {
@@ -2654,6 +2678,12 @@ export function MyMediaPanel() {
             setQuotaExpiresAt(profileRes.user.storageQuotaExpiresAt ?? null);
             setStorageWarningDays(profileRes.user.storageWarningDays ?? 0);
             setStorageExpiringAt(profileRes.user.storageExpiringAt ?? null);
+            setStorageExpiringBytes(profileRes.user.storageExpiringBytes ?? 0);
+            setStorageRemainingAfterExpiryBytes(profileRes.user.storageRemainingAfterExpiryBytes ?? null);
+            setStorageExpiringWillExceed(Boolean(profileRes.user.storageExpiringWillExceed));
+            setStoragePermanentBytes(profileRes.user.storagePermanentBytes ?? 0);
+            setStorageTimedBytes(profileRes.user.storageTimedBytes ?? 0);
+            setStorageTimedExpiresAt(profileRes.user.storageTimedExpiresAt ?? null);
             setBaseQuotaBytes(profileRes.storageQuotaDetail?.baseQuotaBytes ?? 0);
             setBaseQuotaExpiresAt(profileRes.storageQuotaDetail?.baseExpiresAt ?? null);
             setStorageGrants(profileRes.storageQuotaDetail?.grants ?? []);
@@ -2754,6 +2784,26 @@ export function MyMediaPanel() {
         }
     };
 
+    const handleBatchDeleteMedia = async () => {
+        if (!selectedMediaIds.length) return;
+        setBatchDeleting(true);
+        try {
+            const res = await storageApi.batchRemove(selectedMediaIds);
+            notifyCloudWorkspaceChanged("media", { sync: false });
+            message.success(t("userPanels.myMedia.batchDeletedMedia", { count: res.deletedCount }));
+            setSelectedMediaIds([]);
+            if (res.deletedCount >= items.length && page > 1) {
+                setPage((prev) => Math.max(1, prev - 1));
+            } else {
+                void loadData();
+            }
+        } catch (error) {
+            message.error(error instanceof Error ? error.message : t("common.deleteFailed"));
+        } finally {
+            setBatchDeleting(false);
+        }
+    };
+
     const handleDownloadMedia = async (record: MediaItem) => {
         setDownloadingId(record.id);
         try {
@@ -2836,6 +2886,12 @@ export function MyMediaPanel() {
             setQuotaExpiresAt(res.storageQuotaExpiresAt);
             if (typeof res.storageWarningDays === "number") setStorageWarningDays(res.storageWarningDays);
             setStorageExpiringAt(res.storageExpiringAt ?? null);
+            setStorageExpiringBytes(res.storageExpiringBytes ?? 0);
+            setStorageRemainingAfterExpiryBytes(res.storageRemainingAfterExpiryBytes ?? null);
+            setStorageExpiringWillExceed(Boolean(res.storageExpiringWillExceed));
+            setStoragePermanentBytes(res.storagePermanentBytes ?? 0);
+            setStorageTimedBytes(res.storageTimedBytes ?? 0);
+            setStorageTimedExpiresAt(res.storageTimedExpiresAt ?? null);
             setBaseQuotaBytes(res.baseQuotaBytes);
             setBaseQuotaExpiresAt(res.baseExpiresAt);
             setStorageGrants(res.grants);
@@ -2847,6 +2903,16 @@ export function MyMediaPanel() {
                     storageQuotaExpiresAt: res.storageQuotaExpiresAt,
                     ...(typeof res.storageWarningDays === "number" ? { storageWarningDays: res.storageWarningDays } : {}),
                     ...(res.storageExpiringAt !== undefined ? { storageExpiringAt: res.storageExpiringAt } : {}),
+                    ...(typeof res.storageExpiringBytes === "number" ? { storageExpiringBytes: res.storageExpiringBytes } : {}),
+                    ...(res.storageRemainingAfterExpiryBytes !== undefined
+                        ? { storageRemainingAfterExpiryBytes: res.storageRemainingAfterExpiryBytes }
+                        : {}),
+                    ...(typeof res.storageExpiringWillExceed === "boolean"
+                        ? { storageExpiringWillExceed: res.storageExpiringWillExceed }
+                        : {}),
+                    ...(typeof res.storagePermanentBytes === "number" ? { storagePermanentBytes: res.storagePermanentBytes } : {}),
+                    ...(typeof res.storageTimedBytes === "number" ? { storageTimedBytes: res.storageTimedBytes } : {}),
+                    ...(res.storageTimedExpiresAt !== undefined ? { storageTimedExpiresAt: res.storageTimedExpiresAt } : {}),
                 });
             }
         } catch (error) {
@@ -2861,6 +2927,9 @@ export function MyMediaPanel() {
         quotaBytes,
         expiresAt: quotaExpiresAt,
         expiringAt: storageExpiringAt,
+        expiringBytes: storageExpiringBytes,
+        remainingAfterExpiryBytes: storageRemainingAfterExpiryBytes,
+        expiringWillExceed: storageExpiringWillExceed,
         warningDays: storageWarningDays,
     });
     const storageAlertCopy = formatStorageAlertCopy(t, storageAlert, locale);
@@ -2890,9 +2959,20 @@ export function MyMediaPanel() {
                 title={t("userPanels.myMedia.cardTitle", {
                     used: formatBytes(usedBytes),
                     quota: formatBytes(quotaBytes),
-                    expiry: quotaExpiresAt
-                        ? t("userPanels.profile.expiryUntil", { time: new Date(quotaExpiresAt).toLocaleString(locale) })
-                        : t("userPanels.profile.expiryNone"),
+                    expiry:
+                        storagePermanentBytes > 0 && storageTimedBytes > 0 && storageTimedExpiresAt
+                            ? ` · ${formatStorageQuotaCaption(
+                                  t,
+                                  {
+                                      permanentBytes: storagePermanentBytes,
+                                      timedBytes: storageTimedBytes,
+                                      timedExpiresAt: storageTimedExpiresAt,
+                                  },
+                                  locale,
+                              )}`
+                            : quotaExpiresAt
+                              ? t("userPanels.profile.expiryUntil", { time: new Date(quotaExpiresAt).toLocaleString(locale) })
+                              : t("userPanels.profile.expiryNone"),
                 })}
                 extra={
                     quotaExpired ? (
@@ -3020,14 +3100,32 @@ export function MyMediaPanel() {
                                         </Space>
                                         <Space wrap>
                                             {selectedMediaIds.length > 0 ? (
-                                                <Button
-                                                    type="primary"
-                                                    icon={<Download className="size-4" />}
-                                                    loading={batchDownloading}
-                                                    onClick={() => void handleBatchDownloadMedia()}
-                                                >
-                                                    {t("common.batchDownloadCount", { count: selectedMediaIds.length })}
-                                                </Button>
+                                                <>
+                                                    <Button
+                                                        type="primary"
+                                                        icon={<Download className="size-4" />}
+                                                        loading={batchDownloading}
+                                                        disabled={batchDeleting}
+                                                        onClick={() => void handleBatchDownloadMedia()}
+                                                    >
+                                                        {t("common.batchDownloadCount", { count: selectedMediaIds.length })}
+                                                    </Button>
+                                                    <Popconfirm
+                                                        title={t("userPanels.myMedia.confirmBatchDeleteMedia", { count: selectedMediaIds.length })}
+                                                        onConfirm={() => void handleBatchDeleteMedia()}
+                                                        okText={t("common.delete")}
+                                                        okButtonProps={{ danger: true }}
+                                                    >
+                                                        <Button
+                                                            danger
+                                                            icon={<Trash2 className="size-4" />}
+                                                            loading={batchDeleting}
+                                                            disabled={batchDownloading}
+                                                        >
+                                                            {t("common.batchDeleteCount", { count: selectedMediaIds.length })}
+                                                        </Button>
+                                                    </Popconfirm>
+                                                </>
                                             ) : null}
                                             <Button icon={<RefreshCw className="size-4" />} loading={loading} onClick={() => void loadData()}>
                                                 {t("common.refresh")}

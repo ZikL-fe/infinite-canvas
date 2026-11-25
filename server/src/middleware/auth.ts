@@ -4,9 +4,9 @@ import type { MiddlewareHandler } from "hono";
 
 import { db, users, type UserRole, type UserStatus } from "../db/index.ts";
 import { verifyAccessToken } from "../lib/jwt.ts";
-import { getUserQuotaAlertMeta, getUserStorageQuotaSummary } from "../lib/storage-quota.ts";
+import { getUserQuotaAlertMeta, getUserStorageQuotaSummary, type UserQuotaAlertMeta } from "../lib/storage-quota.ts";
 
-export type AuthUser = {
+export type AuthUser = UserQuotaAlertMeta & {
   id: string;
   username: string;
   email: string | null;
@@ -20,9 +20,6 @@ export type AuthUser = {
   storageQuotaExpiresAt: Date | null;
   baseStorageQuotaBytes: number;
   baseStorageQuotaExpiresAt: Date | null;
-  lowBalanceThreshold: number;
-  storageWarningDays: number;
-  storageExpiringAt: string | null;
   createdAt: Date;
 };
 

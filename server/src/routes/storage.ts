@@ -59,6 +59,10 @@ const batchUrlsSchema = z.object({
   mediaIds: z.array(z.string().min(1)).max(100),
 });
 
+const batchDeleteMediaSchema = z.object({
+  mediaIds: z.array(z.string().min(1)).min(1).max(100),
+});
+
 const storageRedeemSchema = z.object({
   code: z.string().trim().min(1, "请输入云端存储兑换码").max(64),
 });
@@ -167,8 +171,7 @@ storageRoutes.post("/redeem", zValidator("json", storageRedeemSchema), async (c)
       expiresAt: codeRow.storageExpiresAt ? codeRow.storageExpiresAt.toISOString() : null,
       storageQuotaBytes: summary.storageQuotaBytes,
       storageQuotaExpiresAt: summary.storageQuotaExpiresAt ? summary.storageQuotaExpiresAt.toISOString() : null,
-      storageWarningDays: alertMeta.storageWarningDays,
-      storageExpiringAt: alertMeta.storageExpiringAt,
+      ...alertMeta,
       baseQuotaBytes: summary.baseStorageQuotaBytes,
       baseExpiresAt: summary.baseStorageQuotaExpiresAt ? summary.baseStorageQuotaExpiresAt.toISOString() : null,
       grantsQuotaBytes: summary.storageGrantsQuotaBytes,
@@ -841,6 +844,69 @@ storageRoutes.post("/urls", zValidator("json", batchUrlsSchema), async (c) => {
   return c.json({ urls });
 });
 
+async function deleteMediaRowsWithQuota(
+  rows: Array<{ id: string; userId: string; objectKey: string; bytes: number; status: string; meta: Record<string, unknown> | null }>,
+) {
+  const activeRows = rows.filter((row) => row.status === "active");
+  if (!activeRows.length) return { deletedCount: 0, freedBytesTotal: 0 };
+
+  const config = await getS3StorageConfig();
+  if (config) {
+    await Promise.all(
+      activeRows.flatMap((media) => {
+        const thumbKey = typeof media.meta?.thumbObjectKey === "string" ? media.meta.thumbObjectKey : "";
+        const jobs = [deleteS3Object(config, media.objectKey).catch(() => undefined)];
+        if (thumbKey) jobs.push(deleteS3Object(config, thumbKey).catch(() => undefined));
+        return jobs;
+      }),
+    );
+  }
+
+  return db.transaction(async (tx) => {
+    const updated = await tx
+      .update(mediaObjects)
+      .set({ status: "deleted" })
+      .where(and(inArray(mediaObjects.id, activeRows.map((row) => row.id)), eq(mediaObjects.status, "active")))
+      .returning({ id: mediaObjects.id, userId: mediaObjects.userId, bytes: mediaObjects.bytes });
+
+    if (!updated.length) return { deletedCount: 0, freedBytesTotal: 0 };
+
+    const bytesByUser = new Map<string, number>();
+    let freedBytesTotal = 0;
+    for (const row of updated) {
+      const bytes = Math.max(0, Number(row.bytes || 0));
+      freedBytesTotal += bytes;
+      if (bytes > 0) bytesByUser.set(row.userId, (bytesByUser.get(row.userId) ?? 0) + bytes);
+    }
+
+    for (const [ownerId, freed] of bytesByUser) {
+      await tx
+        .update(users)
+        .set({
+          storageUsedBytes: sql`GREATEST(0, ${users.storageUsedBytes} - ${freed})`,
+          updatedAt: new Date(),
+        })
+        .where(eq(users.id, ownerId));
+    }
+
+    return { deletedCount: updated.length, freedBytesTotal };
+  });
+}
+
+storageRoutes.post("/batch-delete", zValidator("json", batchDeleteMediaSchema), async (c) => {
+  const user = c.get("user");
+  const uniqueIds = Array.from(new Set(c.req.valid("json").mediaIds));
+  const rows = await db.query.mediaObjects.findMany({
+    where:
+      user.role === "admin"
+        ? and(inArray(mediaObjects.id, uniqueIds), eq(mediaObjects.status, "active"))
+        : and(inArray(mediaObjects.id, uniqueIds), eq(mediaObjects.userId, user.id), eq(mediaObjects.status, "active")),
+  });
+
+  const { deletedCount, freedBytesTotal } = await deleteMediaRowsWithQuota(rows);
+  return c.json({ ok: true, deletedCount, freedBytes: freedBytesTotal });
+});
+
 storageRoutes.delete("/:mediaId", async (c) => {
   const user = c.get("user");
   const mediaId = c.req.param("mediaId");
@@ -852,28 +918,7 @@ storageRoutes.delete("/:mediaId", async (c) => {
     return c.json({ error: "无权删除该文件" }, 403);
   }
 
-  const config = await getS3StorageConfig();
-  if (config) {
-    await deleteS3Object(config, media.objectKey).catch(() => undefined);
-    const thumbKey = typeof media.meta?.thumbObjectKey === "string" ? media.meta.thumbObjectKey : "";
-    if (thumbKey) {
-      await deleteS3Object(config, thumbKey).catch(() => undefined);
-    }
-  }
-
-  await db.transaction(async (tx) => {
-    await tx.update(mediaObjects).set({ status: "deleted" }).where(eq(mediaObjects.id, media.id));
-    if (media.status === "active" && media.bytes > 0) {
-      await tx
-        .update(users)
-        .set({
-          storageUsedBytes: sql`GREATEST(0, ${users.storageUsedBytes} - ${media.bytes})`,
-          updatedAt: new Date(),
-        })
-        .where(eq(users.id, media.userId));
-    }
-  });
-
+  await deleteMediaRowsWithQuota([media]);
   return c.json({ ok: true });
 });
 

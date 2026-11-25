@@ -1,7 +1,8 @@
-/** 积分低余额与云端存储即将到期/已满预警判断与统一文案格式化工具。 */
+/** 积分低余额与云端存储即将到期/已满预警判断、混合配额构成描述及统一文案格式化工具。 */
 import type { TFunction } from "i18next";
 
 import { formatExactCredits } from "@/lib/format-number";
+import { formatBytes } from "@/lib/image-utils";
 
 export type AlertSeverity = "none" | "warning" | "error";
 
@@ -19,6 +20,9 @@ export type StorageAlertState = {
     expiringSoon: boolean;
     overQuota: boolean;
     isPartialPackExpiry: boolean;
+    expiringWillExceed: boolean;
+    expiringBytes: number;
+    remainingAfterExpiryBytes: number | null;
     expiringAt: string | null;
     expiresAt: string | null;
     warningDays: number;
@@ -44,12 +48,15 @@ export function resolveCreditAlert(balanceInput?: number | null, thresholdInput?
     };
 }
 
-/** 计算云端存储配额是否已过期、即将在预警窗口内到期或已满 */
+/** 计算云端存储配额是否已过期、即将在预警窗口内到期（含永久+限时组合包）或已满 */
 export function resolveStorageAlert(input: {
     usedBytes?: number | null;
     quotaBytes?: number | null;
     expiresAt?: string | null;
     expiringAt?: string | null;
+    expiringBytes?: number | null;
+    remainingAfterExpiryBytes?: number | null;
+    expiringWillExceed?: boolean | null;
     warningDays?: number | null;
     nowMs?: number;
 }): StorageAlertState {
@@ -78,6 +85,13 @@ export function resolveStorageAlert(input: {
     const expiringSoon = Boolean(expiringAt);
     const daysLeft = expiringAt ? Math.max(1, Math.ceil((new Date(expiringAt).getTime() - nowMs) / DAY_MS)) : null;
     const isPartialPackExpiry = Boolean(expiringSoon && !expiresAt);
+    const expiringBytes = Math.max(0, Number(input.expiringBytes ?? 0));
+    const remainingAfterExpiryBytes =
+        typeof input.remainingAfterExpiryBytes === "number" ? Math.max(0, input.remainingAfterExpiryBytes) : null;
+    const expiringWillExceed =
+        typeof input.expiringWillExceed === "boolean"
+            ? input.expiringWillExceed
+            : Boolean(expiringSoon && !isPartialPackExpiry);
     const level: AlertSeverity = expired || overQuota ? "error" : expiringSoon ? "warning" : "none";
 
     return {
@@ -86,6 +100,9 @@ export function resolveStorageAlert(input: {
         expiringSoon,
         overQuota,
         isPartialPackExpiry,
+        expiringWillExceed,
+        expiringBytes,
+        remainingAfterExpiryBytes,
         expiringAt,
         expiresAt,
         warningDays,
@@ -93,6 +110,36 @@ export function resolveStorageAlert(input: {
         usedBytes,
         quotaBytes,
     };
+}
+
+/** 格式化云端存储的有效期构成（兼容全永久、全限时及「永久 + 限时扩容包」混合场景） */
+export function formatStorageQuotaCaption(
+    t: TFunction,
+    input: {
+        expired?: boolean;
+        expiresAt?: string | null;
+        permanentBytes?: number | null;
+        timedBytes?: number | null;
+        timedExpiresAt?: string | null;
+    },
+    locale?: string,
+) {
+    if (input.expired && input.expiresAt) {
+        return t("topNav.storageExpiredAt", { date: new Date(input.expiresAt).toLocaleDateString(locale) });
+    }
+    const perm = Math.max(0, Number(input.permanentBytes ?? 0));
+    const timed = Math.max(0, Number(input.timedBytes ?? 0));
+    if (perm > 0 && timed > 0 && input.timedExpiresAt) {
+        return t("topNav.storageMixedExpiry", {
+            permanent: formatBytes(perm, "0 MB"),
+            timed: formatBytes(timed, "0 MB"),
+            date: new Date(input.timedExpiresAt).toLocaleDateString(locale),
+        });
+    }
+    if (input.expiresAt) {
+        return t("topNav.storageExpiresAt", { date: new Date(input.expiresAt).toLocaleDateString(locale) });
+    }
+    return t("topNav.storagePermanent");
 }
 
 export function formatCreditAlertCopy(t: TFunction, state: CreditAlertState): { title: string; description: string; short: string } | null {
@@ -133,10 +180,20 @@ export function formatStorageAlertCopy(
         const time = target.toLocaleString(locale);
         const days = state.daysLeft ?? 1;
         if (state.isPartialPackExpiry) {
+            const expiringSize = state.expiringBytes > 0 ? formatBytes(state.expiringBytes, "0 MB") : "";
+            const remaining =
+                state.remainingAfterExpiryBytes !== null ? formatBytes(state.remainingAfterExpiryBytes, "0 MB") : "";
+            if (state.expiringWillExceed) {
+                return {
+                    title: t("quotaAlerts.packExpiringTitle"),
+                    description: t("quotaAlerts.packExpiringDesc", { time, days, expiringSize, remaining }),
+                    short: t("quotaAlerts.packExpiringShort", { date, days, expiringSize }),
+                };
+            }
             return {
                 title: t("quotaAlerts.packExpiringTitle"),
-                description: t("quotaAlerts.packExpiringDesc", { time, days }),
-                short: t("quotaAlerts.packExpiringShort", { date, days }),
+                description: t("quotaAlerts.packExpiringShrinkDesc", { time, days, expiringSize, remaining }),
+                short: t("quotaAlerts.packExpiringShrinkShort", { date, days, expiringSize, remaining }),
             };
         }
         return {

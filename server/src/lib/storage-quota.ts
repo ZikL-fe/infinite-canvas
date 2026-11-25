@@ -35,6 +35,9 @@ export type StorageQuotaSummary = {
   baseStorageQuotaExpiresAt: Date | null;
   storageGrantsQuotaBytes: number;
   activeGrantCount: number;
+  permanentQuotaBytes: number;
+  timedQuotaBytes: number;
+  earliestActiveExpiresAt: Date | null;
 };
 
 export function resolveEffectiveStorageQuota(
@@ -51,7 +54,10 @@ export function resolveEffectiveStorageQuota(
 
   let grantsActiveBytes = 0;
   let activeGrantCount = 0;
+  let permanentQuotaBytes = baseActiveBytes > 0 && !baseExpiresAt ? baseActiveBytes : 0;
+  let timedQuotaBytes = baseActiveBytes > 0 && baseExpiresAt ? baseActiveBytes : 0;
   let hasPermanentActive = baseActiveBytes > 0 && !baseExpiresAt;
+  let earliestActiveExpiresAt: Date | null = baseActiveBytes > 0 && baseExpiresAt ? baseExpiresAt : null;
   let latestActiveExpiresAt: Date | null = baseActiveBytes > 0 && baseExpiresAt ? baseExpiresAt : null;
   let latestExpiredAt: Date | null = baseQuotaBytes > 0 && baseExpired && baseExpiresAt ? baseExpiresAt : null;
 
@@ -69,8 +75,15 @@ export function resolveEffectiveStorageQuota(
     activeGrantCount += 1;
     if (!exp) {
       hasPermanentActive = true;
-    } else if (!latestActiveExpiresAt || exp.getTime() > latestActiveExpiresAt.getTime()) {
-      latestActiveExpiresAt = exp;
+      permanentQuotaBytes += bytes;
+    } else {
+      timedQuotaBytes += bytes;
+      if (!earliestActiveExpiresAt || exp.getTime() < earliestActiveExpiresAt.getTime()) {
+        earliestActiveExpiresAt = exp;
+      }
+      if (!latestActiveExpiresAt || exp.getTime() > latestActiveExpiresAt.getTime()) {
+        latestActiveExpiresAt = exp;
+      }
     }
   }
 
@@ -85,6 +98,9 @@ export function resolveEffectiveStorageQuota(
     baseStorageQuotaExpiresAt: baseExpiresAt,
     storageGrantsQuotaBytes: grantsActiveBytes,
     activeGrantCount,
+    permanentQuotaBytes,
+    timedQuotaBytes,
+    earliestActiveExpiresAt,
   };
 }
 
@@ -119,7 +135,7 @@ export async function getUserStorageQuotaSummary(userRow: UserBaseQuotaInput, ex
   };
 }
 
-/** 查找预警窗口内最早即将到期且到期后会导致超额的时间点（兼容永久配额+限时资源包组合）。 */
+/** 查找预警窗口内最早即将到期的时间点；默认仅在到期后会导致超额时返回（邮件清理使用），前端展示可放宽为任意即将到期配额。 */
 export function getEarliestPreExpiryWarningTimestamp(
   baseQuotaBytes: number,
   baseExpiresAt: Date | null | undefined,
@@ -127,6 +143,7 @@ export function getEarliestPreExpiryWarningTimestamp(
   usedBytes: number,
   nowMs: number,
   warnWindowMs: number,
+  requireOverQuotaAfterExpiry = true,
 ): Date | null {
   if (warnWindowMs <= 0) return null;
   const windowEnd = nowMs + warnWindowMs;
@@ -144,6 +161,9 @@ export function getEarliestPreExpiryWarningTimestamp(
   if (!candidates.length) return null;
 
   candidates.sort((a, b) => a.getTime() - b.getTime());
+  if (!requireOverQuotaAfterExpiry) {
+    return candidates[0] ?? null;
+  }
   for (const candidate of candidates) {
     const afterExpiry = resolveEffectiveStorageQuota(baseQuotaBytes, baseExpiresAt, grants, candidate);
     if (afterExpiry.storageQuotaBytes <= 0 || usedBytes > afterExpiry.storageQuotaBytes) {
@@ -153,31 +173,74 @@ export function getEarliestPreExpiryWarningTimestamp(
   return null;
 }
 
-/** 聚合当前用户的低积分阈值与云存储即将到期预警时间，供前端统一提示。 */
+export type UserQuotaAlertMeta = {
+  lowBalanceThreshold: number;
+  storageWarningDays: number;
+  storageExpiringAt: string | null;
+  storageExpiringBytes: number;
+  storageRemainingAfterExpiryBytes: number | null;
+  storageExpiringWillExceed: boolean;
+  storagePermanentBytes: number;
+  storageTimedBytes: number;
+  storageTimedExpiresAt: string | null;
+};
+
+/** 聚合当前用户的低积分阈值、永久/限时存储构成及即将到期预警信息，供前端统一提示。 */
 export async function getUserQuotaAlertMeta(input: {
   lowBalanceThreshold?: number | null;
   storageUsedBytes: number;
   baseStorageQuotaBytes: number;
   baseStorageQuotaExpiresAt: Date | null;
   grants: Array<Pick<StorageGrantRow, "quotaBytes" | "expiresAt" | "status">>;
-}) {
+}): Promise<UserQuotaAlertMeta> {
   const [mailConfig, expiryPolicy] = await Promise.all([
     getPlatformMailConfig(),
     getPlatformStorageExpiryPolicy(),
   ]);
+  const now = new Date();
+  const nowMs = now.getTime();
+  const currentSummary = resolveEffectiveStorageQuota(
+    input.baseStorageQuotaBytes,
+    input.baseStorageQuotaExpiresAt,
+    input.grants,
+    now,
+  );
   const storageWarningDays = expiryPolicy.preExpiryWarnDays;
-  const storageExpiringAt = getEarliestPreExpiryWarningTimestamp(
+  const expiringAtDate = getEarliestPreExpiryWarningTimestamp(
     input.baseStorageQuotaBytes,
     input.baseStorageQuotaExpiresAt,
     input.grants,
     input.storageUsedBytes,
-    Date.now(),
+    nowMs,
     storageWarningDays * DAY_MS,
+    false,
   );
+
+  let storageExpiringBytes = 0;
+  let storageRemainingAfterExpiryBytes: number | null = null;
+  let storageExpiringWillExceed = false;
+  if (expiringAtDate) {
+    const afterExpiry = resolveEffectiveStorageQuota(
+      input.baseStorageQuotaBytes,
+      input.baseStorageQuotaExpiresAt,
+      input.grants,
+      expiringAtDate,
+    );
+    storageRemainingAfterExpiryBytes = afterExpiry.storageQuotaBytes;
+    storageExpiringBytes = Math.max(0, currentSummary.storageQuotaBytes - afterExpiry.storageQuotaBytes);
+    storageExpiringWillExceed = afterExpiry.storageQuotaBytes <= 0 || input.storageUsedBytes > afterExpiry.storageQuotaBytes;
+  }
+
   return {
     lowBalanceThreshold: input.lowBalanceThreshold ?? mailConfig.lowBalanceThreshold,
     storageWarningDays,
-    storageExpiringAt: storageExpiringAt ? storageExpiringAt.toISOString() : null,
+    storageExpiringAt: expiringAtDate ? expiringAtDate.toISOString() : null,
+    storageExpiringBytes,
+    storageRemainingAfterExpiryBytes,
+    storageExpiringWillExceed,
+    storagePermanentBytes: currentSummary.permanentQuotaBytes,
+    storageTimedBytes: currentSummary.timedQuotaBytes,
+    storageTimedExpiresAt: currentSummary.earliestActiveExpiresAt ? currentSummary.earliestActiveExpiresAt.toISOString() : null,
   };
 }
 

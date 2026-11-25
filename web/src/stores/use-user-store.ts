@@ -20,6 +20,12 @@ export type LocalUser = {
     lowBalanceThreshold?: number | null;
     storageWarningDays?: number;
     storageExpiringAt?: string | null;
+    storageExpiringBytes?: number;
+    storageRemainingAfterExpiryBytes?: number | null;
+    storageExpiringWillExceed?: boolean;
+    storagePermanentBytes?: number;
+    storageTimedBytes?: number;
+    storageTimedExpiresAt?: string | null;
     creditBalance?: number;
     createdAt?: string;
 };

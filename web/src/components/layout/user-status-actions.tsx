@@ -13,6 +13,7 @@ import { formatStoragePair } from "@/lib/image-utils";
 import {
     formatCreditAlertCopy,
     formatStorageAlertCopy,
+    formatStorageQuotaCaption,
     maxAlertSeverity,
     resolveCreditAlert,
     resolveStorageAlert,
@@ -70,6 +71,9 @@ export function UserStatusActions({ variant = "default", onOpenShortcuts, onOpen
         quotaBytes,
         expiresAt: user?.storageQuotaExpiresAt,
         expiringAt: user?.storageExpiringAt,
+        expiringBytes: user?.storageExpiringBytes,
+        remainingAfterExpiryBytes: user?.storageRemainingAfterExpiryBytes,
+        expiringWillExceed: user?.storageExpiringWillExceed,
         warningDays: user?.storageWarningDays,
     });
     const creditAlertCopy = formatCreditAlertCopy(t, creditAlert);
@@ -211,11 +215,17 @@ export function UserStatusActions({ variant = "default", onOpenShortcuts, onOpen
                                                   : token.colorTextTertiary,
                                         }}
                                     >
-                                        {storageAlert.expired
-                                            ? t("topNav.storageExpiredAt", { date: new Date(user.storageQuotaExpiresAt!).toLocaleDateString(locale) })
-                                            : user.storageQuotaExpiresAt
-                                              ? t("topNav.storageExpiresAt", { date: new Date(user.storageQuotaExpiresAt).toLocaleDateString(locale) })
-                                              : t("topNav.storagePermanent")}
+                                        {formatStorageQuotaCaption(
+                                            t,
+                                            {
+                                                expired: storageAlert.expired,
+                                                expiresAt: user.storageQuotaExpiresAt,
+                                                permanentBytes: user.storagePermanentBytes,
+                                                timedBytes: user.storageTimedBytes,
+                                                timedExpiresAt: user.storageTimedExpiresAt,
+                                            },
+                                            locale,
+                                        )}
                                     </div>
                                     {storageAlertCopy && storageAlert.level !== "none" ? (
                                         <PopoverAlertStrip level={storageAlert.level} text={storageAlertCopy.short} />

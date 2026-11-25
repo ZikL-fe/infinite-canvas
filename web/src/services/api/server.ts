@@ -148,6 +148,12 @@ export type AccountOverviewResponse = {
     storageQuotaExpiresAt?: string | null;
     storageWarningDays?: number;
     storageExpiringAt?: string | null;
+    storageExpiringBytes?: number;
+    storageRemainingAfterExpiryBytes?: number | null;
+    storageExpiringWillExceed?: boolean;
+    storagePermanentBytes?: number;
+    storageTimedBytes?: number;
+    storageTimedExpiresAt?: string | null;
     canvasProjectCount: number;
     assetCount: number;
     days: number;
@@ -736,6 +742,11 @@ export const storageApi = {
     },
     getUrls: (mediaIds: string[]) => requestServer<{ urls: Record<string, string> }>("/storage/urls", { method: "POST", body: JSON.stringify({ mediaIds }) }),
     remove: (mediaId: string) => requestServer<{ ok: boolean }>(`/storage/${encodeURIComponent(mediaId)}`, { method: "DELETE" }),
+    batchRemove: (mediaIds: string[]) =>
+        requestServer<{ ok: boolean; deletedCount: number; freedBytes: number }>("/storage/batch-delete", {
+            method: "POST",
+            body: JSON.stringify({ mediaIds }),
+        }),
     getGrants: () =>
         requestServer<{
             storageUsedBytes: number;
@@ -743,6 +754,12 @@ export const storageApi = {
             storageQuotaExpiresAt: string | null;
             storageWarningDays?: number;
             storageExpiringAt?: string | null;
+            storageExpiringBytes?: number;
+            storageRemainingAfterExpiryBytes?: number | null;
+            storageExpiringWillExceed?: boolean;
+            storagePermanentBytes?: number;
+            storageTimedBytes?: number;
+            storageTimedExpiresAt?: string | null;
             baseQuotaBytes: number;
             baseExpiresAt: string | null;
             grantsQuotaBytes: number;
@@ -759,6 +776,12 @@ export const storageApi = {
             storageQuotaExpiresAt: string | null;
             storageWarningDays?: number;
             storageExpiringAt?: string | null;
+            storageExpiringBytes?: number;
+            storageRemainingAfterExpiryBytes?: number | null;
+            storageExpiringWillExceed?: boolean;
+            storagePermanentBytes?: number;
+            storageTimedBytes?: number;
+            storageTimedExpiresAt?: string | null;
             baseQuotaBytes: number;
             baseExpiresAt: string | null;
             grantsQuotaBytes: number;

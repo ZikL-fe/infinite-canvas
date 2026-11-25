@@ -13,7 +13,7 @@ import { issueEmailVerificationCode, verifyAndConsumeEmailCode } from "../lib/em
 import { signAccessToken } from "../lib/jwt.ts";
 import { isMailConfigReady } from "../lib/mail.ts";
 import { getAuthPolicy, getPlatformMailConfig, getPlatformWebdavConfig } from "../lib/settings.ts";
-import { getUserQuotaAlertMeta, getUserStorageQuotaSummary } from "../lib/storage-quota.ts";
+import { getUserQuotaAlertMeta, getUserStorageQuotaSummary, type UserQuotaAlertMeta } from "../lib/storage-quota.ts";
 import { requireAuth, type AppEnv } from "../middleware/auth.ts";
 
 const registerSchema = z.object({
@@ -48,23 +48,22 @@ const refreshSchema = z.object({
   refreshToken: z.string().min(1, "缺少 refreshToken"),
 });
 
-function sanitizeUser(user: {
-  id: string;
-  username: string;
-  email: string | null;
-  emailVerifiedAt?: Date | null;
-  displayName: string;
-  avatarUrl: string;
-  role: UserRole;
-  status: string;
-  storageUsedBytes: number;
-  storageQuotaBytes: number;
-  storageQuotaExpiresAt?: Date | null;
-  lowBalanceThreshold?: number | null;
-  storageWarningDays?: number;
-  storageExpiringAt?: string | null;
-  createdAt: Date;
-}) {
+function sanitizeUser(
+  user: Partial<UserQuotaAlertMeta> & {
+    id: string;
+    username: string;
+    email: string | null;
+    emailVerifiedAt?: Date | null;
+    displayName: string;
+    avatarUrl: string;
+    role: UserRole;
+    status: string;
+    storageUsedBytes: number;
+    storageQuotaBytes: number;
+    storageQuotaExpiresAt?: Date | null;
+    createdAt: Date;
+  },
+) {
   return {
     id: user.id,
     username: user.username,
@@ -80,6 +79,14 @@ function sanitizeUser(user: {
     ...(typeof user.lowBalanceThreshold === "number" ? { lowBalanceThreshold: user.lowBalanceThreshold } : {}),
     ...(typeof user.storageWarningDays === "number" ? { storageWarningDays: user.storageWarningDays } : {}),
     ...(user.storageExpiringAt !== undefined ? { storageExpiringAt: user.storageExpiringAt } : {}),
+    ...(typeof user.storageExpiringBytes === "number" ? { storageExpiringBytes: user.storageExpiringBytes } : {}),
+    ...(user.storageRemainingAfterExpiryBytes !== undefined
+      ? { storageRemainingAfterExpiryBytes: user.storageRemainingAfterExpiryBytes }
+      : {}),
+    ...(typeof user.storageExpiringWillExceed === "boolean" ? { storageExpiringWillExceed: user.storageExpiringWillExceed } : {}),
+    ...(typeof user.storagePermanentBytes === "number" ? { storagePermanentBytes: user.storagePermanentBytes } : {}),
+    ...(typeof user.storageTimedBytes === "number" ? { storageTimedBytes: user.storageTimedBytes } : {}),
+    ...(user.storageTimedExpiresAt !== undefined ? { storageTimedExpiresAt: user.storageTimedExpiresAt } : {}),
     createdAt: user.createdAt,
   };
 }
