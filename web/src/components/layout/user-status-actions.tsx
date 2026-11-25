@@ -1,7 +1,7 @@
 import type { CSSProperties } from "react";
 import { useState } from "react";
 import { Dropdown, Modal, Popover, Progress, Tooltip, type MenuProps, theme as antdTheme } from "antd";
-import { Coins, HardDrive, Keyboard, LogIn, LogOut, Puzzle, Shield, User } from "lucide-react";
+import { AlertTriangle, Coins, HardDrive, Keyboard, LogIn, LogOut, Puzzle, Shield, User } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
 
@@ -10,6 +10,14 @@ import { NotificationBellModal } from "@/components/layout/notification-bell-mod
 import { changeAppLocale, type AppLocale } from "@/i18n";
 import { formatCompactCredits, formatExactCredits } from "@/lib/format-number";
 import { formatStoragePair } from "@/lib/image-utils";
+import {
+    formatCreditAlertCopy,
+    formatStorageAlertCopy,
+    maxAlertSeverity,
+    resolveCreditAlert,
+    resolveStorageAlert,
+    type AlertSeverity,
+} from "@/lib/quota-alerts";
 import { canvasThemes } from "@/lib/canvas-theme";
 import { MyWalletPanel } from "@/pages/admin/user-panels";
 import { authApi } from "@/services/api/server";
@@ -22,6 +30,24 @@ type UserStatusActionsProps = {
     onOpenShortcuts?: () => void;
     onOpenPlugins?: () => void;
 };
+
+function PopoverAlertStrip({ level, text }: { level: Exclude<AlertSeverity, "none">; text: string }) {
+    const { token } = antdTheme.useToken();
+    const isError = level === "error";
+    return (
+        <div
+            className="mt-1.5 flex items-start gap-1.5 rounded-md border px-2 py-1 text-[11px] leading-4"
+            style={{
+                backgroundColor: isError ? token.colorErrorBg : token.colorWarningBg,
+                borderColor: isError ? token.colorErrorBorder : token.colorWarningBorder,
+                color: isError ? token.colorErrorText : token.colorWarningText,
+            }}
+        >
+            <AlertTriangle className="mt-0.5 size-3 shrink-0" />
+            <span>{text}</span>
+        </div>
+    );
+}
 
 export function UserStatusActions({ variant = "default", onOpenShortcuts, onOpenPlugins }: UserStatusActionsProps) {
     const { i18n, t } = useTranslation();
@@ -37,13 +63,22 @@ export function UserStatusActions({ variant = "default", onOpenShortcuts, onOpen
     const usedBytes = user?.storageUsedBytes ?? 0;
     const quotaBytes = user?.storageQuotaBytes ?? 0;
     const storagePercent = quotaBytes > 0 ? Math.min(100, Math.round((usedBytes / quotaBytes) * 100)) : usedBytes > 0 ? 100 : 0;
-    const storageExpired = Boolean(user?.storageQuotaExpiresAt && new Date(user.storageQuotaExpiresAt).getTime() <= Date.now());
-    const storageOverLimit = storageExpired || (quotaBytes > 0 && usedBytes >= quotaBytes);
+    const locale = i18n.resolvedLanguage as AppLocale;
+    const creditAlert = resolveCreditAlert(user?.creditBalance, user?.lowBalanceThreshold);
+    const storageAlert = resolveStorageAlert({
+        usedBytes,
+        quotaBytes,
+        expiresAt: user?.storageQuotaExpiresAt,
+        expiringAt: user?.storageExpiringAt,
+        warningDays: user?.storageWarningDays,
+    });
+    const creditAlertCopy = formatCreditAlertCopy(t, creditAlert);
+    const storageAlertCopy = formatStorageAlertCopy(t, storageAlert, locale);
+    const topAlertSeverity = maxAlertSeverity(creditAlert.level, storageAlert.level);
 
     const canvasTheme = canvasThemes[theme];
     const naturalIconClass = "inline-flex size-7 shrink-0 cursor-pointer items-center justify-center rounded-md text-stone-600 transition-colors hover:bg-black/5 hover:text-stone-950 dark:text-stone-300 dark:hover:bg-white/10 dark:hover:text-white [&_svg]:size-4";
     const iconStyle: CSSProperties | undefined = variant === "canvas" ? { color: canvasTheme.node.text } : undefined;
-    const locale = i18n.resolvedLanguage as AppLocale;
     const nextLocale = locale === "zh-CN" ? "en-US" : "zh-CN";
     const languageLabel = t("topNav.switchLanguage", { language: t(nextLocale === "zh-CN" ? "locale.zhCN" : "locale.enUS") });
 
@@ -107,7 +142,7 @@ export function UserStatusActions({ variant = "default", onOpenShortcuts, onOpen
                         placement="bottomRight"
                         arrow={false}
                         content={
-                            <div className="w-60 space-y-3 py-0.5">
+                            <div className="w-64 space-y-3 py-0.5">
                                 <div>
                                     <div className="flex items-center justify-between text-xs" style={{ color: token.colorTextSecondary }}>
                                         <span className="inline-flex items-center gap-1.5">
@@ -123,9 +158,22 @@ export function UserStatusActions({ variant = "default", onOpenShortcuts, onOpen
                                             {t("topNav.wallet")}
                                         </button>
                                     </div>
-                                    <div className="mt-1 text-base font-semibold tabular-nums" style={{ color: token.colorText }}>
+                                    <div
+                                        className="mt-1 text-base font-semibold tabular-nums"
+                                        style={{
+                                            color:
+                                                creditAlert.level === "error"
+                                                    ? token.colorError
+                                                    : creditAlert.level === "warning"
+                                                      ? token.colorWarningText
+                                                      : token.colorText,
+                                        }}
+                                    >
                                         {formatExactCredits(user.creditBalance ?? 0)}
                                     </div>
+                                    {creditAlertCopy && creditAlert.level !== "none" ? (
+                                        <PopoverAlertStrip level={creditAlert.level} text={creditAlertCopy.short} />
+                                    ) : null}
                                 </div>
                                 <div className="border-t pt-2.5" style={{ borderColor: token.colorBorderSecondary }}>
                                     <div className="flex items-center justify-between text-xs" style={{ color: token.colorTextSecondary }}>
@@ -145,14 +193,33 @@ export function UserStatusActions({ variant = "default", onOpenShortcuts, onOpen
                                     <div className="mt-1 text-xs font-medium tabular-nums" style={{ color: token.colorText }}>
                                         {formatStoragePair(user.storageUsedBytes, user.storageQuotaBytes)}
                                     </div>
-                                    <Progress percent={storagePercent} size="small" showInfo={false} status={storageOverLimit ? "exception" : "normal"} className="!my-1" />
-                                    <div className="text-[11px]" style={{ color: storageExpired ? token.colorError : token.colorTextTertiary }}>
-                                        {storageExpired
+                                    <Progress
+                                        percent={storagePercent}
+                                        size="small"
+                                        showInfo={false}
+                                        status={storageAlert.level === "error" ? "exception" : "normal"}
+                                        strokeColor={storageAlert.expiringSoon ? token.colorWarning : undefined}
+                                        className="!my-1"
+                                    />
+                                    <div
+                                        className="text-[11px]"
+                                        style={{
+                                            color: storageAlert.expired
+                                                ? token.colorError
+                                                : storageAlert.expiringSoon
+                                                  ? token.colorWarningText
+                                                  : token.colorTextTertiary,
+                                        }}
+                                    >
+                                        {storageAlert.expired
                                             ? t("topNav.storageExpiredAt", { date: new Date(user.storageQuotaExpiresAt!).toLocaleDateString(locale) })
                                             : user.storageQuotaExpiresAt
                                               ? t("topNav.storageExpiresAt", { date: new Date(user.storageQuotaExpiresAt).toLocaleDateString(locale) })
                                               : t("topNav.storagePermanent")}
                                     </div>
+                                    {storageAlertCopy && storageAlert.level !== "none" ? (
+                                        <PopoverAlertStrip level={storageAlert.level} text={storageAlertCopy.short} />
+                                    ) : null}
                                 </div>
                             </div>
                         }
@@ -160,10 +227,24 @@ export function UserStatusActions({ variant = "default", onOpenShortcuts, onOpen
                         <button
                             type="button"
                             className="hidden h-7 cursor-pointer items-center gap-1 rounded-md px-2 text-xs font-medium tabular-nums text-stone-700 transition-colors hover:bg-black/5 hover:text-stone-950 sm:inline-flex dark:text-stone-200 dark:hover:bg-white/10 dark:hover:text-white"
+                            style={
+                                topAlertSeverity === "none"
+                                    ? undefined
+                                    : {
+                                          backgroundColor: topAlertSeverity === "error" ? token.colorErrorBg : token.colorWarningBg,
+                                          color: topAlertSeverity === "error" ? token.colorError : token.colorWarningText,
+                                      }
+                            }
                             onClick={() => setWalletOpen(true)}
                         >
                             <Coins className="size-3.5 shrink-0" />
                             <span>{t("topNav.creditsBadge", { balance: formatCompactCredits(user.creditBalance ?? 0) })}</span>
+                            {topAlertSeverity !== "none" ? (
+                                <span
+                                    className="size-1.5 shrink-0 rounded-full"
+                                    style={{ backgroundColor: topAlertSeverity === "error" ? token.colorError : token.colorWarning }}
+                                />
+                            ) : null}
                         </button>
                     </Popover>
                 ) : null}

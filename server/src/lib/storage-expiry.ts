@@ -5,7 +5,7 @@ import { canvasProjects, db, mediaObjects, userAssets, userStorageGrants, users,
 import { isMailConfigReady, sendStorageCleanedEmail, sendStorageExpiredNoticeEmail, sendStoragePreExpiryEmail } from "./mail.ts";
 import { deleteS3Object } from "./s3.ts";
 import { getPlatformMailConfig, getPlatformStorageExpiryPolicy, getS3StorageConfig, type PlatformStorageExpiryPolicy } from "./settings.ts";
-import { resolveEffectiveStorageQuota } from "./storage-quota.ts";
+import { getEarliestPreExpiryWarningTimestamp, resolveEffectiveStorageQuota } from "./storage-quota.ts";
 
 export const STORAGE_EXPIRY_SWEEP_INTERVAL_MS = 60 * 60 * 1000;
 export const STORAGE_EXPIRY_BATCH_LIMIT = 50;
@@ -82,40 +82,6 @@ function getLatestExpiredTimestamp(
     }
   }
   return latest;
-}
-
-/** 查找预警窗口内最早即将到期且到期后会导致超额的时间点（兼容永久配额+限时资源包组合）。 */
-function getEarliestPreExpiryWarningTimestamp(
-  baseQuotaBytes: number,
-  baseExpiresAt: Date | null | undefined,
-  grants: Array<{ quotaBytes: number; expiresAt: Date | null; status: string }>,
-  usedBytes: number,
-  nowMs: number,
-  warnWindowMs: number,
-): Date | null {
-  if (warnWindowMs <= 0) return null;
-  const windowEnd = nowMs + warnWindowMs;
-  const candidates: Date[] = [];
-
-  if ((baseQuotaBytes ?? 0) > 0 && baseExpiresAt) {
-    const ms = baseExpiresAt.getTime();
-    if (ms > nowMs && ms <= windowEnd) candidates.push(baseExpiresAt);
-  }
-  for (const grant of grants) {
-    if (grant.status !== "active" || (grant.quotaBytes ?? 0) <= 0 || !grant.expiresAt) continue;
-    const ms = grant.expiresAt.getTime();
-    if (ms > nowMs && ms <= windowEnd) candidates.push(grant.expiresAt);
-  }
-  if (!candidates.length) return null;
-
-  candidates.sort((a, b) => a.getTime() - b.getTime());
-  for (const candidate of candidates) {
-    const afterExpiry = resolveEffectiveStorageQuota(baseQuotaBytes, baseExpiresAt, grants, candidate);
-    if (afterExpiry.storageQuotaBytes <= 0 || usedBytes > afterExpiry.storageQuotaBytes) {
-      return candidate;
-    }
-  }
-  return null;
 }
 
 function selectMediaForCleanup(

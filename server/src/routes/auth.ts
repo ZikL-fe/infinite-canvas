@@ -13,7 +13,7 @@ import { issueEmailVerificationCode, verifyAndConsumeEmailCode } from "../lib/em
 import { signAccessToken } from "../lib/jwt.ts";
 import { isMailConfigReady } from "../lib/mail.ts";
 import { getAuthPolicy, getPlatformMailConfig, getPlatformWebdavConfig } from "../lib/settings.ts";
-import { getUserStorageQuotaSummary } from "../lib/storage-quota.ts";
+import { getUserQuotaAlertMeta, getUserStorageQuotaSummary } from "../lib/storage-quota.ts";
 import { requireAuth, type AppEnv } from "../middleware/auth.ts";
 
 const registerSchema = z.object({
@@ -60,6 +60,9 @@ function sanitizeUser(user: {
   storageUsedBytes: number;
   storageQuotaBytes: number;
   storageQuotaExpiresAt?: Date | null;
+  lowBalanceThreshold?: number | null;
+  storageWarningDays?: number;
+  storageExpiringAt?: string | null;
   createdAt: Date;
 }) {
   return {
@@ -74,6 +77,9 @@ function sanitizeUser(user: {
     storageUsedBytes: user.storageUsedBytes,
     storageQuotaBytes: user.storageQuotaBytes ?? 0,
     storageQuotaExpiresAt: user.storageQuotaExpiresAt ? user.storageQuotaExpiresAt.toISOString() : null,
+    ...(typeof user.lowBalanceThreshold === "number" ? { lowBalanceThreshold: user.lowBalanceThreshold } : {}),
+    ...(typeof user.storageWarningDays === "number" ? { storageWarningDays: user.storageWarningDays } : {}),
+    ...(user.storageExpiringAt !== undefined ? { storageExpiringAt: user.storageExpiringAt } : {}),
     createdAt: user.createdAt,
   };
 }
@@ -272,8 +278,17 @@ authRoutes.post("/register", zValidator("json", registerSchema), async (c) => {
     return c.json({ error: result.error }, result.status);
   }
 
-  const tokens = await createSessionTokens(result.user.id, result.user.role, c);
-  return c.json({ user: { ...sanitizeUser(result.user), creditBalance: 0 }, ...tokens }, 201);
+  const [tokens, alertMeta] = await Promise.all([
+    createSessionTokens(result.user.id, result.user.role, c),
+    getUserQuotaAlertMeta({
+      lowBalanceThreshold: result.user.lowBalanceThreshold,
+      storageUsedBytes: result.user.storageUsedBytes,
+      baseStorageQuotaBytes: result.user.storageQuotaBytes,
+      baseStorageQuotaExpiresAt: result.user.storageQuotaExpiresAt,
+      grants: [],
+    }),
+  ]);
+  return c.json({ user: { ...sanitizeUser({ ...result.user, ...alertMeta }), creditBalance: 0 }, ...tokens }, 201);
 });
 
 authRoutes.post("/login", zValidator("json", loginSchema), async (c) => {
@@ -296,12 +311,20 @@ authRoutes.post("/login", zValidator("json", loginSchema), async (c) => {
     getWalletBalance(user.id),
     getUserStorageQuotaSummary(user),
   ]);
+  const alertMeta = await getUserQuotaAlertMeta({
+    lowBalanceThreshold: user.lowBalanceThreshold,
+    storageUsedBytes: user.storageUsedBytes,
+    baseStorageQuotaBytes: quotaSummary.baseStorageQuotaBytes,
+    baseStorageQuotaExpiresAt: quotaSummary.baseStorageQuotaExpiresAt,
+    grants: quotaSummary.grants,
+  });
   return c.json({
     user: {
       ...sanitizeUser({
         ...user,
         storageQuotaBytes: quotaSummary.storageQuotaBytes,
         storageQuotaExpiresAt: quotaSummary.storageQuotaExpiresAt,
+        ...alertMeta,
       }),
       creditBalance,
     },
@@ -340,11 +363,19 @@ authRoutes.post("/refresh", zValidator("json", refreshSchema), async (c) => {
     signAccessToken(user.id, user.role),
     getUserStorageQuotaSummary(user),
   ]);
+  const alertMeta = await getUserQuotaAlertMeta({
+    lowBalanceThreshold: user.lowBalanceThreshold,
+    storageUsedBytes: user.storageUsedBytes,
+    baseStorageQuotaBytes: quotaSummary.baseStorageQuotaBytes,
+    baseStorageQuotaExpiresAt: quotaSummary.baseStorageQuotaExpiresAt,
+    grants: quotaSummary.grants,
+  });
   return c.json({
     user: sanitizeUser({
       ...user,
       storageQuotaBytes: quotaSummary.storageQuotaBytes,
       storageQuotaExpiresAt: quotaSummary.storageQuotaExpiresAt,
+      ...alertMeta,
     }),
     accessToken,
     refreshToken: nextRefreshToken,

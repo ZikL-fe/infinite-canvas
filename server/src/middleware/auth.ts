@@ -4,7 +4,7 @@ import type { MiddlewareHandler } from "hono";
 
 import { db, users, type UserRole, type UserStatus } from "../db/index.ts";
 import { verifyAccessToken } from "../lib/jwt.ts";
-import { getUserStorageQuotaSummary } from "../lib/storage-quota.ts";
+import { getUserQuotaAlertMeta, getUserStorageQuotaSummary } from "../lib/storage-quota.ts";
 
 export type AuthUser = {
   id: string;
@@ -20,6 +20,9 @@ export type AuthUser = {
   storageQuotaExpiresAt: Date | null;
   baseStorageQuotaBytes: number;
   baseStorageQuotaExpiresAt: Date | null;
+  lowBalanceThreshold: number;
+  storageWarningDays: number;
+  storageExpiringAt: string | null;
   createdAt: Date;
 };
 
@@ -59,6 +62,7 @@ export const requireAuth: MiddlewareHandler<AppEnv> = async (c, next) => {
       storageUsedBytes: true,
       storageQuotaBytes: true,
       storageQuotaExpiresAt: true,
+      lowBalanceThreshold: true,
       createdAt: true,
     },
   });
@@ -71,12 +75,20 @@ export const requireAuth: MiddlewareHandler<AppEnv> = async (c, next) => {
   }
 
   const quotaSummary = await getUserStorageQuotaSummary(user);
+  const alertMeta = await getUserQuotaAlertMeta({
+    lowBalanceThreshold: user.lowBalanceThreshold,
+    storageUsedBytes: user.storageUsedBytes,
+    baseStorageQuotaBytes: quotaSummary.baseStorageQuotaBytes,
+    baseStorageQuotaExpiresAt: quotaSummary.baseStorageQuotaExpiresAt,
+    grants: quotaSummary.grants,
+  });
   c.set("user", {
     ...user,
     storageQuotaBytes: quotaSummary.storageQuotaBytes,
     storageQuotaExpiresAt: quotaSummary.storageQuotaExpiresAt,
     baseStorageQuotaBytes: quotaSummary.baseStorageQuotaBytes,
     baseStorageQuotaExpiresAt: quotaSummary.baseStorageQuotaExpiresAt,
+    ...alertMeta,
   });
   await next();
 };

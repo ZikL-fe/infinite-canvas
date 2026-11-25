@@ -19,7 +19,7 @@ import {
   putS3Object,
 } from "../lib/s3.ts";
 import { getPlatformWebdavConfig, getS3StorageConfig, resolveEffectiveUserWebdav } from "../lib/settings.ts";
-import { getUserStorageQuotaSummary, serializeStorageGrant } from "../lib/storage-quota.ts";
+import { getUserQuotaAlertMeta, getUserStorageQuotaSummary, serializeStorageGrant } from "../lib/storage-quota.ts";
 import { uploadFileToWebdav } from "../lib/webdav.ts";
 import { requireAuth, type AppEnv } from "../middleware/auth.ts";
 
@@ -151,6 +151,13 @@ storageRoutes.post("/redeem", zValidator("json", storageRedeemSchema), async (c)
       },
       tx,
     );
+    const alertMeta = await getUserQuotaAlertMeta({
+      lowBalanceThreshold: user.lowBalanceThreshold,
+      storageUsedBytes: user.storageUsedBytes,
+      baseStorageQuotaBytes: summary.baseStorageQuotaBytes,
+      baseStorageQuotaExpiresAt: summary.baseStorageQuotaExpiresAt,
+      grants: summary.grants,
+    });
 
     return {
       ok: true as const,
@@ -160,6 +167,8 @@ storageRoutes.post("/redeem", zValidator("json", storageRedeemSchema), async (c)
       expiresAt: codeRow.storageExpiresAt ? codeRow.storageExpiresAt.toISOString() : null,
       storageQuotaBytes: summary.storageQuotaBytes,
       storageQuotaExpiresAt: summary.storageQuotaExpiresAt ? summary.storageQuotaExpiresAt.toISOString() : null,
+      storageWarningDays: alertMeta.storageWarningDays,
+      storageExpiringAt: alertMeta.storageExpiringAt,
       baseQuotaBytes: summary.baseStorageQuotaBytes,
       baseExpiresAt: summary.baseStorageQuotaExpiresAt ? summary.baseStorageQuotaExpiresAt.toISOString() : null,
       grantsQuotaBytes: summary.storageGrantsQuotaBytes,

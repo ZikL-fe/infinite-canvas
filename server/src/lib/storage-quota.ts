@@ -2,6 +2,9 @@
 import { desc, eq, inArray } from "drizzle-orm";
 
 import { db, userStorageGrants, type StorageGrantSource, type StorageGrantStatus } from "../db/index.ts";
+import { getPlatformMailConfig, getPlatformStorageExpiryPolicy } from "./settings.ts";
+
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 type DbExecutor = Pick<typeof db, "select" | "query">;
 
@@ -113,6 +116,68 @@ export async function getUserStorageQuotaSummary(userRow: UserBaseQuotaInput, ex
   return {
     ...summary,
     grants,
+  };
+}
+
+/** 查找预警窗口内最早即将到期且到期后会导致超额的时间点（兼容永久配额+限时资源包组合）。 */
+export function getEarliestPreExpiryWarningTimestamp(
+  baseQuotaBytes: number,
+  baseExpiresAt: Date | null | undefined,
+  grants: Array<Pick<StorageGrantRow, "quotaBytes" | "expiresAt" | "status">>,
+  usedBytes: number,
+  nowMs: number,
+  warnWindowMs: number,
+): Date | null {
+  if (warnWindowMs <= 0) return null;
+  const windowEnd = nowMs + warnWindowMs;
+  const candidates: Date[] = [];
+
+  if ((baseQuotaBytes ?? 0) > 0 && baseExpiresAt) {
+    const ms = baseExpiresAt.getTime();
+    if (ms > nowMs && ms <= windowEnd) candidates.push(baseExpiresAt);
+  }
+  for (const grant of grants) {
+    if (grant.status !== "active" || (grant.quotaBytes ?? 0) <= 0 || !grant.expiresAt) continue;
+    const ms = grant.expiresAt.getTime();
+    if (ms > nowMs && ms <= windowEnd) candidates.push(grant.expiresAt);
+  }
+  if (!candidates.length) return null;
+
+  candidates.sort((a, b) => a.getTime() - b.getTime());
+  for (const candidate of candidates) {
+    const afterExpiry = resolveEffectiveStorageQuota(baseQuotaBytes, baseExpiresAt, grants, candidate);
+    if (afterExpiry.storageQuotaBytes <= 0 || usedBytes > afterExpiry.storageQuotaBytes) {
+      return candidate;
+    }
+  }
+  return null;
+}
+
+/** 聚合当前用户的低积分阈值与云存储即将到期预警时间，供前端统一提示。 */
+export async function getUserQuotaAlertMeta(input: {
+  lowBalanceThreshold?: number | null;
+  storageUsedBytes: number;
+  baseStorageQuotaBytes: number;
+  baseStorageQuotaExpiresAt: Date | null;
+  grants: Array<Pick<StorageGrantRow, "quotaBytes" | "expiresAt" | "status">>;
+}) {
+  const [mailConfig, expiryPolicy] = await Promise.all([
+    getPlatformMailConfig(),
+    getPlatformStorageExpiryPolicy(),
+  ]);
+  const storageWarningDays = expiryPolicy.preExpiryWarnDays;
+  const storageExpiringAt = getEarliestPreExpiryWarningTimestamp(
+    input.baseStorageQuotaBytes,
+    input.baseStorageQuotaExpiresAt,
+    input.grants,
+    input.storageUsedBytes,
+    Date.now(),
+    storageWarningDays * DAY_MS,
+  );
+  return {
+    lowBalanceThreshold: input.lowBalanceThreshold ?? mailConfig.lowBalanceThreshold,
+    storageWarningDays,
+    storageExpiringAt: storageExpiringAt ? storageExpiringAt.toISOString() : null,
   };
 }
 

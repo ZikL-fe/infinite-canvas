@@ -142,9 +142,12 @@ export type AdminOverview = {
 
 export type AccountOverviewResponse = {
     creditBalance: number;
+    lowBalanceThreshold?: number;
     storageUsedBytes: number;
     storageQuotaBytes: number;
     storageQuotaExpiresAt?: string | null;
+    storageWarningDays?: number;
+    storageExpiringAt?: string | null;
     canvasProjectCount: number;
     assetCount: number;
     days: number;
@@ -738,6 +741,8 @@ export const storageApi = {
             storageUsedBytes: number;
             storageQuotaBytes: number;
             storageQuotaExpiresAt: string | null;
+            storageWarningDays?: number;
+            storageExpiringAt?: string | null;
             baseQuotaBytes: number;
             baseExpiresAt: string | null;
             grantsQuotaBytes: number;
@@ -752,6 +757,8 @@ export const storageApi = {
             expiresAt: string | null;
             storageQuotaBytes: number;
             storageQuotaExpiresAt: string | null;
+            storageWarningDays?: number;
+            storageExpiringAt?: string | null;
             baseQuotaBytes: number;
             baseExpiresAt: string | null;
             grantsQuotaBytes: number;

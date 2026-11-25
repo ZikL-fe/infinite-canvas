@@ -1312,7 +1312,7 @@ export default function AdminPage() {
                     {t("admin.nav.userOverview")}
                 </span>
             ),
-            children: <UserOverviewPanel onOpenWallet={() => switchTab("wallet")} />,
+            children: <UserOverviewPanel onOpenWallet={() => switchTab("wallet")} onOpenMedia={() => switchTab("my-media")} />,
         },
         {
             key: "user-dashboard",

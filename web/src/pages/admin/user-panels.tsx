@@ -12,6 +12,12 @@ import { useBatchZipDownload } from "@/hooks/use-batch-zip-download";
 import { useEmailCodeSender } from "@/hooks/use-email-code-sender";
 import { formatCompactCredits, formatExactCredits } from "@/lib/format-number";
 import { createImageThumbnail, createVideoThumbnail } from "@/lib/image-thumbnail";
+import {
+    formatCreditAlertCopy,
+    formatStorageAlertCopy,
+    resolveCreditAlert,
+    resolveStorageAlert,
+} from "@/lib/quota-alerts";
 import { previewUrlFor } from "@/services/image-storage";
 import { ADMIN_TABLE_CLASS, ADMIN_TABLE_SCROLL, TableRowActions } from "@/pages/admin/components/table-row-actions";
 import { notifyCloudWorkspaceChanged, WORKSPACE_CHANGED_EVENT } from "@/services/cloud-media";
@@ -440,9 +446,11 @@ export function AnnouncementsCard({
     );
 }
 
-export function UserOverviewPanel({ onOpenWallet }: { onOpenWallet?: () => void }) {
-    const { t } = useTranslation();
+export function UserOverviewPanel({ onOpenWallet, onOpenMedia }: { onOpenWallet?: () => void; onOpenMedia?: () => void }) {
+    const { t, i18n } = useTranslation();
+    const locale = i18n.resolvedLanguage || undefined;
     const { message } = App.useApp();
+    const user = useUserStore((state) => state.user);
     const [days, setDays] = useState(7);
     const [data, setData] = useState<AccountOverviewResponse | null>(null);
     const [loading, setLoading] = useState(false);
@@ -465,8 +473,56 @@ export function UserOverviewPanel({ onOpenWallet }: { onOpenWallet?: () => void 
         void loadOverview(days);
     }, [days, loadOverview]);
 
+    const creditAlert = data ? resolveCreditAlert(data.creditBalance, data.lowBalanceThreshold ?? user?.lowBalanceThreshold) : null;
+    const storageAlert = data
+        ? resolveStorageAlert({
+              usedBytes: data.storageUsedBytes,
+              quotaBytes: data.storageQuotaBytes,
+              expiresAt: data.storageQuotaExpiresAt,
+              expiringAt: data.storageExpiringAt ?? user?.storageExpiringAt,
+              warningDays: data.storageWarningDays ?? user?.storageWarningDays,
+          })
+        : null;
+    const creditAlertCopy = creditAlert ? formatCreditAlertCopy(t, creditAlert) : null;
+    const storageAlertCopy = storageAlert ? formatStorageAlertCopy(t, storageAlert, locale) : null;
+
     return (
         <div className="flex flex-col gap-5">
+            {creditAlertCopy || storageAlertCopy ? (
+                <div className="flex flex-col gap-3">
+                    {creditAlertCopy && creditAlert ? (
+                        <Alert
+                            type={creditAlert.level === "error" ? "error" : "warning"}
+                            showIcon
+                            title={creditAlertCopy.title}
+                            description={creditAlertCopy.description}
+                            action={
+                                onOpenWallet ? (
+                                    <Button size="small" type="primary" onClick={onOpenWallet}>
+                                        {t("userPanels.overview.goRedeem")}
+                                    </Button>
+                                ) : undefined
+                            }
+                        />
+                    ) : null}
+                    {storageAlertCopy && storageAlert ? (
+                        <Alert
+                            type={storageAlert.level === "error" ? "error" : "warning"}
+                            showIcon
+                            title={storageAlertCopy.title}
+                            description={storageAlertCopy.description}
+                            action={
+                                onOpenMedia ? (
+                                    <Button size="small" onClick={onOpenMedia}>
+                                        {t("userPanels.overview.goManageStorage")}
+                                    </Button>
+                                ) : undefined
+                            }
+                        />
+                    ) : null}
+                </div>
+            ) : null}
+
             <Row gutter={[16, 16]}>
                 <Col xs={24} sm={12} md={6}>
                     <Card loading={loading}>
@@ -1802,8 +1858,19 @@ export function MyWalletPanel({ compact = false, onOpenLogs }: { compact?: boole
         setPage(1);
     };
 
+    const creditAlert = resolveCreditAlert(balance, user?.lowBalanceThreshold);
+    const creditAlertCopy = formatCreditAlertCopy(t, creditAlert);
+
     return (
         <div className="flex flex-col gap-4">
+            {creditAlertCopy ? (
+                <Alert
+                    type={creditAlert.level === "error" ? "error" : "warning"}
+                    showIcon
+                    title={creditAlertCopy.title}
+                    description={creditAlertCopy.description}
+                />
+            ) : null}
             <Card size={compact ? "small" : "default"}>
                 <div className="flex flex-wrap items-center justify-between gap-4">
                     <div className="flex flex-wrap items-center gap-6">
@@ -2552,6 +2619,8 @@ export function MyMediaPanel() {
     const [usedBytes, setUsedBytes] = useState(user?.storageUsedBytes ?? 0);
     const [quotaBytes, setQuotaBytes] = useState(user?.storageQuotaBytes ?? 0);
     const [quotaExpiresAt, setQuotaExpiresAt] = useState<string | null>(user?.storageQuotaExpiresAt ?? null);
+    const [storageWarningDays, setStorageWarningDays] = useState(user?.storageWarningDays ?? 0);
+    const [storageExpiringAt, setStorageExpiringAt] = useState<string | null>(user?.storageExpiringAt ?? null);
     const [baseQuotaBytes, setBaseQuotaBytes] = useState(0);
     const [baseQuotaExpiresAt, setBaseQuotaExpiresAt] = useState<string | null>(null);
     const [storageGrants, setStorageGrants] = useState<StorageGrantItem[]>([]);
@@ -2583,6 +2652,8 @@ export function MyMediaPanel() {
             setUsedBytes(profileRes.user.storageUsedBytes);
             setQuotaBytes(profileRes.user.storageQuotaBytes ?? 0);
             setQuotaExpiresAt(profileRes.user.storageQuotaExpiresAt ?? null);
+            setStorageWarningDays(profileRes.user.storageWarningDays ?? 0);
+            setStorageExpiringAt(profileRes.user.storageExpiringAt ?? null);
             setBaseQuotaBytes(profileRes.storageQuotaDetail?.baseQuotaBytes ?? 0);
             setBaseQuotaExpiresAt(profileRes.storageQuotaDetail?.baseExpiresAt ?? null);
             setStorageGrants(profileRes.storageQuotaDetail?.grants ?? []);
@@ -2763,6 +2834,8 @@ export function MyMediaPanel() {
             setStorageRedeemCode("");
             setQuotaBytes(res.storageQuotaBytes);
             setQuotaExpiresAt(res.storageQuotaExpiresAt);
+            if (typeof res.storageWarningDays === "number") setStorageWarningDays(res.storageWarningDays);
+            setStorageExpiringAt(res.storageExpiringAt ?? null);
             setBaseQuotaBytes(res.baseQuotaBytes);
             setBaseQuotaExpiresAt(res.baseExpiresAt);
             setStorageGrants(res.grants);
@@ -2772,6 +2845,8 @@ export function MyMediaPanel() {
                     ...latestUser,
                     storageQuotaBytes: res.storageQuotaBytes,
                     storageQuotaExpiresAt: res.storageQuotaExpiresAt,
+                    ...(typeof res.storageWarningDays === "number" ? { storageWarningDays: res.storageWarningDays } : {}),
+                    ...(res.storageExpiringAt !== undefined ? { storageExpiringAt: res.storageExpiringAt } : {}),
                 });
             }
         } catch (error) {
@@ -2781,13 +2856,36 @@ export function MyMediaPanel() {
         }
     };
 
-    const quotaExpired = Boolean(quotaExpiresAt && new Date(quotaExpiresAt).getTime() <= Date.now());
-    const quotaExceeded = quotaExpired || quotaBytes <= 0 || usedBytes >= quotaBytes;
+    const storageAlert = resolveStorageAlert({
+        usedBytes,
+        quotaBytes,
+        expiresAt: quotaExpiresAt,
+        expiringAt: storageExpiringAt,
+        warningDays: storageWarningDays,
+    });
+    const storageAlertCopy = formatStorageAlertCopy(t, storageAlert, locale);
+    const quotaExpired = storageAlert.expired;
+    const quotaExceeded = storageAlert.expired || storageAlert.overQuota || quotaBytes <= 0;
     const quotaPercent = quotaBytes > 0 ? Math.min(100, Math.round((usedBytes / quotaBytes) * 100)) : 100;
     const baseQuotaExpired = Boolean(baseQuotaExpiresAt && new Date(baseQuotaExpiresAt).getTime() <= Date.now());
+    const warnHorizonMs = storageWarningDays > 0 ? Date.now() + storageWarningDays * 86_400_000 : 0;
+    const isSoonTimestamp = (ts: string | null | undefined) => {
+        if (!ts || warnHorizonMs <= 0) return false;
+        const ms = new Date(ts).getTime();
+        return ms > Date.now() && ms <= warnHorizonMs;
+    };
 
     return (
         <div className="flex flex-col gap-5">
+            {storageAlertCopy ? (
+                <Alert
+                    type={storageAlert.level === "error" ? "error" : "warning"}
+                    showIcon
+                    title={storageAlertCopy.title}
+                    description={storageAlertCopy.description}
+                />
+            ) : null}
+
             <Card
                 title={t("userPanels.myMedia.cardTitle", {
                     used: formatBytes(usedBytes),
@@ -2801,6 +2899,13 @@ export function MyMediaPanel() {
                         <Tag color="red">{t("userPanels.myMedia.quotaExpiredTag")}</Tag>
                     ) : quotaExceeded ? (
                         <Tag color="red">{t("userPanels.myMedia.quotaFullTag")}</Tag>
+                    ) : storageAlert.expiringSoon ? (
+                        <Tag color="orange">
+                            {t("userPanels.myMedia.quotaExpiringSoonTag", {
+                                days: storageAlert.daysLeft ?? 1,
+                                remaining: formatBytes(Math.max(0, quotaBytes - usedBytes)),
+                            })}
+                        </Tag>
                     ) : (
                         <Tag color="green">{t("userPanels.myMedia.remainingQuotaTag", { remaining: formatBytes(Math.max(0, quotaBytes - usedBytes)) })}</Tag>
                     )
@@ -2828,33 +2933,40 @@ export function MyMediaPanel() {
                         <div className="flex flex-wrap items-center gap-2 pt-1 text-xs">
                             <Typography.Text type="secondary">{t("userPanels.myMedia.quotaBreakdownLabel")}</Typography.Text>
                             {baseQuotaBytes > 0 ? (
-                                <Tag color={baseQuotaExpired ? "default" : "blue"} style={{ marginInlineEnd: 0 }}>
+                                <Tag color={baseQuotaExpired ? "default" : isSoonTimestamp(baseQuotaExpiresAt) ? "orange" : "blue"} style={{ marginInlineEnd: 0 }}>
                                     {t("userPanels.myMedia.baseQuotaTag", { size: formatBytes(baseQuotaBytes) })} ·{" "}
                                     {baseQuotaExpiresAt
                                         ? baseQuotaExpired
                                             ? t("userPanels.myMedia.quotaExpiredShort")
-                                            : t("userPanels.myMedia.untilDate", { date: new Date(baseQuotaExpiresAt).toLocaleDateString(locale) })
+                                            : isSoonTimestamp(baseQuotaExpiresAt)
+                                              ? `${t("userPanels.myMedia.untilDate", { date: new Date(baseQuotaExpiresAt).toLocaleDateString(locale) })} (${t("userPanels.myMedia.expiringSoonShort")})`
+                                              : t("userPanels.myMedia.untilDate", { date: new Date(baseQuotaExpiresAt).toLocaleDateString(locale) })
                                         : t("userPanels.myMedia.permanentShort")}
                                 </Tag>
                             ) : null}
-                            {storageGrants.map((grant) => (
-                                <Tag
-                                    key={grant.id}
-                                    color={grant.isEffective ? "cyan" : "default"}
-                                    style={{ marginInlineEnd: 0 }}
-                                >
-                                    +{formatBytes(grant.quotaBytes)}
-                                    {grant.refId ? ` (${grant.refId})` : ""}
-                                    {" · "}
-                                    {grant.status === "revoked"
-                                        ? t("userPanels.myMedia.revokedShort")
-                                        : grant.expiresAt
-                                          ? grant.isExpired
-                                              ? t("userPanels.myMedia.quotaExpiredShort")
-                                              : t("userPanels.myMedia.untilDate", { date: new Date(grant.expiresAt).toLocaleDateString(locale) })
-                                          : t("userPanels.myMedia.permanentShort")}
-                                </Tag>
-                            ))}
+                            {storageGrants.map((grant) => {
+                                const grantSoon = grant.isEffective && isSoonTimestamp(grant.expiresAt);
+                                return (
+                                    <Tag
+                                        key={grant.id}
+                                        color={grant.isEffective ? (grantSoon ? "orange" : "cyan") : "default"}
+                                        style={{ marginInlineEnd: 0 }}
+                                    >
+                                        +{formatBytes(grant.quotaBytes)}
+                                        {grant.refId ? ` (${grant.refId})` : ""}
+                                        {" · "}
+                                        {grant.status === "revoked"
+                                            ? t("userPanels.myMedia.revokedShort")
+                                            : grant.expiresAt
+                                              ? grant.isExpired
+                                                  ? t("userPanels.myMedia.quotaExpiredShort")
+                                                  : grantSoon
+                                                    ? `${t("userPanels.myMedia.untilDate", { date: new Date(grant.expiresAt).toLocaleDateString(locale) })} (${t("userPanels.myMedia.expiringSoonShort")})`
+                                                    : t("userPanels.myMedia.untilDate", { date: new Date(grant.expiresAt).toLocaleDateString(locale) })
+                                              : t("userPanels.myMedia.permanentShort")}
+                                    </Tag>
+                                );
+                            })}
                         </div>
                     ) : null}
                 </div>

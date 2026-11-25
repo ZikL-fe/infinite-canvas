@@ -17,6 +17,9 @@ export type LocalUser = {
     storageUsedBytes: number;
     storageQuotaBytes?: number;
     storageQuotaExpiresAt?: string | null;
+    lowBalanceThreshold?: number | null;
+    storageWarningDays?: number;
+    storageExpiringAt?: string | null;
     creditBalance?: number;
     createdAt?: string;
 };

@@ -11,7 +11,7 @@ import { hashPassword, sha256Hex, verifyPassword } from "../lib/crypto.ts";
 import { issueEmailVerificationCode, verifyAndConsumeEmailCode } from "../lib/email-verification.ts";
 import { isMailConfigReady } from "../lib/mail.ts";
 import { getAuthPolicy, getPlatformMailConfig, getPlatformWebdavConfig, resolveEffectiveUserWebdav } from "../lib/settings.ts";
-import { getUserStorageQuotaSummary, serializeStorageGrant } from "../lib/storage-quota.ts";
+import { getUserQuotaAlertMeta, getUserStorageQuotaSummary, serializeStorageGrant } from "../lib/storage-quota.ts";
 import { requireAuth, type AppEnv } from "../middleware/auth.ts";
 
 const updateProfileSchema = z.object({
@@ -77,9 +77,12 @@ accountRoutes.get("/overview", async (c) => {
 
   return c.json({
     creditBalance,
+    lowBalanceThreshold: authUser.lowBalanceThreshold,
     storageUsedBytes: authUser.storageUsedBytes ?? 0,
     storageQuotaBytes: authUser.storageQuotaBytes ?? 0,
     storageQuotaExpiresAt: authUser.storageQuotaExpiresAt ? authUser.storageQuotaExpiresAt.toISOString() : null,
+    storageWarningDays: authUser.storageWarningDays,
+    storageExpiringAt: authUser.storageExpiringAt,
     canvasProjectCount: Number(projectStats?.count ?? 0),
     assetCount: Number(assetStats?.count ?? 0),
     ...consumption,
@@ -127,6 +130,13 @@ accountRoutes.get("/profile", async (c) => {
   }
 
   const quotaSummary = await getUserStorageQuotaSummary(userRow);
+  const alertMeta = await getUserQuotaAlertMeta({
+    lowBalanceThreshold: userRow.lowBalanceThreshold,
+    storageUsedBytes: userRow.storageUsedBytes,
+    baseStorageQuotaBytes: quotaSummary.baseStorageQuotaBytes,
+    baseStorageQuotaExpiresAt: quotaSummary.baseStorageQuotaExpiresAt,
+    grants: quotaSummary.grants,
+  });
   const effectiveWebdav = authUser.role === "admin" ? resolveEffectiveUserWebdav(platformWebdav, userRow.webdavConfig) : null;
   const emailServiceEnabled = isMailConfigReady(mailConfig);
 
@@ -143,6 +153,7 @@ accountRoutes.get("/profile", async (c) => {
       storageUsedBytes: userRow.storageUsedBytes,
       storageQuotaBytes: quotaSummary.storageQuotaBytes,
       storageQuotaExpiresAt: quotaSummary.storageQuotaExpiresAt ? quotaSummary.storageQuotaExpiresAt.toISOString() : null,
+      ...alertMeta,
       creditBalance,
       lastLoginAt: userRow.lastLoginAt,
       createdAt: userRow.createdAt,
@@ -283,6 +294,13 @@ accountRoutes.patch("/profile", zValidator("json", updateProfileSchema), async (
     .returning();
 
   const quotaSummary = await getUserStorageQuotaSummary(updated);
+  const alertMeta = await getUserQuotaAlertMeta({
+    lowBalanceThreshold: updated.lowBalanceThreshold,
+    storageUsedBytes: updated.storageUsedBytes,
+    baseStorageQuotaBytes: quotaSummary.baseStorageQuotaBytes,
+    baseStorageQuotaExpiresAt: quotaSummary.baseStorageQuotaExpiresAt,
+    grants: quotaSummary.grants,
+  });
 
   return c.json({
     user: {
@@ -297,6 +315,7 @@ accountRoutes.patch("/profile", zValidator("json", updateProfileSchema), async (
       storageUsedBytes: updated.storageUsedBytes,
       storageQuotaBytes: quotaSummary.storageQuotaBytes,
       storageQuotaExpiresAt: quotaSummary.storageQuotaExpiresAt ? quotaSummary.storageQuotaExpiresAt.toISOString() : null,
+      ...alertMeta,
       creditBalance: currentBalance,
       lastLoginAt: updated.lastLoginAt,
       createdAt: updated.createdAt,
