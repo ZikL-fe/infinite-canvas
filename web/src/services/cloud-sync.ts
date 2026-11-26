@@ -58,6 +58,7 @@ const projectSaveTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const pendingProjectsToSync = new Map<string, CanvasProject>();
 const deletedProjectIds = new Set<string>();
 const cloudDeletedProjectIds = new Set<string>();
+const deletedAssetIds = new Set<string>();
 const cloudDeletedAssetIds = new Set<string>();
 
 function waitForHydration(store: { getState: () => { hydrated: boolean }; subscribe: (listener: (state: { hydrated: boolean }) => void) => () => void }) {
@@ -110,9 +111,9 @@ async function pushProjectToCloud(project: CanvasProject, options?: { keepalive?
 }
 
 async function pushAssetToCloud(asset: Asset) {
-    if (!isCloudAuthenticated()) return;
+    if (!isCloudAuthenticated() || deletedAssetIds.has(asset.id)) return;
     const ok = await ensureCloudMediaUploaded(asset);
-    if (!ok) return;
+    if (!ok || deletedAssetIds.has(asset.id)) return;
     const res = await assetsApi.save(asset.id, stripBlobUrls(asset) as unknown as Record<string, unknown>);
     if (res?.deletedMediaCount && res.deletedMediaCount > 0) {
         void authApi
@@ -392,12 +393,30 @@ export async function syncCloudWorkspace() {
             await Promise.all([prefetchUncachedImageUrls(assetKeys), prefetchUncachedMediaUrls(assetKeys)]);
             const hydratedAssets = await Promise.all(assetPlan.merged.map(hydrateAsset));
 
+            const latestDeletedProjectSet = new Set([
+                ...deletedProjectIds,
+                ...useCanvasStore.getState().deletedProjects.map((item) => item.id),
+            ]);
+            const mergedProjects = canvasPlan.merged.filter((item) => !latestDeletedProjectSet.has(item.id));
+            const mergedProjectIds = new Set(mergedProjects.map((item) => item.id));
+            const mergedDeletedMap = new Map(canvasPlan.mergedDeleted.map((item) => [item.id, item]));
+            for (const item of useCanvasStore.getState().deletedProjects) {
+                if (!mergedProjectIds.has(item.id) && !mergedDeletedMap.has(item.id)) {
+                    mergedDeletedMap.set(item.id, item);
+                }
+            }
+            const safeHydratedAssets = hydratedAssets.filter((item) => !deletedAssetIds.has(item.id));
+            const projectListChanged =
+                canvasPlan.changed ||
+                mergedProjects.length !== useCanvasStore.getState().projects.length ||
+                mergedDeletedMap.size !== useCanvasStore.getState().deletedProjects.length;
+
             applyingRemote = true;
             try {
-                if (canvasPlan.changed) {
-                    useCanvasStore.getState().replaceProjects(canvasPlan.merged, canvasPlan.mergedDeleted);
+                if (projectListChanged) {
+                    useCanvasStore.getState().replaceProjects(mergedProjects, Array.from(mergedDeletedMap.values()));
                 }
-                useAssetStore.getState().replaceAssets(hydratedAssets);
+                useAssetStore.getState().replaceAssets(safeHydratedAssets);
             } finally {
                 applyingRemote = false;
             }
@@ -420,10 +439,14 @@ export async function syncCloudWorkspace() {
                     .catch(() => undefined);
             }
             for (const project of canvasPlan.toPush) {
-                await pushProjectToCloud(project).catch((err) => console.warn("[cloud-sync] 上传画布失败:", err));
+                if (!latestDeletedProjectSet.has(project.id)) {
+                    await pushProjectToCloud(project).catch((err) => console.warn("[cloud-sync] 上传画布失败:", err));
+                }
             }
             for (const asset of assetPlan.toPush) {
-                await pushAssetToCloud(asset).catch((err) => console.warn("[cloud-sync] 上传素材失败:", err));
+                if (!deletedAssetIds.has(asset.id)) {
+                    await pushAssetToCloud(asset).catch((err) => console.warn("[cloud-sync] 上传素材失败:", err));
+                }
             }
         } catch (error) {
             console.warn("[cloud-sync] 同步工作区失败:", error);
@@ -548,6 +571,7 @@ export function initCloudSyncListeners() {
         const nextIds = new Set(state.assets.map((a) => a.id));
 
         for (const asset of state.assets) {
+            deletedAssetIds.delete(asset.id);
             const prev = prevMap.get(asset.id);
             if (!prev || prev !== asset) {
                 void pushAssetToCloud(asset).catch((err) => console.warn("[cloud-sync] 同步素材失败:", err));
@@ -556,6 +580,7 @@ export function initCloudSyncListeners() {
 
         for (const prevAsset of prevState.assets) {
             if (!nextIds.has(prevAsset.id)) {
+                deletedAssetIds.add(prevAsset.id);
                 if (cloudDeletedAssetIds.has(prevAsset.id)) {
                     cloudDeletedAssetIds.delete(prevAsset.id);
                     continue;
@@ -611,7 +636,8 @@ export async function deleteCanvasProjectsWithCloud(ids: string[]) {
             projectSaveTimers.delete(id);
         }
     }
-    if (isCloudAuthenticated()) {
+    const authenticated = isCloudAuthenticated();
+    if (authenticated) {
         try {
             await canvasApi.deleteProjects(ids);
         } catch (error) {
@@ -619,30 +645,41 @@ export async function deleteCanvasProjectsWithCloud(ids: string[]) {
             throw error;
         }
         ids.forEach((id) => cloudDeletedProjectIds.add(id));
+    }
+    useCanvasStore.getState().deleteProjects(ids);
+    useAssetStore.getState().cleanupImages();
+    if (authenticated) {
         notifyCloudWorkspaceChanged("canvas", { sync: false });
         void authApi
             .me()
             .then((res) => useUserStore.getState().setUser(res.user))
             .catch(() => undefined);
     }
-    useCanvasStore.getState().deleteProjects(ids);
-    useAssetStore.getState().cleanupImages();
 }
 
 /** 先确认云端删除资产成功，再移除本地资产与孤立媒体缓存（接口失败会抛出错误且保留本地数据）。 */
 export async function deleteAssetsWithCloud(ids: string[]) {
     const uniqueIds = Array.from(new Set(ids)).filter(Boolean);
     if (!uniqueIds.length) return;
-    if (isCloudAuthenticated()) {
-        await assetsApi.batchRemove(uniqueIds);
+    uniqueIds.forEach((id) => deletedAssetIds.add(id));
+    const authenticated = isCloudAuthenticated();
+    if (authenticated) {
+        try {
+            await assetsApi.batchRemove(uniqueIds);
+        } catch (error) {
+            uniqueIds.forEach((id) => deletedAssetIds.delete(id));
+            throw error;
+        }
         uniqueIds.forEach((id) => cloudDeletedAssetIds.add(id));
+    }
+    useAssetStore.getState().removeAssets(uniqueIds);
+    if (authenticated) {
         notifyCloudWorkspaceChanged("assets", { sync: false });
         void authApi
             .me()
             .then((res) => useUserStore.getState().setUser(res.user))
             .catch(() => undefined);
     }
-    useAssetStore.getState().removeAssets(uniqueIds);
 }
 
 /** 先确认云端删除单个资产成功，再移除本地资产与孤立媒体缓存。 */

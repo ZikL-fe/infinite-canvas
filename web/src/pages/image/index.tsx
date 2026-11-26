@@ -22,7 +22,7 @@ import { storageApi } from "@/services/api/server";
 import { isCloudAuthenticated, WORKSPACE_CHANGED_EVENT, type WorkspaceChangeScope } from "@/services/cloud-media";
 import { ensureRuntimeConfigForGeneration } from "@/services/cloud-sync";
 import { ensureImagePreview, getImageBlob, getImagePreviewRevision, prefetchUncachedImageUrls, previewUrlFor, resolveImageUrl, resolvePickedImage, subscribeImagePreviews, uploadImage } from "@/services/image-storage";
-import { deleteWorkbenchLogsWithCloud, pushWorkbenchLogToCloud, syncWorkbenchLogsWithCloud } from "@/services/workbench-sync";
+import { deleteWorkbenchLogsWithCloud, isWorkbenchLogDeleted, pushWorkbenchLogToCloud, syncWorkbenchLogsWithCloud } from "@/services/workbench-sync";
 import { useAssetStore } from "@/stores/use-asset-store";
 import { useWorkbenchAgentStore } from "@/stores/use-workbench-agent-store";
 import type { ReferenceImage } from "@/types/image";
@@ -101,6 +101,8 @@ export default function ImagePage() {
     useSyncExternalStore(subscribeImagePreviews, getImagePreviewRevision);
     const fileInputRef = useRef<HTMLInputElement>(null);
     const dragDepthRef = useRef(0);
+    const refreshSeqRef = useRef(0);
+    const logsRef = useRef<GenerationLog[]>([]);
     const config = useConfigStore((state) => state.config);
     const effectiveConfig = useEffectiveConfig();
     const updateConfig = useConfigStore((state) => state.updateConfig);
@@ -596,16 +598,29 @@ export default function ImagePage() {
     };
 
     const saveLog = (log: GenerationLog) => {
+        if (isWorkbenchLogDeleted(log.id)) return;
         const serialized = serializeLog({ ...log, updatedAt: new Date().toISOString() });
         void logStore.setItem(log.id, serialized).then(async () => {
+            if (isWorkbenchLogDeleted(log.id)) {
+                await logStore.removeItem(log.id).catch(() => undefined);
+                return;
+            }
             const normalized = await normalizeLog(serialized);
-            setLogs((prev) => [normalized, ...prev.filter((item) => item.id !== normalized.id)].sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0)));
+            if (isWorkbenchLogDeleted(log.id)) return;
+            setLogs((prev) => {
+                const next = [normalized, ...prev.filter((item) => item.id !== normalized.id)].sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+                logsRef.current = next;
+                return next;
+            });
         });
         void pushWorkbenchLogToCloud("image", serialized);
     };
 
     const refreshLogs = async () => {
+        const seq = ++refreshSeqRef.current;
         const stored = await readStoredLogs();
+        if (seq !== refreshSeqRef.current) return logsRef.current;
+        logsRef.current = stored;
         setLogs(stored);
         return stored;
     };
@@ -677,6 +692,7 @@ export default function ImagePage() {
                     const ledgerMaxDurationMs = Math.max(0, ...slotIds.map((tid) => (typeof durationByTask[tid] === "number" ? durationByTask[tid] : 0)));
 
                     if (recoveredImages.length > 0 && (!hasStillProcessing || attempt >= 20)) {
+                        if (cancelled || isWorkbenchLogDeleted(log.id) || !(await logStore.getItem(log.id))) continue;
                         const recoveredMaxDurationMs = Math.max(ledgerMaxDurationMs, ...recoveredImages.map((img) => img.durationMs || 0));
                         const updated: GenerationLog = {
                             ...log,
@@ -694,6 +710,7 @@ export default function ImagePage() {
                         changed = true;
                         setPreviewLog((cur) => (cur?.id === log.id ? updated : cur));
                     } else if (!hasStillProcessing && !recoveredImages.length && (recoveredErrors.length > 0 || attempt >= 1)) {
+                        if (cancelled || isWorkbenchLogDeleted(log.id) || !(await logStore.getItem(log.id))) continue;
                         const failedLog: GenerationLog = {
                             ...log,
                             updatedAt: new Date().toISOString(),
@@ -765,6 +782,7 @@ export default function ImagePage() {
                 const errorByTask = res.errorByTask || {};
                 let changed = false;
                 for (const log of batch) {
+                    if (cancelled || isWorkbenchLogDeleted(log.id) || !(await logStore.getItem(log.id))) continue;
                     const foundErrors = (log.slotTaskIds || []).map((tid) => errorByTask[tid]).filter(Boolean);
                     if (!foundErrors.length) continue;
                     const updated: GenerationLog = {

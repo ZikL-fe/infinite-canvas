@@ -8,6 +8,13 @@ import { useUserStore } from "@/stores/use-user-store";
 
 const deletedWorkbenchLogIds = new Set<string>();
 const WORKBENCH_CURSOR_PREFIX = "infinite-canvas:workbench_sync_cursor:";
+const syncInFlightByKind = new Map<"image" | "video", Promise<void>>();
+const syncQueuedByKind = new Map<"image" | "video", Promise<void>>();
+
+/** 检查工作台记录是否已在当前会话中删除，避免在途同步或后台回填误写回。 */
+export function isWorkbenchLogDeleted(id: string) {
+    return deletedWorkbenchLogIds.has(id);
+}
 
 function cursorStorageKey(kind: "image" | "video") {
     return `${WORKBENCH_CURSOR_PREFIX}${kind}`;
@@ -51,6 +58,7 @@ function buildWorkbenchPayload<T extends BaseWorkbenchLog>(kind: "image" | "vide
 export async function pushWorkbenchLogToCloud<T extends BaseWorkbenchLog>(kind: "image" | "video", log: T) {
     if (!isCloudAuthenticated() || deletedWorkbenchLogIds.has(log.id)) return;
     await ensureCloudMediaUploaded(log).catch(() => false);
+    if (!isCloudAuthenticated() || deletedWorkbenchLogIds.has(log.id)) return;
     const res = await workbenchApi.saveLog(log.id, buildWorkbenchPayload(kind, log)).catch((err) => {
         console.warn("[workbench-sync] 同步工作台记录失败:", err);
         return null;
@@ -69,8 +77,7 @@ function logIsoTimestamp(log?: BaseWorkbenchLog) {
     return log.updatedAt || (log.createdAt ? new Date(log.createdAt).toISOString() : "");
 }
 
-/** 双向同步本地与云端工作台历史：首次全量、后续按 updatedSince 增量拉取并应用墓碑删除与本地补推。 */
-export async function syncWorkbenchLogsWithCloud<T extends BaseWorkbenchLog>(
+async function runWorkbenchLogSync<T extends BaseWorkbenchLog>(
     kind: "image" | "video",
     localStore: LocalForage,
     serialize: (log: T) => T,
@@ -107,6 +114,10 @@ export async function syncWorkbenchLogsWithCloud<T extends BaseWorkbenchLog>(
 
     for (const id of candidateIds) {
         const local = localMap.get(id);
+        if (deletedWorkbenchLogIds.has(id)) {
+            if (local) await localStore.removeItem(id).catch(() => undefined);
+            continue;
+        }
         const remoteItem = remoteMap.get(id);
         const deletedAt = deletedMap.get(id);
         const latestIso = [logIsoTimestamp(local), logIsoTimestamp(remoteItem)].sort().pop() || "";
@@ -117,19 +128,22 @@ export async function syncWorkbenchLogsWithCloud<T extends BaseWorkbenchLog>(
         }
 
         if (local && !remoteItem) {
+            if (deletedWorkbenchLogIds.has(id)) continue;
             const serialized = serialize(local);
             await localStore.setItem(id, serialized).catch(() => undefined);
-            toPush.push(serialized);
+            if (!deletedWorkbenchLogIds.has(id)) toPush.push(serialized);
         } else if (remoteItem) {
             const preferLocal =
                 local &&
                 ((local.status !== "pending" && remoteItem.status === "pending") ||
                     ((local.updatedAt || "") > (remoteItem.updatedAt || "")));
             if (preferLocal && local) {
+                if (deletedWorkbenchLogIds.has(id)) continue;
                 const serialized = serialize(local);
                 await localStore.setItem(id, serialized).catch(() => undefined);
-                toPush.push(serialized);
+                if (!deletedWorkbenchLogIds.has(id)) toPush.push(serialized);
             } else if (!local || local.updatedAt !== remoteItem.updatedAt || local.status !== remoteItem.status) {
+                if (deletedWorkbenchLogIds.has(id)) continue;
                 const serialized = serialize(remoteItem);
                 await localStore.setItem(id, serialized).catch(() => undefined);
             }
@@ -137,12 +151,60 @@ export async function syncWorkbenchLogsWithCloud<T extends BaseWorkbenchLog>(
     }
 
     for (const item of toPush) {
-        await pushWorkbenchLogToCloud(kind, item);
+        if (!deletedWorkbenchLogIds.has(item.id)) {
+            await pushWorkbenchLogToCloud(kind, item);
+        }
     }
 
     if (remote.syncedAt && typeof localStorage !== "undefined") {
         localStorage.setItem(cursorKey, remote.syncedAt);
     }
+}
+
+/** 双向同步本地与云端工作台历史：首次全量、后续按 updatedSince 增量拉取并应用墓碑删除与本地补推（按类型串行防并发写回）。 */
+export function syncWorkbenchLogsWithCloud<T extends BaseWorkbenchLog>(
+    kind: "image" | "video",
+    localStore: LocalForage,
+    serialize: (log: T) => T,
+): Promise<void> {
+    if (!isCloudAuthenticated()) return Promise.resolve();
+    const queued = syncQueuedByKind.get(kind);
+    if (queued) return queued;
+
+    const inFlight = syncInFlightByKind.get(kind);
+    if (inFlight) {
+        let queuedPromise!: Promise<void>;
+        queuedPromise = inFlight
+            .catch(() => undefined)
+            .then(async () => {
+                if (syncQueuedByKind.get(kind) === queuedPromise) {
+                    syncQueuedByKind.delete(kind);
+                }
+                syncInFlightByKind.set(kind, queuedPromise);
+                try {
+                    await runWorkbenchLogSync(kind, localStore, serialize);
+                } finally {
+                    if (syncInFlightByKind.get(kind) === queuedPromise) {
+                        syncInFlightByKind.delete(kind);
+                    }
+                }
+            });
+        syncQueuedByKind.set(kind, queuedPromise);
+        return queuedPromise;
+    }
+
+    let current!: Promise<void>;
+    current = (async () => {
+        try {
+            await runWorkbenchLogSync(kind, localStore, serialize);
+        } finally {
+            if (syncInFlightByKind.get(kind) === current) {
+                syncInFlightByKind.delete(kind);
+            }
+        }
+    })();
+    syncInFlightByKind.set(kind, current);
+    return current;
 }
 
 /** 已登录时先确认云端批量删除工作台记录成功，再清理本地记录与孤立媒体并刷新配额。 */
@@ -154,19 +216,22 @@ export async function deleteWorkbenchLogsWithCloud(
 ) {
     if (!ids.length) return;
     ids.forEach((id) => deletedWorkbenchLogIds.add(id));
-    if (isCloudAuthenticated()) {
+    const authenticated = isCloudAuthenticated();
+    if (authenticated) {
         try {
             await workbenchApi.deleteLogs(ids, kind);
         } catch (error) {
             ids.forEach((id) => deletedWorkbenchLogIds.delete(id));
             throw error;
         }
+    }
+    await Promise.all(ids.map((id) => localStore.removeItem(id).catch(() => undefined)));
+    cleanupLocalMedia();
+    if (authenticated) {
         notifyCloudWorkspaceChanged(kind || "media", { sync: false });
         void authApi
             .me()
             .then((res) => useUserStore.getState().setUser(res.user))
             .catch(() => undefined);
     }
-    await Promise.all(ids.map((id) => localStore.removeItem(id).catch(() => undefined)));
-    cleanupLocalMedia();
 }

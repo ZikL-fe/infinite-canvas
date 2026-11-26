@@ -15,7 +15,7 @@ import { canvasThemes } from "@/lib/canvas-theme";
 import { clampVideoSeconds } from "@/lib/media-size";
 import { formatBytes, formatDuration } from "@/lib/image-utils";
 import { prefetchUncachedMediaUrls, resolveMediaUrl } from "@/services/file-storage";
-import { deleteWorkbenchLogsWithCloud, pushWorkbenchLogToCloud, syncWorkbenchLogsWithCloud } from "@/services/workbench-sync";
+import { deleteWorkbenchLogsWithCloud, isWorkbenchLogDeleted, pushWorkbenchLogToCloud, syncWorkbenchLogsWithCloud } from "@/services/workbench-sync";
 import { resolveImageUrl, resolvePickedImage, getImagePreviewRevision, prefetchUncachedImageUrls, previewUrlFor, subscribeImagePreviews, uploadImage } from "@/services/image-storage";
 import { createVideoGenerationTask, pollVideoGenerationTask, storeGeneratedVideo, type VideoGenerationTask } from "@/services/api/video";
 import { ensureRuntimeConfigForGeneration } from "@/services/cloud-sync";
@@ -78,6 +78,8 @@ export default function VideoPage() {
     const fileInputRef = useRef<HTMLInputElement>(null);
     const dragDepthRef = useRef(0);
     const activeLogIdsRef = useRef<Set<string>>(new Set());
+    const refreshSeqRef = useRef(0);
+    const logsRef = useRef<GenerationLog[]>([]);
     const config = useConfigStore((state) => state.config);
     const effectiveConfig = useEffectiveConfig();
     const updateConfig = useConfigStore((state) => state.updateConfig);
@@ -378,16 +380,29 @@ export default function VideoPage() {
     };
 
     const saveLog = async (log: GenerationLog, resumePending = true) => {
+        if (isWorkbenchLogDeleted(log.id)) return;
         const serialized = serializeLog(log);
         await logStore.setItem(log.id, serialized);
+        if (isWorkbenchLogDeleted(log.id)) {
+            await logStore.removeItem(log.id).catch(() => undefined);
+            return;
+        }
         const normalized = await normalizeLog(serialized);
-        setLogs((prev) => [normalized, ...prev.filter((item) => item.id !== normalized.id)].sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0)));
+        if (isWorkbenchLogDeleted(log.id)) return;
+        setLogs((prev) => {
+            const next = [normalized, ...prev.filter((item) => item.id !== normalized.id)].sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+            logsRef.current = next;
+            return next;
+        });
         if (resumePending) resumePendingLogs([normalized]);
         void pushWorkbenchLogToCloud("video", serialized);
     };
 
     const refreshLogs = async (resumePending = true) => {
+        const seq = ++refreshSeqRef.current;
         const nextLogs = await readStoredLogs();
+        if (seq !== refreshSeqRef.current) return logsRef.current;
+        logsRef.current = nextLogs;
         setLogs(nextLogs);
         if (resumePending) resumePendingLogs(nextLogs);
         return nextLogs;
@@ -417,9 +432,12 @@ export default function VideoPage() {
         }
         try {
             for (let attempt = 0; attempt < 120; attempt += 1) {
+                if (isWorkbenchLogDeleted(log.id)) return;
                 const state = await pollVideoGenerationTask(resolvedConfig || taskConfig, log.task);
+                if (isWorkbenchLogDeleted(log.id)) return;
                 if (state.status === "completed") {
                     const stored = await storeGeneratedVideo(state.result);
+                    if (isWorkbenchLogDeleted(log.id)) return;
                     const nextVideo: GeneratedVideo = {
                         id: nanoid(),
                         url: stored.url,
@@ -444,6 +462,7 @@ export default function VideoPage() {
                 await delay(2500);
             }
         } catch (error) {
+            if (isWorkbenchLogDeleted(log.id)) return;
             const errorMessage = error instanceof Error ? error.message : t("workbench.generationFailed");
             setResults([{ id: log.id, status: "failed", error: errorMessage }]);
             if (agentTaskId) updateAgentTask(agentTaskId, { status: "failed", successCount: 0, failCount: 1, error: errorMessage });
