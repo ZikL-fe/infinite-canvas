@@ -4,11 +4,12 @@ import { Alert, App, Avatar, Button, Card, Col, DatePicker, Descriptions, Empty,
 import type { Dayjs } from "dayjs";
 import type { TFunction } from "i18next";
 import localforage from "localforage";
-import { AudioLines, Bell, Download, Eye, FileIcon, Gift, ImageIcon, KeyRound, Laptop, LogOut, Megaphone, Pin, RefreshCw, RotateCcw, Save, Search, Trash2, TrendingUp, User, Video } from "lucide-react";
+import { AudioLines, Bell, Copy, Download, Eye, FileIcon, Gift, ImageIcon, KeyRound, Laptop, LogOut, Megaphone, Pin, RefreshCw, RotateCcw, Save, Search, Trash2, TrendingUp, User, Video } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
 
 import { useBatchZipDownload } from "@/hooks/use-batch-zip-download";
+import { useCopyText } from "@/hooks/use-copy-text";
 import { useEmailCodeSender } from "@/hooks/use-email-code-sender";
 import { formatCompactCredits, formatExactCredits } from "@/lib/format-number";
 import { createImageThumbnail, createVideoThumbnail } from "@/lib/image-thumbnail";
@@ -57,6 +58,7 @@ export function ProfileSecurityPanel() {
     const { t, i18n } = useTranslation();
     const locale = i18n.resolvedLanguage || undefined;
     const { message } = App.useApp();
+    const copyText = useCopyText();
     const user = useUserStore((state) => state.user);
     const setUser = useUserStore((state) => state.setUser);
 
@@ -281,7 +283,32 @@ export function ProfileSecurityPanel() {
 
             <Card title={t("userPanels.profile.accountDetails")}>
                 <Descriptions column={{ xs: 1, sm: 2 }} bordered size="small">
-                    <Descriptions.Item label={t("userPanels.profile.username")}>@{detail?.username}</Descriptions.Item>
+                    <Descriptions.Item label={t("userPanels.profile.userId")}>
+                        <span className="inline-flex items-center gap-1.5 font-mono text-xs">
+                            <span>{detail?.id || "-"}</span>
+                            {detail?.id ? (
+                                <Button
+                                    type="text"
+                                    size="small"
+                                    icon={<Copy className="size-3.5" />}
+                                    onClick={() => copyText(detail.id, t("userPanels.profile.userIdCopied"))}
+                                />
+                            ) : null}
+                        </span>
+                    </Descriptions.Item>
+                    <Descriptions.Item label={t("userPanels.profile.username")}>
+                        <span className="inline-flex items-center gap-1.5">
+                            <span>@{detail?.username}</span>
+                            {detail?.username ? (
+                                <Button
+                                    type="text"
+                                    size="small"
+                                    icon={<Copy className="size-3.5" />}
+                                    onClick={() => copyText(detail.username, t("userPanels.profile.usernameCopied"))}
+                                />
+                            ) : null}
+                        </span>
+                    </Descriptions.Item>
                     <Descriptions.Item label={t("userPanels.profile.role")}>
                         <Tag color={detail?.role === "admin" ? "blue" : "default"}>
                             {detail?.role === "admin" ? t("userPanels.profile.roleAdmin") : t("userPanels.profile.roleUser")}

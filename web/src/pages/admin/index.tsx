@@ -1,5 +1,5 @@
 /** 后台管理与个人后台入口页：采用左侧导航菜单与全宽内容区，管理员支持平台全局管控与个人中心切换。 */
-import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { Alert, App, Button, Card, Col, DatePicker, Descriptions, Drawer, Form, Image, Input, InputNumber, Menu, Modal, Popconfirm, Progress, Radio, Result, Row, Select, Space, Spin, Statistic, Switch, Table, Tabs, Tag, Tooltip, Typography, Upload, theme as antdTheme } from "antd";
 import type { MenuProps, UploadProps } from "antd";
 import dayjs, { type Dayjs } from "dayjs";
@@ -177,7 +177,11 @@ export default function AdminPage() {
     }, [isAdmin, isAdminRoute, normalizeTab, requestedTab]);
     const [overview, setOverview] = useState<AdminOverview | null>(null);
     const [overviewLoading, setOverviewLoading] = useState(isAdmin);
+    const [overviewTrendLoading, setOverviewTrendLoading] = useState(false);
+    const [overviewRefreshing, setOverviewRefreshing] = useState(false);
     const [overviewDays, setOverviewDays] = useState<7 | 14 | 30>(7);
+    const overviewDaysRef = useRef(overviewDays);
+    overviewDaysRef.current = overviewDays;
 
     const [channels, setChannels] = useState<AdminChannelItem[]>([]);
     const [channelsLoading, setChannelsLoading] = useState(isAdmin);
@@ -199,9 +203,12 @@ export default function AdminPage() {
     const [creditUser, setCreditUser] = useState<AdminUserItem | null>(null);
     const [userCreditForm] = Form.useForm<UserCreditForm>();
     const creditModeWatch = Form.useWatch("mode", userCreditForm) || "add";
+    const creditAmountWatch = Form.useWatch("amount", userCreditForm);
     const [userCreditSaving, setUserCreditSaving] = useState(false);
     const [storageQuotaUser, setStorageQuotaUser] = useState<AdminUserItem | null>(null);
     const [userStorageQuotaForm] = Form.useForm<UserStorageQuotaForm>();
+    const storageQuotaMbWatch = Form.useWatch("quotaMb", userStorageQuotaForm);
+    const storageQuotaExpiresAtWatch = Form.useWatch("expiresAt", userStorageQuotaForm);
     const [userStorageQuotaSaving, setUserStorageQuotaSaving] = useState(false);
     const [storageQuotaGrants, setStorageQuotaGrants] = useState<StorageGrantItem[]>([]);
     const [storageQuotaGrantsLoading, setStorageQuotaGrantsLoading] = useState(false);
@@ -266,7 +273,7 @@ export default function AdminPage() {
     const [authPolicySaving, setAuthPolicySaving] = useState(false);
 
     useEffect(() => {
-        const personalKeys = new Set(["user-overview", "user-dashboard", "usage-logs", "profile", "wallet", "my-media"]);
+        const personalKeys = new Set(["user-overview", "user-dashboard", "usage-logs", "profile", "wallet", "my-media", "config"]);
         if (!isAdmin && !personalKeys.has(activeTab)) {
             switchTab("user-overview");
         }
@@ -301,18 +308,30 @@ export default function AdminPage() {
     const [noticeUpdatedAt, setNoticeUpdatedAt] = useState<string | null>(null);
 
     const loadOverview = useCallback(
-        async (days = overviewDays) => {
+        async (days = overviewDaysRef.current, options?: { trendOnly?: boolean; notifySuccess?: boolean }) => {
             if (!isAdmin) return;
-            setOverviewLoading(true);
+            const trendOnly = Boolean(options?.trendOnly);
+            if (trendOnly) {
+                setOverviewTrendLoading(true);
+            } else {
+                if (options?.notifySuccess) setOverviewRefreshing(true);
+                else setOverviewLoading(true);
+            }
             try {
                 setOverview(await adminApi.getOverview(days));
+                if (options?.notifySuccess) message.success(t("common.refreshed"));
             } catch (error) {
                 message.error(error instanceof Error ? error.message : t("admin.messages.loadOverviewFailed"));
             } finally {
-                setOverviewLoading(false);
+                if (trendOnly) {
+                    setOverviewTrendLoading(false);
+                } else {
+                    setOverviewLoading(false);
+                    setOverviewRefreshing(false);
+                }
             }
         },
-        [isAdmin, message, overviewDays, t],
+        [isAdmin, message, t],
     );
 
     const loadChannels = useCallback(async () => {
@@ -502,8 +521,8 @@ export default function AdminPage() {
 
     useEffect(() => {
         if (!isAdmin || (activeTab !== "overview" && activeTab !== "media" && activeTab !== "storage")) return;
-        void loadOverview(overviewDays);
-    }, [activeTab, isAdmin, loadOverview, overviewDays]);
+        void loadOverview(overviewDaysRef.current);
+    }, [activeTab, isAdmin, loadOverview]);
 
     useEffect(() => {
         if (!isAdmin || activeTab !== "channels") return;
@@ -1414,6 +1433,15 @@ export default function AdminPage() {
                             ),
                             render: () => (
                                 <div className="flex flex-col gap-5">
+                                    <div className="flex justify-end">
+                                        <Button
+                                            icon={<RefreshCw className="size-4" />}
+                                            loading={overviewRefreshing}
+                                            onClick={() => void loadOverview(overviewDays, { notifySuccess: true })}
+                                        >
+                                            {t("common.refresh")}
+                                        </Button>
+                                    </div>
                                     <Row gutter={[16, 16]}>
                                         <Col xs={24} sm={12} xl={6}>
                                             <Card loading={overviewLoading}>
@@ -1461,12 +1489,16 @@ export default function AdminPage() {
                                             <ConsumptionTrendCard
                                                 title={t("admin.overviewTab.trendTitle")}
                                                 days={overviewDays}
-                                                onDaysChange={(days) => setOverviewDays(days as 7 | 14 | 30)}
+                                                onDaysChange={(days) => {
+                                                    const next = days as 7 | 14 | 30;
+                                                    setOverviewDays(next);
+                                                    void loadOverview(next, { trendOnly: true });
+                                                }}
                                                 dailyTrend={overview?.dailyTrend ?? []}
                                                 topModels={overview?.topModels ?? []}
                                                 rangeConsumedCredits={overview?.rangeConsumedCredits ?? 0}
                                                 rangeCalls={overview?.rangeCalls ?? 0}
-                                                loading={overviewLoading}
+                                                loading={overviewLoading || overviewTrendLoading}
                                             />
                                         </Col>
                                         <Col xs={24} lg={9}>
@@ -3874,6 +3906,73 @@ export default function AdminPage() {
                     <Form.Item name="recalculateUsedBytes" label={t("admin.modals.quota.recalculateLabel")} valuePropName="checked">
                         <Switch />
                     </Form.Item>
+                    {storageQuotaUser
+                        ? (() => {
+                              const prevBaseBytes = storageQuotaUser.baseStorageQuotaBytes ?? storageQuotaUser.storageQuotaBytes ?? 0;
+                              const prevTotalBytes = storageQuotaUser.storageQuotaBytes ?? 0;
+                              const usedBytes = storageQuotaUser.storageUsedBytes ?? 0;
+                              const effectiveGrantsBytes = storageQuotaGrantsLoading
+                                  ? (storageQuotaUser.storageGrantsQuotaBytes ?? 0)
+                                  : storageQuotaGrants.length || storageQuotaGrantsLoading
+                                    ? storageQuotaGrants.filter((g) => g.isEffective).reduce((sum, g) => sum + g.quotaBytes, 0)
+                                    : (storageQuotaUser.storageGrantsQuotaBytes ?? 0);
+                              const nextBaseBytes = Math.max(0, Math.round((Number(storageQuotaMbWatch) || 0) * 1024 * 1024));
+                              const baseExpired = Boolean(storageQuotaExpiresAtWatch && storageQuotaExpiresAtWatch.valueOf() <= Date.now());
+                              const nextTotalBytes = (baseExpired ? 0 : nextBaseBytes) + effectiveGrantsBytes;
+                              const totalDelta = nextTotalBytes - prevTotalBytes;
+                              const remainingBytes = nextTotalBytes - usedBytes;
+
+                              return (
+                                  <div
+                                      className="mb-3 rounded-lg border px-3 py-2.5 text-xs"
+                                      style={{
+                                          backgroundColor: token.colorFillQuaternary,
+                                          borderColor: token.colorBorderSecondary,
+                                      }}
+                                  >
+                                      <div className="mb-2 flex items-center justify-between gap-2">
+                                          <Typography.Text strong className="text-xs">
+                                              {t("admin.modals.quota.previewTitle")}
+                                          </Typography.Text>
+                                          {baseExpired && nextBaseBytes > 0 ? (
+                                              <Tag color="red" style={{ marginInlineEnd: 0 }}>
+                                                  {t("admin.modals.quota.previewBaseExpired")}
+                                              </Tag>
+                                          ) : null}
+                                      </div>
+                                      <div className="flex flex-col gap-1.5">
+                                          <div className="flex flex-wrap items-center justify-between gap-2">
+                                              <Typography.Text type="secondary">{t("admin.modals.quota.previewBase")}</Typography.Text>
+                                              <span className="font-medium">
+                                                  {formatBytes(prevBaseBytes)} → {formatBytes(nextBaseBytes)}
+                                              </span>
+                                          </div>
+                                          <div className="flex flex-wrap items-center justify-between gap-2">
+                                              <Typography.Text type="secondary">{t("admin.modals.quota.previewTotal")}</Typography.Text>
+                                              <span className="inline-flex items-center gap-1.5 font-medium">
+                                                  <span>
+                                                      {formatBytes(prevTotalBytes)} → {formatBytes(nextTotalBytes)}
+                                                  </span>
+                                                  {totalDelta !== 0 ? (
+                                                      <Tag color={totalDelta > 0 ? "green" : "orange"} style={{ marginInlineEnd: 0 }}>
+                                                          {totalDelta > 0 ? `+${formatBytes(totalDelta)}` : `-${formatBytes(Math.abs(totalDelta))}`}
+                                                      </Tag>
+                                                  ) : null}
+                                              </span>
+                                          </div>
+                                          <div className="flex flex-wrap items-center justify-between gap-2">
+                                              <Typography.Text type="secondary">{t("admin.modals.quota.previewRemaining")}</Typography.Text>
+                                              <span className="font-medium" style={{ color: remainingBytes < 0 ? token.colorError : undefined }}>
+                                                  {remainingBytes >= 0
+                                                      ? formatBytes(remainingBytes)
+                                                      : t("admin.modals.quota.previewOverQuota", { over: formatBytes(Math.abs(remainingBytes)) })}
+                                              </span>
+                                          </div>
+                                      </div>
+                                  </div>
+                              );
+                          })()
+                        : null}
                 </Form>
 
                 <div className="mt-2 border-t pt-3" style={{ borderColor: token.colorBorderSecondary }}>
@@ -3992,6 +4091,54 @@ export default function AdminPage() {
                     <Form.Item name="note" label={t("admin.modals.credit.noteLabel")}>
                         <Input placeholder={creditModeWatch === "clear" ? t("admin.modals.credit.clearNotePlaceholder") : t("admin.modals.credit.adjustNotePlaceholder")} />
                     </Form.Item>
+                    {creditUser
+                        ? (() => {
+                              const currentBalance = creditUser.creditBalance ?? 0;
+                              const amount = Math.max(0, Number(creditAmountWatch) || 0);
+                              const delta = creditModeWatch === "clear" ? -currentBalance : creditModeWatch === "deduct" ? -amount : amount;
+                              const afterBalance = Math.round((currentBalance + delta) * 10000) / 10000;
+                              const insufficient = afterBalance < 0;
+
+                              return (
+                                  <div
+                                      className="rounded-lg border px-3 py-2.5 text-xs"
+                                      style={{
+                                          backgroundColor: token.colorFillQuaternary,
+                                          borderColor: token.colorBorderSecondary,
+                                      }}
+                                  >
+                                      <div className="mb-2 flex items-center justify-between gap-2">
+                                          <Typography.Text strong className="text-xs">
+                                              {t("admin.modals.credit.previewTitle")}
+                                          </Typography.Text>
+                                          {insufficient ? (
+                                              <Tag color="red" style={{ marginInlineEnd: 0 }}>
+                                                  {t("admin.modals.credit.previewInsufficient")}
+                                              </Tag>
+                                          ) : null}
+                                      </div>
+                                      <div className="flex flex-col gap-1.5">
+                                          <div className="flex flex-wrap items-center justify-between gap-2">
+                                              <Typography.Text type="secondary">{t("admin.modals.credit.previewCurrent")}</Typography.Text>
+                                              <span className="font-medium">{formatExactCredits(currentBalance)}</span>
+                                          </div>
+                                          <div className="flex flex-wrap items-center justify-between gap-2">
+                                              <Typography.Text type="secondary">{t("admin.modals.credit.previewDelta")}</Typography.Text>
+                                              <Tag color={delta > 0 ? "green" : delta < 0 ? (insufficient ? "red" : "orange") : "default"} style={{ marginInlineEnd: 0 }}>
+                                                  {delta > 0 ? `+${formatExactCredits(delta)}` : delta < 0 ? `-${formatExactCredits(Math.abs(delta))}` : "0"}
+                                              </Tag>
+                                          </div>
+                                          <div className="flex flex-wrap items-center justify-between gap-2">
+                                              <Typography.Text type="secondary">{t("admin.modals.credit.previewAfter")}</Typography.Text>
+                                              <span className="font-semibold" style={{ color: insufficient ? token.colorError : token.colorPrimary }}>
+                                                  {formatExactCredits(afterBalance)}
+                                              </span>
+                                          </div>
+                                      </div>
+                                  </div>
+                              );
+                          })()
+                        : null}
                 </Form>
             </Modal>
 

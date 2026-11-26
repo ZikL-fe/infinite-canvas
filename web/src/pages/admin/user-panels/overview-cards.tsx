@@ -1,5 +1,5 @@
 /** 个人后台概览面板、消耗趋势卡片与平台公告卡片。 */
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Alert, App, Avatar, Button, Card, Col, DatePicker, Descriptions, Empty, Form, Image, Input, InputNumber, Modal, Popconfirm, Progress, Radio, Row, Segmented, Select, Space, Spin, Statistic, Switch, Table, Tabs, Tag, Tooltip, Typography, theme as antdTheme } from "antd";
 import type { Dayjs } from "dayjs";
 import type { TFunction } from "i18next";
@@ -279,26 +279,42 @@ export function UserOverviewPanel({ onOpenWallet, onOpenMedia }: { onOpenWallet?
     const { message } = App.useApp();
     const user = useUserStore((state) => state.user);
     const [days, setDays] = useState(7);
+    const daysRef = useRef(days);
+    daysRef.current = days;
     const [data, setData] = useState<AccountOverviewResponse | null>(null);
     const [loading, setLoading] = useState(true);
+    const [trendLoading, setTrendLoading] = useState(false);
+    const [refreshing, setRefreshing] = useState(false);
 
     const loadOverview = useCallback(
-        async (targetDays = days) => {
-            setLoading(true);
+        async (targetDays = daysRef.current, options?: { trendOnly?: boolean; notifySuccess?: boolean }) => {
+            const trendOnly = Boolean(options?.trendOnly);
+            if (trendOnly) {
+                setTrendLoading(true);
+            } else {
+                if (options?.notifySuccess) setRefreshing(true);
+                else setLoading(true);
+            }
             try {
                 setData(await accountApi.getOverview(targetDays));
+                if (options?.notifySuccess) message.success(t("common.refreshed"));
             } catch (error) {
                 message.error(error instanceof Error ? error.message : t("userPanels.overview.loadFailed"));
             } finally {
-                setLoading(false);
+                if (trendOnly) {
+                    setTrendLoading(false);
+                } else {
+                    setLoading(false);
+                    setRefreshing(false);
+                }
             }
         },
-        [days, message, t],
+        [message, t],
     );
 
     useEffect(() => {
-        void loadOverview(days);
-    }, [days, loadOverview]);
+        void loadOverview(daysRef.current);
+    }, [loadOverview]);
 
     const creditAlert = data ? resolveCreditAlert(data.creditBalance, data.lowBalanceThreshold ?? user?.lowBalanceThreshold) : null;
     const storageAlert = data
@@ -318,6 +334,15 @@ export function UserOverviewPanel({ onOpenWallet, onOpenMedia }: { onOpenWallet?
 
     return (
         <div className="flex flex-col gap-5">
+            <div className="flex justify-end">
+                <Button
+                    icon={<RefreshCw className="size-4" />}
+                    loading={refreshing}
+                    onClick={() => void loadOverview(days, { notifySuccess: true })}
+                >
+                    {t("common.refresh")}
+                </Button>
+            </div>
             {creditAlertCopy || storageAlertCopy ? (
                 <div className="flex flex-col gap-3">
                     {creditAlertCopy && creditAlert ? (
@@ -409,12 +434,15 @@ export function UserOverviewPanel({ onOpenWallet, onOpenMedia }: { onOpenWallet?
             <ConsumptionTrendCard
                 title={t("userPanels.overview.trendTitle")}
                 days={days}
-                onDaysChange={setDays}
+                onDaysChange={(nextDays) => {
+                    setDays(nextDays);
+                    void loadOverview(nextDays, { trendOnly: true });
+                }}
                 dailyTrend={data?.dailyTrend ?? []}
                 topModels={data?.topModels ?? []}
                 rangeConsumedCredits={data?.rangeConsumedCredits ?? 0}
                 rangeCalls={data?.rangeCalls ?? 0}
-                loading={loading}
+                loading={loading || trendLoading}
             />
 
             <AnnouncementsCard items={data?.announcements ?? []} loading={loading} />
