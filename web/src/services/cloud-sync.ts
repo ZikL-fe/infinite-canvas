@@ -87,6 +87,7 @@ function resetCloudSyncSessionState() {
     }
     projectSaveTimers.clear();
     pendingProjectsToSync.clear();
+    pendingRemovedMediaKeys.clear();
     deletedProjectIds.clear();
     cloudDeletedProjectIds.clear();
     deletedAssetIds.clear();
@@ -115,7 +116,24 @@ export function useCloudSyncing() {
 }
 const projectSaveTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const pendingProjectsToSync = new Map<string, CanvasProject>();
+const pendingRemovedMediaKeys = new Map<string, Set<string>>();
 const deletedProjectIds = new Set<string>();
+
+function collectStorageKeys(value: unknown, keys = new Set<string>()): Set<string> {
+    if (!value || typeof value !== "object") return keys;
+    if (Array.isArray(value)) {
+        for (const item of value) collectStorageKeys(item, keys);
+        return keys;
+    }
+    const record = value as Record<string, unknown>;
+    if (typeof record.storageKey === "string" && record.storageKey.includes(":")) {
+        keys.add(record.storageKey);
+    }
+    for (const child of Object.values(record)) {
+        if (child && typeof child === "object") collectStorageKeys(child, keys);
+    }
+    return keys;
+}
 const cloudDeletedProjectIds = new Set<string>();
 const deletedAssetIds = new Set<string>();
 const cloudDeletedAssetIds = new Set<string>();
@@ -158,8 +176,19 @@ async function pushProjectToCloud(project: CanvasProject, options?: { keepalive?
         if (!ok || deletedProjectIds.has(project.id) || hasTombstone("canvas", project.id)) return;
     }
     if (!useCanvasStore.getState().projects.some((item) => item.id === project.id)) return;
-    const res = await canvasApi.saveProject(project.id, stripBlobUrls(project) as unknown as Record<string, unknown>, options);
+    const currentKeys = collectStorageKeys([project.nodes, project.chatSessions]);
+    const removedSet = pendingRemovedMediaKeys.get(project.id);
+    const removedMediaKeys = removedSet ? Array.from(removedSet).filter((key) => !currentKeys.has(key)) : [];
+    const payload = {
+        ...(stripBlobUrls(project) as unknown as Record<string, unknown>),
+        ...(removedMediaKeys.length ? { removedMediaKeys } : {}),
+    };
+    const res = await canvasApi.saveProject(project.id, payload, options);
     clearDirty("canvas", project.id);
+    if (removedSet && removedMediaKeys.length) {
+        for (const key of removedMediaKeys) removedSet.delete(key);
+        if (!removedSet.size) pendingRemovedMediaKeys.delete(project.id);
+    }
     if (res?.deletedMediaCount && res.deletedMediaCount > 0) {
         void refreshUserProfileDeduped();
         useAssetStore.getState().cleanupImages();
@@ -582,6 +611,22 @@ export function initCloudSyncListeners() {
                 prev.backgroundMode === project.backgroundMode &&
                 prev.showImageInfo === project.showImageInfo;
             if (!onlyViewportChanged) {
+                const prevKeys = collectStorageKeys([prev.nodes, prev.chatSessions]);
+                const nextKeys = collectStorageKeys([project.nodes, project.chatSessions]);
+                let removedSet = pendingRemovedMediaKeys.get(project.id);
+                for (const key of prevKeys) {
+                    if (!nextKeys.has(key)) {
+                        if (!removedSet) {
+                            removedSet = new Set<string>();
+                            pendingRemovedMediaKeys.set(project.id, removedSet);
+                        }
+                        removedSet.add(key);
+                    }
+                }
+                if (removedSet) {
+                    for (const key of nextKeys) removedSet.delete(key);
+                    if (!removedSet.size) pendingRemovedMediaKeys.delete(project.id);
+                }
                 scheduleProjectSync(project);
             }
         }
@@ -593,6 +638,7 @@ export function initCloudSyncListeners() {
             deletedProjectIds.add(id);
             markTombstone("canvas", id);
             pendingProjectsToSync.delete(id);
+            pendingRemovedMediaKeys.delete(id);
             const timer = projectSaveTimers.get(id);
             if (timer) {
                 clearTimeout(timer);

@@ -26,6 +26,7 @@ const upsertProjectSchema = z.object({
     .default({ x: 0, y: 0, k: 1 }),
   createdAt: z.string().optional(),
   updatedAt: z.string().optional(),
+  removedMediaKeys: z.array(z.string().min(1)).max(500).optional().default([]),
 });
 
 const batchDeleteSchema = z.object({
@@ -98,6 +99,8 @@ canvasRoutes.put("/projects/:id", zValidator("json", upsertProjectSchema), async
   const updatedAt = resolveServerUpdatedAt();
 
   if (!existing) {
+    const newKeys = extractStorageKeys([body.nodes, body.chatSessions]);
+    const removedKeys = body.removedMediaKeys.filter((key) => !newKeys.has(key));
     const [created] = await db
       .insert(canvasProjects)
       .values({
@@ -116,13 +119,14 @@ canvasRoutes.put("/projects/:id", zValidator("json", upsertProjectSchema), async
         updatedAt,
       })
       .returning();
+    const deletedMediaCount = await cleanupOrphanedUserMedia(user.id, removedKeys);
     return c.json({
       project: {
         ...created,
         createdAt: created.createdAt.toISOString(),
         updatedAt: created.updatedAt.toISOString(),
       },
-      deletedMediaCount: 0,
+      deletedMediaCount,
     });
   }
 
@@ -133,7 +137,7 @@ canvasRoutes.put("/projects/:id", zValidator("json", upsertProjectSchema), async
 
   const oldKeys = extractStorageKeys([existing.nodes, existing.chatSessions]);
   const newKeys = extractStorageKeys([body.nodes, body.chatSessions]);
-  const removedKeys = Array.from(oldKeys).filter((key) => !newKeys.has(key));
+  const removedKeys = Array.from(new Set([...oldKeys, ...body.removedMediaKeys])).filter((key) => !newKeys.has(key));
 
   const [updated] = await db
     .update(canvasProjects)
