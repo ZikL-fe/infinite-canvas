@@ -7,52 +7,21 @@ import type { ReferenceImage } from "@/types/image";
 export const MAX_BATCH_IMAGES = 100;
 export const DEFAULT_BATCH_CONCURRENCY = 3;
 export const MAX_BATCH_CONCURRENCY = 10;
-export const MAX_SAME_PROMPT_SLOTS = 12;
 
 export type BatchScenario = "same-prompt" | "multi-prompt" | "custom";
-export type SamePromptRefMode = "sequential" | "paired";
 export type PromptSplitMode = "line" | "blank";
 
-/** 顺延把新参考图填入空图位或追加新图位（每张图占一个图位，上限 maxSlots） */
-export function appendSequentialSlotImages(
-    slots: ReferenceImage[][],
-    incoming: ReferenceImage[],
-    maxSlots = MAX_SAME_PROMPT_SLOTS,
-): {
-    nextSlots: ReferenceImage[][];
-    addedCount: number;
-    firstSlotIndex: number;
-    lastSlotIndex: number;
-    overflowCount: number;
-} {
-    if (incoming.length === 0) {
-        return { nextSlots: slots, addedCount: 0, firstSlotIndex: -1, lastSlotIndex: -1, overflowCount: 0 };
-    }
-    const nextSlots = slots.map((list) => [...list]);
-    let addedCount = 0;
-    let firstSlotIndex = -1;
-    let lastSlotIndex = -1;
-    let overflowCount = 0;
+/** 多图同词任务槽位：每个槽位对应一组独立生图请求，内部可放入图1/图2/图3等参考图。 */
+export type SamePromptTaskSlot = {
+    id: string;
+    references: ReferenceImage[];
+};
 
-    for (const img of incoming) {
-        const emptyIdx = nextSlots.findIndex((list) => list.length === 0);
-        if (emptyIdx >= 0) {
-            nextSlots[emptyIdx] = [img];
-            if (firstSlotIndex === -1) firstSlotIndex = emptyIdx;
-            lastSlotIndex = emptyIdx;
-            addedCount += 1;
-        } else if (nextSlots.length < maxSlots) {
-            nextSlots.push([img]);
-            const idx = nextSlots.length - 1;
-            if (firstSlotIndex === -1) firstSlotIndex = idx;
-            lastSlotIndex = idx;
-            addedCount += 1;
-        } else {
-            overflowCount += 1;
-        }
-    }
-
-    return { nextSlots, addedCount, firstSlotIndex, lastSlotIndex, overflowCount };
+export function createSamePromptSlot(references: ReferenceImage[] = []): SamePromptTaskSlot {
+    return {
+        id: nanoid(),
+        references: references.map((ref) => ({ ...ref })),
+    };
 }
 
 export type BatchSlotReference = ReferenceImage | null;
@@ -114,56 +83,30 @@ export function splitBatchPrompts(raw: string, mode: PromptSplitMode): string[] 
     return parts.map((item) => item.trim()).filter(Boolean);
 }
 
-/** 场景 1（多图同词）：按图1/图2/图3槽位自动配对，单图槽位自动固定复用，多图槽位数量需一致。 */
+/** 场景 1（多图同词）：每个非空任务槽位生成 1 组独立生图请求，共用同一句提示词。 */
 export function buildSamePromptBatchTasks(
     rawPrompt: string,
-    slots: ReferenceImage[][],
+    slots: SamePromptTaskSlot[],
 ): {
     tasks: ResolvedBatchTask[];
-    mismatchError: string | null;
     missingReason: string | null;
 } {
     const prompt = rawPrompt.trim();
-    const activeSlots = slots
-        .map((list, idx) => ({ slotIndex: idx, list }))
-        .filter((entry) => entry.list.length > 0);
+    const validSlots = slots.filter((slot) => slot.references.length > 0);
 
-    if (!activeSlots.length) {
+    if (!validSlots.length) {
         return {
             tasks: [],
-            mismatchError: null,
             missingReason: i18n.t("imageBatch.slot1Required"),
         };
     }
 
-    const multiSlots = activeSlots.filter((entry) => entry.list.length > 1);
-    const maxLen = activeSlots.reduce((max, entry) => Math.max(max, entry.list.length), 1);
-
-    let mismatchError: string | null = null;
-    if (multiSlots.length > 1) {
-        const expected = multiSlots[0].list.length;
-        const mismatch = multiSlots.find((entry) => entry.list.length !== expected);
-        if (mismatch) {
-            mismatchError = i18n.t("imageBatch.slotMismatchError", {
-                slotA: multiSlots[0].slotIndex + 1,
-                countA: expected,
-                slotB: mismatch.slotIndex + 1,
-                countB: mismatch.list.length,
-            });
-        }
-    }
-
-    const tasks: ResolvedBatchTask[] = Array.from({ length: maxLen }, (_, rowIdx) => ({
-        id: `same-${rowIdx}`,
-        prompt,
-        references: activeSlots
-            .map((entry) => (entry.list.length === 1 ? entry.list[0] : entry.list[rowIdx]))
-            .filter((img): img is ReferenceImage => Boolean(img)),
-    }));
-
     return {
-        tasks,
-        mismatchError,
+        tasks: validSlots.map((slot) => ({
+            id: slot.id,
+            prompt,
+            references: [...slot.references],
+        })),
         missingReason: !prompt ? i18n.t("imageBatch.sharedPromptRequired") : null,
     };
 }

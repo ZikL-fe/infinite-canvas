@@ -1,6 +1,6 @@
 /** 生图工作台批量编辑器面板：场景化引导（多图同词 / 一图多词 / 自由队列），所见即所得免多余同步点击。 */
 import { useRef, useState } from "react";
-import { Alert, App, Button, Input, InputNumber, Segmented, Tag, Tooltip } from "antd";
+import { App, Button, Input, InputNumber, Segmented, Tag, Tooltip } from "antd";
 import { ArrowLeft, ArrowRight, BookOpen, ClipboardPaste, Copy, Eraser, FolderPlus, Plus, SlidersHorizontal, Trash2, Upload } from "lucide-react";
 import { nanoid } from "nanoid";
 import { Trans, useTranslation } from "react-i18next";
@@ -11,14 +11,13 @@ import type { ReferenceImage } from "@/types/image";
 import {
     MAX_BATCH_CONCURRENCY,
     MAX_BATCH_IMAGES,
-    MAX_SAME_PROMPT_SLOTS,
-    appendSequentialSlotImages,
     createEmptyBatchItem,
+    createSamePromptSlot,
     getDenseReferences,
     type BatchScenario,
     type BatchTaskItem,
     type PromptSplitMode,
-    type SamePromptRefMode,
+    type SamePromptTaskSlot,
 } from "./batch-utils";
 
 type BatchEditorPanelProps = {
@@ -29,11 +28,8 @@ type BatchEditorPanelProps = {
     // 场景 1：多图同词
     sharedPrompt: string;
     onSharedPromptChange: (value: string) => void;
-    samePromptRefMode: SamePromptRefMode;
-    onSamePromptRefModeChange: (mode: SamePromptRefMode) => void;
-    samePromptSlots: ReferenceImage[][];
-    onSamePromptSlotsChange: (updater: (prev: ReferenceImage[][]) => ReferenceImage[][]) => void;
-    samePromptMismatchError: string | null;
+    samePromptSlots: SamePromptTaskSlot[];
+    onSamePromptSlotsChange: (updater: (prev: SamePromptTaskSlot[]) => SamePromptTaskSlot[]) => void;
     // 场景 2：一图多词
     sharedRefs: ReferenceImage[];
     onSharedRefsChange: (updater: (prev: ReferenceImage[]) => ReferenceImage[]) => void;
@@ -48,7 +44,7 @@ type BatchEditorPanelProps = {
     previewTaskCount: number;
     running: boolean;
     onOpenPromptDialog: (target: "same-prompt" | "multi-prompt") => void;
-    onOpenAssetPicker: (target: { mode: "same-prompt-text" } | { mode: "same-sequential" } | { mode: "same-slot"; slotIndex: number } | { mode: "multi-ref" } | { mode: "custom-item"; itemId: string }) => void;
+    onOpenAssetPicker: (target: { mode: "same-prompt-text" } | { mode: "same-batch-append" } | { mode: "same-batch-pair" } | { mode: "same-slot"; slotId: string } | { mode: "multi-ref" } | { mode: "custom-item"; itemId: string }) => void;
 };
 
 function moveItem<T>(items: T[], index: number, offset: number) {
@@ -232,11 +228,8 @@ export function BatchEditorPanel({
     onConcurrencyChange,
     sharedPrompt,
     onSharedPromptChange,
-    samePromptRefMode,
-    onSamePromptRefModeChange,
     samePromptSlots,
     onSamePromptSlotsChange,
-    samePromptMismatchError,
     sharedRefs,
     onSharedRefsChange,
     multiPromptRaw,
@@ -254,8 +247,14 @@ export function BatchEditorPanel({
     const { message } = App.useApp();
     const { t } = useTranslation();
     const itemFileInputRef = useRef<HTMLInputElement>(null);
+    const sameBatchAppendInputRef = useRef<HTMLInputElement>(null);
+    const sameBatchPairInputRef = useRef<HTMLInputElement>(null);
     const uploadTargetItemIdRef = useRef<string | null>(null);
+    const batchDragDepthRef = useRef(0);
     const [uploadingItemId, setUploadingItemId] = useState<string | null>(null);
+    const [uploadingSameBatch, setUploadingSameBatch] = useState<"append" | "pair" | null>(null);
+    const [pastingSameBatch, setPastingSameBatch] = useState(false);
+    const [sameBatchDragActive, setSameBatchDragActive] = useState(false);
 
     const readUploadedFiles = async (files?: FileList | null): Promise<ReferenceImage[]> => {
         const imageFiles = Array.from(files || []).filter((file) => file.type.startsWith("image/"));
@@ -297,13 +296,37 @@ export function BatchEditorPanel({
         }
     };
 
-    const appendSamePromptSequential = (incoming: ReferenceImage[]) => {
+    const appendSamePromptTaskSlots = (incoming: ReferenceImage[]) => {
         if (!incoming.length) return;
-        const { nextSlots, overflowCount } = appendSequentialSlotImages(samePromptSlots, incoming, MAX_SAME_PROMPT_SLOTS);
-        if (overflowCount > 0) {
-            message.warning(t("imageBatch.slotLimitWarning", { max: MAX_SAME_PROMPT_SLOTS }));
+        onSamePromptSlotsChange((prev) => [...prev, ...incoming.map((img) => createSamePromptSlot([img]))]);
+    };
+
+    const pairSamePromptSlots = (incoming: ReferenceImage[]) => {
+        if (!incoming.length) return;
+        if (!samePromptSlots.length) {
+            appendSamePromptTaskSlots(incoming);
+            return;
         }
-        onSamePromptSlotsChange(() => nextSlots);
+        if (incoming.length !== samePromptSlots.length && incoming.length !== 1) {
+            message.warning(
+                t("imageBatch.pairCountMismatch", {
+                    count: samePromptSlots.length,
+                    got: incoming.length,
+                }),
+            );
+            return;
+        }
+        onSamePromptSlotsChange((prev) =>
+            prev.map((slot, idx) => ({
+                ...slot,
+                references: [...slot.references, incoming.length === 1 ? incoming[0] : incoming[idx]],
+            })),
+        );
+        message.success(
+            incoming.length === 1
+                ? t("imageBatch.pairSingleSuccess", { count: samePromptSlots.length })
+                : t("imageBatch.pairMultiSuccess", { count: samePromptSlots.length }),
+        );
     };
 
     const handleUploadToCustomItem = async (itemId: string, files?: FileList | null) => {
@@ -379,135 +402,202 @@ export function BatchEditorPanel({
                         <div className="flex flex-wrap items-center justify-between gap-2">
                             <span className="text-sm font-semibold">{t("imageBatch.step2BatchRefs")}</span>
                             <div className="flex flex-wrap items-center gap-1.5">
-                                <Segmented
+                                <Tag color="blue" className="m-0">
+                                    {t("imageBatch.slotsCount", { count: samePromptSlots.length })}
+                                </Tag>
+                                <Button
                                     size="small"
+                                    type="dashed"
+                                    icon={<Plus className="size-3.5" />}
                                     disabled={running}
-                                    value={samePromptRefMode}
-                                    onChange={(val) => onSamePromptRefModeChange(val as SamePromptRefMode)}
-                                    options={[
-                                        { label: t("imageBatch.samePromptRefModes.sequential"), value: "sequential" },
-                                        { label: t("imageBatch.samePromptRefModes.paired"), value: "paired" },
-                                    ]}
-                                />
-                                {samePromptRefMode === "paired" ? (
-                                    <Button
-                                        size="small"
-                                        type="dashed"
-                                        icon={<Plus className="size-3.5" />}
-                                        disabled={running || samePromptSlots.length >= MAX_SAME_PROMPT_SLOTS}
-                                        onClick={() => onSamePromptSlotsChange((prev) => [...prev, []])}
-                                    >
-                                        {t("imageBatch.addImageSlot", { index: samePromptSlots.length + 1 })}
-                                    </Button>
-                                ) : null}
+                                    onClick={() => onSamePromptSlotsChange((prev) => [...prev, createSamePromptSlot()])}
+                                >
+                                    {t("imageBatch.addTaskSlot")}
+                                </Button>
                             </div>
                         </div>
 
-                        {samePromptRefMode === "sequential" && samePromptSlots.every((list) => list.length <= 1) ? (
-                            (() => {
-                                const sequentialImages = samePromptSlots
-                                    .map((list) => list[0])
-                                    .filter((img): img is ReferenceImage => Boolean(img));
-                                return (
-                                    <ImageDropBox
-                                        title={
-                                            <>
-                                                <span className="text-xs font-semibold">{t("imageBatch.sequentialRefsTitle")}</span>
-                                                <Tag color="blue" className="m-0">
-                                                    {t("imageBatch.sequentialSlotsCount", {
-                                                        count: sequentialImages.length,
-                                                        max: MAX_SAME_PROMPT_SLOTS,
-                                                    })}
-                                                </Tag>
-                                            </>
-                                        }
-                                        hint={t("imageBatch.sequentialHint")}
-                                        images={sequentialImages}
-                                        emptyText={t("imageBatch.sequentialEmptyText")}
+                        <div
+                            className={`rounded-lg border border-dashed p-3 transition-colors ${sameBatchDragActive ? "border-stone-900 bg-stone-100/80 dark:border-stone-100 dark:bg-stone-900/80" : "border-stone-300 dark:border-stone-700"}`}
+                            onDragEnter={(event) => {
+                                event.preventDefault();
+                                batchDragDepthRef.current += 1;
+                                if (event.dataTransfer.types.includes("Files")) setSameBatchDragActive(true);
+                            }}
+                            onDragOver={(event) => {
+                                event.preventDefault();
+                                event.dataTransfer.dropEffect = "copy";
+                            }}
+                            onDragLeave={(event) => {
+                                event.preventDefault();
+                                batchDragDepthRef.current = Math.max(0, batchDragDepthRef.current - 1);
+                                if (!batchDragDepthRef.current) setSameBatchDragActive(false);
+                            }}
+                            onDrop={(event) => {
+                                event.preventDefault();
+                                batchDragDepthRef.current = 0;
+                                setSameBatchDragActive(false);
+                                if (running) return;
+                                setUploadingSameBatch("append");
+                                void readUploadedFiles(event.dataTransfer.files)
+                                    .then(appendSamePromptTaskSlots)
+                                    .finally(() => setUploadingSameBatch(null));
+                            }}
+                        >
+                            <div className="flex flex-wrap items-center justify-between gap-2">
+                                <span className="text-xs font-medium text-stone-700 dark:text-stone-300">
+                                    {samePromptSlots.length > 0 ? t("imageBatch.batchTopBarActive") : t("imageBatch.batchTopBarEmpty")}
+                                </span>
+                                <div className="flex flex-wrap items-center gap-1">
+                                    <Button
+                                        size="small"
+                                        icon={<Upload className="size-3.5" />}
+                                        loading={uploadingSameBatch === "append"}
                                         disabled={running}
-                                        onAddFiles={async (files) => appendSamePromptSequential(await readUploadedFiles(files))}
-                                        onPaste={async () => appendSamePromptSequential(await readClipboardImages())}
-                                        onPickAsset={() => onOpenAssetPicker({ mode: "same-sequential" })}
-                                        onMove={(imgIdx, offset) =>
-                                            onSamePromptSlotsChange((prev) => {
-                                                const compacted = prev
-                                                    .map((list) => list[0])
-                                                    .filter((img): img is ReferenceImage => Boolean(img));
-                                                const moved = moveItem(compacted, imgIdx, offset);
-                                                return moved.length > 0 ? moved.map((img) => [img]) : [[]];
-                                            })
-                                        }
-                                        onRemoveImage={(id) =>
-                                            onSamePromptSlotsChange((prev) => {
-                                                const remaining = prev
-                                                    .map((list) => list[0])
-                                                    .filter((img): img is ReferenceImage => Boolean(img) && img.id !== id);
-                                                return remaining.length > 0 ? remaining.map((img) => [img]) : [[]];
-                                            })
-                                        }
-                                        onClearImages={() => onSamePromptSlotsChange(() => [[]])}
-                                    />
-                                );
-                            })()
-                        ) : (
-                            samePromptSlots.map((slotImages, slotIndex) => (
-                                <ImageDropBox
-                                    key={slotIndex}
-                                    title={
-                                        <>
-                                            <Tag color="blue" className="m-0">
-                                                {imageReferenceLabel(slotIndex)}
-                                            </Tag>
-                                            <span className="text-xs font-semibold">{t("imageBatch.refSlotTitle", { index: slotIndex + 1 })}</span>
-                                            <Tag className="m-0">
-                                                {slotImages.length === 1 && previewTaskCount > 1 ? t("imageBatch.slotCountFixed") : t("imageBatch.slotCount", { count: slotImages.length })}
-                                            </Tag>
-                                        </>
+                                        onClick={() => sameBatchAppendInputRef.current?.click()}
+                                    >
+                                        {samePromptSlots.length > 0 ? t("imageBatch.batchAppendUpload") : t("common.upload")}
+                                    </Button>
+                                    {samePromptSlots.length > 0 ? (
+                                        <Tooltip title={t("imageBatch.batchPairUploadTooltip", { count: samePromptSlots.length })}>
+                                            <Button
+                                                size="small"
+                                                icon={<Upload className="size-3.5" />}
+                                                loading={uploadingSameBatch === "pair"}
+                                                disabled={running}
+                                                onClick={() => sameBatchPairInputRef.current?.click()}
+                                            >
+                                                {t("imageBatch.batchPairUpload")}
+                                            </Button>
+                                        </Tooltip>
+                                    ) : null}
+                                    <Button
+                                        size="small"
+                                        icon={<ClipboardPaste className="size-3.5" />}
+                                        loading={pastingSameBatch}
+                                        disabled={running}
+                                        onClick={() => {
+                                            if (running) return;
+                                            setPastingSameBatch(true);
+                                            void readClipboardImages()
+                                                .then(appendSamePromptTaskSlots)
+                                                .finally(() => setPastingSameBatch(false));
+                                        }}
+                                    >
+                                        {t("common.paste")}
+                                    </Button>
+                                    <Button
+                                        size="small"
+                                        icon={<FolderPlus className="size-3.5" />}
+                                        disabled={running}
+                                        onClick={() => onOpenAssetPicker({ mode: "same-batch-append" })}
+                                    >
+                                        {t("imageBatch.assetsBtn")}
+                                    </Button>
+                                    {samePromptSlots.length > 0 ? (
+                                        <Button
+                                            size="small"
+                                            type="text"
+                                            danger
+                                            icon={<Eraser className="size-3.5" />}
+                                            disabled={running}
+                                            onClick={() => onSamePromptSlotsChange(() => [])}
+                                        >
+                                            {t("common.clear")}
+                                        </Button>
+                                    ) : null}
+                                </div>
+                            </div>
+                            <div className="mt-1.5 text-xs text-stone-500 dark:text-stone-400">
+                                {sameBatchDragActive
+                                    ? t("imageBatch.dropToBatchAdd")
+                                    : samePromptSlots.length > 0
+                                      ? t("imageBatch.batchTopBarActiveHint", { count: samePromptSlots.length })
+                                      : t("imageBatch.batchTopBarEmptyHint")}
+                            </div>
+                            <input
+                                ref={sameBatchAppendInputRef}
+                                type="file"
+                                accept="image/*"
+                                multiple
+                                className="hidden"
+                                onChange={(event) => {
+                                    const files = event.target.files;
+                                    if (files?.length && !running) {
+                                        setUploadingSameBatch("append");
+                                        void readUploadedFiles(files)
+                                            .then(appendSamePromptTaskSlots)
+                                            .finally(() => setUploadingSameBatch(null));
                                     }
-                                    hint={
-                                        slotIndex === 0
-                                            ? t("imageBatch.slot1Hint")
-                                            : t("imageBatch.slotOtherHint")
+                                    event.target.value = "";
+                                }}
+                            />
+                            <input
+                                ref={sameBatchPairInputRef}
+                                type="file"
+                                accept="image/*"
+                                multiple
+                                className="hidden"
+                                onChange={(event) => {
+                                    const files = event.target.files;
+                                    if (files?.length && !running) {
+                                        setUploadingSameBatch("pair");
+                                        void readUploadedFiles(files)
+                                            .then(pairSamePromptSlots)
+                                            .finally(() => setUploadingSameBatch(null));
                                     }
-                                    images={slotImages}
-                                    showOrdinal
-                                    emptyText={t("imageBatch.slotEmptyText", { label: imageReferenceLabel(slotIndex) })}
-                                    disabled={running}
-                                    canRemoveBox={samePromptSlots.length > 1}
-                                    onRemoveBox={() => onSamePromptSlotsChange((prev) => prev.filter((_, idx) => idx !== slotIndex))}
-                                    onAddFiles={async (files) => {
-                                        const uploaded = await readUploadedFiles(files);
-                                        if (!uploaded.length) return;
-                                        onSamePromptSlotsChange((prev) =>
-                                            prev.map((list, idx) => (idx === slotIndex ? [...list, ...uploaded] : list)),
-                                        );
-                                    }}
-                                    onPaste={async () => {
-                                        const uploaded = await readClipboardImages();
-                                        if (!uploaded.length) return;
-                                        onSamePromptSlotsChange((prev) =>
-                                            prev.map((list, idx) => (idx === slotIndex ? [...list, ...uploaded] : list)),
-                                        );
-                                    }}
-                                    onPickAsset={() => onOpenAssetPicker({ mode: "same-slot", slotIndex })}
-                                    onMove={(imgIdx, offset) =>
-                                        onSamePromptSlotsChange((prev) =>
-                                            prev.map((list, idx) => (idx === slotIndex ? moveItem(list, imgIdx, offset) : list)),
-                                        )
-                                    }
-                                    onRemoveImage={(id) =>
-                                        onSamePromptSlotsChange((prev) =>
-                                            prev.map((list, idx) => (idx === slotIndex ? list.filter((img) => img.id !== id) : list)),
-                                        )
-                                    }
-                                    onClearImages={() =>
-                                        onSamePromptSlotsChange((prev) => prev.map((list, idx) => (idx === slotIndex ? [] : list)))
-                                    }
-                                />
-                            ))
-                        )}
+                                    event.target.value = "";
+                                }}
+                            />
+                        </div>
 
-                        {samePromptMismatchError ? <Alert type="warning" showIcon message={samePromptMismatchError} /> : null}
+                        {samePromptSlots.map((slot, slotIndex) => (
+                            <ImageDropBox
+                                key={slot.id}
+                                title={
+                                    <>
+                                        <Tag color="blue" className="m-0">
+                                            {t("imageBatch.taskSlotTag", { index: slotIndex + 1 })}
+                                        </Tag>
+                                        <span className="text-xs text-stone-500 dark:text-stone-400">
+                                            {t("imageBatch.itemRefCount", { count: slot.references.length })}
+                                        </span>
+                                    </>
+                                }
+                                images={slot.references}
+                                emptyText={t("imageBatch.slotEmptyText", { label: t("imageBatch.taskSlotTag", { index: slotIndex + 1 }) })}
+                                disabled={running}
+                                canRemoveBox
+                                onRemoveBox={() => onSamePromptSlotsChange((prev) => prev.filter((item) => item.id !== slot.id))}
+                                onAddFiles={async (files) => {
+                                    const uploaded = await readUploadedFiles(files);
+                                    if (!uploaded.length) return;
+                                    onSamePromptSlotsChange((prev) =>
+                                        prev.map((item) => (item.id === slot.id ? { ...item, references: [...item.references, ...uploaded] } : item)),
+                                    );
+                                }}
+                                onPaste={async () => {
+                                    const uploaded = await readClipboardImages();
+                                    if (!uploaded.length) return;
+                                    onSamePromptSlotsChange((prev) =>
+                                        prev.map((item) => (item.id === slot.id ? { ...item, references: [...item.references, ...uploaded] } : item)),
+                                    );
+                                }}
+                                onPickAsset={() => onOpenAssetPicker({ mode: "same-slot", slotId: slot.id })}
+                                onMove={(imgIdx, offset) =>
+                                    onSamePromptSlotsChange((prev) =>
+                                        prev.map((item) => (item.id === slot.id ? { ...item, references: moveItem(item.references, imgIdx, offset) } : item)),
+                                    )
+                                }
+                                onRemoveImage={(id) =>
+                                    onSamePromptSlotsChange((prev) =>
+                                        prev.map((item) =>
+                                            item.id === slot.id ? { ...item, references: item.references.filter((img) => img.id !== id) } : item,
+                                        ),
+                                    )
+                                }
+                            />
+                        ))}
                     </div>
 
                     {previewTaskCount > 0 ? (
