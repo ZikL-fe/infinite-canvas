@@ -1,7 +1,7 @@
 /** 账号登录与注册页：首注用户自动引导初始化为系统管理员，支持注册邮箱验证码、忘记密码邮箱重置及管理员受控注册策略。 */
 import { useEffect, useState } from "react";
 import { Alert, App, Button, Card, Form, Input, Modal, Space, Tabs, Tag, Typography } from "antd";
-import { Lock, Mail, ShieldCheck, User } from "lucide-react";
+import { Gift, Lock, Mail, ShieldCheck, User } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { useNavigate, useSearchParams } from "react-router-dom";
 
@@ -22,9 +22,17 @@ export default function AuthPage() {
     const [activeTab, setActiveTab] = useState<"login" | "register">("login");
     const [submitting, setSubmitting] = useState(false);
     const [loginForm] = Form.useForm<{ account: string; password: string }>();
-    const [registerForm] = Form.useForm<{ username: string; displayName?: string; email?: string; emailCode?: string; password: string }>();
+    const [registerForm] = Form.useForm<{ username: string; displayName?: string; email?: string; emailCode?: string; inviteCode?: string; password: string }>();
     const registerEmailWatch = Form.useWatch("email", registerForm);
     const registerCodeSender = useEmailCodeSender();
+    const urlInviteCode = (searchParams.get("invite") || searchParams.get("ref") || "").trim().toUpperCase();
+
+    useEffect(() => {
+        if (urlInviteCode) {
+            setActiveTab("register");
+            registerForm.setFieldValue("inviteCode", urlInviteCode);
+        }
+    }, [registerForm, urlInviteCode]);
 
     const [resetOpen, setResetOpen] = useState(false);
     const [resetting, setResetting] = useState(false);
@@ -88,7 +96,7 @@ export default function AuthPage() {
         }
     };
 
-    const handleRegister = async (values: { username: string; displayName?: string; email?: string; emailCode?: string; password: string }) => {
+    const handleRegister = async (values: { username: string; displayName?: string; email?: string; emailCode?: string; inviteCode?: string; password: string }) => {
         setSubmitting(true);
         try {
             const session = await authApi.register({
@@ -96,6 +104,7 @@ export default function AuthPage() {
                 displayName: values.displayName,
                 email: values.email?.trim() || undefined,
                 emailCode: values.emailCode?.trim() || undefined,
+                inviteCode: values.inviteCode?.trim() || undefined,
                 password: values.password,
             });
             setSession(session);
@@ -104,6 +113,7 @@ export default function AuthPage() {
                 allowRegister: bootstrapStatus?.allowRegister ?? true,
                 requireEmailOnRegister: bootstrapStatus?.requireEmailOnRegister ?? false,
                 emailEnabled: bootstrapStatus?.emailEnabled ?? false,
+                inviteEnabled: bootstrapStatus?.inviteEnabled ?? false,
             });
             message.success(session.user.role === "admin" ? t("auth.registerSuccessAdmin") : t("auth.registerSuccess"));
             handleSuccessRedirect(session.user.role);
@@ -171,6 +181,7 @@ export default function AuthPage() {
     const emailEnabled = Boolean(bootstrapStatus?.emailEnabled);
     const requireEmailOnRegister = !isBootstrap && emailEnabled && Boolean(bootstrapStatus?.requireEmailOnRegister);
     const showRegisterCodeInput = !isBootstrap && emailEnabled && (requireEmailOnRegister || Boolean(registerEmailWatch?.trim()));
+    const showInviteCodeInput = !isBootstrap && (Boolean(bootstrapStatus?.inviteEnabled) || Boolean(urlInviteCode));
 
     return (
         <div className="flex h-full items-center justify-center overflow-y-auto p-6">
@@ -272,6 +283,11 @@ export default function AuthPage() {
                                                     {registerCodeSender.cooldown > 0 ? t("auth.retryAfter", { seconds: registerCodeSender.cooldown }) : t("auth.getCode")}
                                                 </Button>
                                             </Space.Compact>
+                                        </Form.Item>
+                                    ) : null}
+                                    {showInviteCodeInput ? (
+                                        <Form.Item name="inviteCode" label={t("auth.inviteCodeLabel")}>
+                                            <Input prefix={<Gift className="size-4 opacity-50" />} placeholder={t("auth.inviteCodePlaceholder")} maxLength={32} />
                                         </Form.Item>
                                     ) : null}
                                     <Form.Item

@@ -10,12 +10,14 @@ import { testS3Connection } from "../../lib/s3.ts";
 import {
   getAuthPolicy,
   getPlatformAnalyticsPolicy,
+  getPlatformInvitePolicy,
   getPlatformMailConfig,
   getPlatformStorageExpiryPolicy,
   getPlatformWebdavConfig,
   getS3StorageConfig,
   saveAuthPolicy,
   savePlatformAnalyticsPolicy,
+  savePlatformInvitePolicy,
   savePlatformMailConfig,
   savePlatformStorageExpiryPolicy,
   savePlatformWebdavConfig,
@@ -49,6 +51,12 @@ const storageConfigSchema = z.object({
 const authPolicySchema = z.object({
   allowRegister: z.boolean(),
   requireEmailOnRegister: z.boolean().optional().default(false),
+});
+
+const invitePolicySchema = z.object({
+  enabled: z.boolean(),
+  rebatePercent: z.number().min(0).max(100),
+  includeAdminAdjust: z.boolean(),
 });
 
 const mailConfigSchema = z.object({
@@ -173,6 +181,17 @@ adminSettingsRoutes.put("/settings/auth", zValidator("json", authPolicySchema), 
   }
   const policy = await saveAuthPolicy(body, c.get("user").id);
   return c.json(policy);
+});
+
+adminSettingsRoutes.get("/settings/invite", async (c) => {
+  const policy = await getPlatformInvitePolicy();
+  return c.json(policy);
+});
+
+adminSettingsRoutes.put("/settings/invite", zValidator("json", invitePolicySchema), async (c) => {
+  const body = c.req.valid("json");
+  const saved = await savePlatformInvitePolicy(body, c.get("user").id);
+  return c.json({ ok: true, ...saved });
 });
 
 adminSettingsRoutes.get("/settings/mail", async (c) => {

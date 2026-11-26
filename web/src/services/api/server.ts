@@ -5,6 +5,7 @@ import i18n from "@/i18n";
 import { useUserStore, type BootstrapStatus, type LocalUser, type UserRole, type UserStatus } from "@/stores/use-user-store";
 import { fetchServer, requestServer } from "./server-http";
 import type {
+    AccountInvitesResponse,
     AccountOverviewResponse,
     AccountProfileResponse,
     AccountSessionItem,
@@ -28,6 +29,7 @@ import type {
     MediaSourceModule,
     PlatformAnalyticsPolicy,
     PlatformGlobalNotice,
+    PlatformInvitePolicy,
     RedeemCodeItem,
     RedeemCodeKind,
     RuntimeConfigResponse,
@@ -47,6 +49,8 @@ export const accountApi = {
     getOverview: (days = 7) => requestServer<AccountOverviewResponse>(`/account/overview?days=${days}`),
     getDashboard: (range: DashboardRange = "24h", force = false) =>
         requestServer<AnalyticsDashboardResponse>(`/account/dashboard?range=${range}&force=${force ? 1 : 0}`),
+    getInvites: (page = 1, pageSize = 20) =>
+        requestServer<AccountInvitesResponse>(`/account/invites?page=${page}&pageSize=${pageSize}`),
     getProfile: () => requestServer<AccountProfileResponse>("/account/profile"),
     sendEmailBindCode: (email: string) =>
         requestServer<{ ok: boolean; cooldownSeconds: number; expiresInMinutes: number }>("/account/email/send-code", {
@@ -96,7 +100,7 @@ export const authApi = {
             { method: "POST", body: JSON.stringify({ email }) },
             false,
         ),
-    register: (payload: { username: string; password: string; email?: string; emailCode?: string; displayName?: string }) =>
+    register: (payload: { username: string; password: string; email?: string; emailCode?: string; displayName?: string; inviteCode?: string }) =>
         requestServer<{ user: LocalUser; accessToken: string; refreshToken: string }>("/auth/register", { method: "POST", body: JSON.stringify(payload) }, false),
     login: (payload: { account: string; password: string }) =>
         requestServer<{ user: LocalUser; accessToken: string; refreshToken: string }>("/auth/login", { method: "POST", body: JSON.stringify(payload) }, false),
@@ -508,6 +512,9 @@ export const adminApi = {
     getAuthSettings: () => requestServer<{ allowRegister: boolean; requireEmailOnRegister: boolean; emailEnabled: boolean }>("/admin/settings/auth"),
     saveAuthSettings: (payload: { allowRegister: boolean; requireEmailOnRegister?: boolean }) =>
         requestServer<{ allowRegister: boolean; requireEmailOnRegister: boolean }>("/admin/settings/auth", { method: "PUT", body: JSON.stringify(payload) }),
+    getInviteSettings: () => requestServer<PlatformInvitePolicy>("/admin/settings/invite"),
+    saveInviteSettings: (payload: PlatformInvitePolicy) =>
+        requestServer<{ ok: boolean } & PlatformInvitePolicy>("/admin/settings/invite", { method: "PUT", body: JSON.stringify(payload) }),
     getMailSettings: () => requestServer<AdminMailSettings>("/admin/settings/mail"),
     saveMailSettings: (payload: AdminMailSettingsForm) =>
         requestServer<{ ok: boolean; ready: boolean; passwordPreview: string }>("/admin/settings/mail", { method: "PUT", body: JSON.stringify(payload) }),

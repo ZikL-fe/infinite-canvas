@@ -35,6 +35,7 @@ export type BootstrapStatus = {
     allowRegister: boolean;
     requireEmailOnRegister?: boolean;
     emailEnabled?: boolean;
+    inviteEnabled?: boolean;
 };
 
 type UserStore = {

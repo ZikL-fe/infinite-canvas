@@ -317,6 +317,17 @@ export default function AdminPage() {
                     render: () => <AdminSystemSettingsPanel section="auth" />,
                 },
                 {
+                    key: "settings-invite",
+                    label: (
+                        <span className="inline-flex items-center gap-1.5">
+                            <Gift className="size-3.5" />
+                            {t("admin.settingsTab.invite.tab")}
+                        </span>
+                    ),
+                    pageTitle: t("admin.settingsTab.invite.pageTitle"),
+                    render: () => <AdminSystemSettingsPanel section="invite" />,
+                },
+                {
                     key: "settings-mail",
                     label: (
                         <span className="inline-flex items-center gap-1.5">

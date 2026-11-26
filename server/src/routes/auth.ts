@@ -10,9 +10,10 @@ import { env } from "../env.ts";
 import { getWalletBalance } from "../lib/billing.ts";
 import { generateRandomToken, hashPassword, sha256Hex, verifyPassword } from "../lib/crypto.ts";
 import { issueEmailVerificationCode, verifyAndConsumeEmailCode } from "../lib/email-verification.ts";
+import { normalizeInviteCode } from "../lib/invite.ts";
 import { signAccessToken } from "../lib/jwt.ts";
 import { isMailConfigReady } from "../lib/mail.ts";
-import { getAuthPolicy, getPlatformMailConfig, getPlatformWebdavConfig } from "../lib/settings.ts";
+import { getAuthPolicy, getPlatformInvitePolicy, getPlatformMailConfig, getPlatformWebdavConfig } from "../lib/settings.ts";
 import { getUserQuotaAlertMeta, getUserStorageQuotaSummary, type UserQuotaAlertMeta } from "../lib/storage-quota.ts";
 import { requireAuthWithQuota, type AppEnv } from "../middleware/auth.ts";
 
@@ -27,6 +28,7 @@ const registerSchema = z.object({
   email: z.string().trim().email("邮箱格式不正确").optional().or(z.literal("")),
   emailCode: z.string().trim().optional().or(z.literal("")),
   displayName: z.string().trim().max(48, "昵称最多 48 个字符").optional().or(z.literal("")),
+  inviteCode: z.string().trim().max(32, "邀请码过长").optional().or(z.literal("")),
 });
 
 const sendEmailCodeSchema = z.object({
@@ -109,10 +111,11 @@ async function createSessionTokens(userId: string, role: UserRole, c: { req: { h
 export const authRoutes = new Hono<AppEnv>();
 
 authRoutes.get("/bootstrap-status", async (c) => {
-  const [[{ value: userCount }], policy, mailConfig] = await Promise.all([
+  const [[{ value: userCount }], policy, mailConfig, invitePolicy] = await Promise.all([
     db.select({ value: count() }).from(users),
     getAuthPolicy(),
     getPlatformMailConfig(),
+    getPlatformInvitePolicy(),
   ]);
   const initialized = Number(userCount) > 0;
   const emailEnabled = isMailConfigReady(mailConfig);
@@ -121,6 +124,7 @@ authRoutes.get("/bootstrap-status", async (c) => {
     allowRegister: initialized ? policy.allowRegister : true,
     requireEmailOnRegister: initialized && emailEnabled ? policy.requireEmailOnRegister : false,
     emailEnabled,
+    inviteEnabled: initialized && invitePolicy.enabled,
   });
 });
 
@@ -225,6 +229,19 @@ authRoutes.post("/register", zValidator("json", registerSchema), async (c) => {
       return { error: "管理员已开启注册邮箱验证，请填写邮箱", status: 400 as const };
     }
 
+    let invitedByUserId: string | null = null;
+    const normalizedInviteCode = normalizeInviteCode(body.inviteCode);
+    if (!isFirstUser && normalizedInviteCode) {
+      const inviter = await tx.query.users.findFirst({
+        where: eq(users.inviteCode, normalizedInviteCode),
+        columns: { id: true, status: true },
+      });
+      if (!inviter || inviter.status !== "active") {
+        return { error: "邀请码无效或邀请人账号不可用", status: 400 as const };
+      }
+      invitedByUserId = inviter.id;
+    }
+
     const existing = await tx.query.users.findFirst({
       where: normalizedEmail
         ? or(eq(users.username, body.username), eq(users.email, normalizedEmail))
@@ -272,6 +289,7 @@ authRoutes.post("/register", zValidator("json", registerSchema), async (c) => {
         displayName: body.displayName || body.username,
         role,
         status: "active",
+        invitedByUserId,
         webdavConfig: defaultWebdav,
         lastLoginAt: new Date(),
       })

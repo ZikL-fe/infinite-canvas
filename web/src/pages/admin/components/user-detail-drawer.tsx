@@ -40,6 +40,11 @@ type ResetPasswordForm = {
 function getRechargeRecordMeta(row: CreditLedgerItem, t: TFunction): { label: string; color: string } {
     if (row.reason === "redeem_code") return { label: t("userDetail.rechargeTypes.redeemCode"), color: "green" };
     if (row.reason === "plan_grant") return { label: t("userDetail.rechargeTypes.planGrant"), color: "purple" };
+    if (row.reason === "invite_rebate") {
+        return row.meta?.direction === "clawback"
+            ? { label: t("userDetail.rechargeTypes.inviteClawback"), color: "orange" }
+            : { label: t("userDetail.rechargeTypes.inviteRebate"), color: "magenta" };
+    }
     if (row.reason === "admin_adjust") {
         if (row.meta?.action === "clear") return { label: t("userDetail.rechargeTypes.adminClear"), color: "red" };
         return row.delta >= 0

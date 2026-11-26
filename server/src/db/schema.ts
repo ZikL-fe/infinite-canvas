@@ -1,6 +1,7 @@
 /** 数据库表结构定义：用户、会话、对象存储媒体、素材、画布、系统配置、钱包账本、视频计费任务、兑换码及平台公告。 */
 import { sql } from 'drizzle-orm';
 import {
+  type AnyPgColumn,
   bigint,
   boolean,
   doublePrecision,
@@ -62,6 +63,11 @@ export const users = pgTable('users', {
   lowBalanceAlertedAt: timestamp('low_balance_alerted_at', {
     withTimezone: true,
   }),
+  inviteCode: text('invite_code').unique(),
+  invitedByUserId: text('invited_by_user_id').references(
+    (): AnyPgColumn => users.id,
+    { onDelete: 'set null' },
+  ),
   lastLoginAt: timestamp('last_login_at', { withTimezone: true }),
   createdAt: timestamp('created_at', { withTimezone: true })
     .notNull()
@@ -69,7 +75,9 @@ export const users = pgTable('users', {
   updatedAt: timestamp('updated_at', { withTimezone: true })
     .notNull()
     .defaultNow(),
-});
+},
+(table) => [index('users_invited_by_idx').on(table.invitedByUserId)],
+);
 
 export const userSessions = pgTable(
   'user_sessions',
@@ -475,6 +483,47 @@ export const emailVerificationCodes = pgTable(
     index('email_verification_codes_lookup_idx').on(
       table.email,
       table.purpose,
+      table.createdAt,
+    ),
+  ],
+);
+
+export const inviteRebateRecords = pgTable(
+  'invite_rebate_records',
+  {
+    id: text('id').primaryKey(),
+    inviterUserId: text('inviter_user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    inviteeUserId: text('invitee_user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    sourceLedgerId: text('source_ledger_id').notNull().unique(),
+    sourceReason: text('source_reason').notNull(),
+    sourceAmount: doublePrecision('source_amount').notNull(),
+    rebatePercent: doublePrecision('rebate_percent').notNull(),
+    rebateCredits: doublePrecision('rebate_credits').notNull(),
+    reclaimedSourceAmount: doublePrecision('reclaimed_source_amount')
+      .notNull()
+      .default(0),
+    reclaimedCredits: doublePrecision('reclaimed_credits')
+      .notNull()
+      .default(0),
+    inviterLedgerId: text('inviter_ledger_id'),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => [
+    index('invite_rebate_records_inviter_idx').on(
+      table.inviterUserId,
+      table.createdAt,
+    ),
+    index('invite_rebate_records_invitee_idx').on(
+      table.inviteeUserId,
       table.createdAt,
     ),
   ],

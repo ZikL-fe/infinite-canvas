@@ -9,6 +9,7 @@ import { normalizeDashboardRange, queryAnalyticsDashboard } from "../lib/analyti
 import { getWalletBalance, queryConsumptionMetrics } from "../lib/billing.ts";
 import { hashPassword, sha256Hex, verifyPassword } from "../lib/crypto.ts";
 import { issueEmailVerificationCode, verifyAndConsumeEmailCode } from "../lib/email-verification.ts";
+import { queryUserInviteSummary } from "../lib/invite.ts";
 import { isMailConfigReady } from "../lib/mail.ts";
 import { mediaTotalBytesSql } from "../lib/media-cleanup.ts";
 import { getAuthPolicy, getPlatformMailConfig, getPlatformWebdavConfig, resolveEffectiveUserWebdav } from "../lib/settings.ts";
@@ -103,6 +104,14 @@ accountRoutes.get("/dashboard", async (c) => {
   const force = c.req.query("force") === "1" || c.req.query("force") === "true";
   const dashboard = await queryAnalyticsDashboard({ range, userId: authUser.id, force });
   return c.json(dashboard);
+});
+
+accountRoutes.get("/invites", async (c) => {
+  const authUser = c.get("user");
+  const page = Number(c.req.query("page") || 1);
+  const pageSize = Number(c.req.query("pageSize") || 20);
+  const summary = await queryUserInviteSummary(authUser.id, page, pageSize);
+  return c.json(summary);
 });
 
 accountRoutes.get("/profile", async (c) => {

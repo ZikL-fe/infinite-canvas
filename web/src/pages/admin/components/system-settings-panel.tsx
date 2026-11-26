@@ -12,12 +12,13 @@ import {
     type AdminMailSettingsForm,
     type AdminStorageExpiryPolicyForm,
     type PlatformAnalyticsPolicy,
+    type PlatformInvitePolicy,
     type StorageExpirySweepItem,
     type StorageExpirySweepResult,
 } from "@/services/api/server";
 import { syncRuntimeSettings } from "@/services/cloud-sync";
 
-export type SystemSettingsSection = "auth" | "mail" | "webdav" | "storage-expiry" | "analytics";
+export type SystemSettingsSection = "auth" | "invite" | "mail" | "webdav" | "storage-expiry" | "analytics";
 
 type WebdavPlatformForm = {
     enabled: boolean;
@@ -62,11 +63,15 @@ export function AdminSystemSettingsPanel({ section }: { section: SystemSettingsS
     const [analyticsSaving, setAnalyticsSaving] = useState(false);
     const [cleaningLogs, setCleaningLogs] = useState(false);
 
+    const [inviteForm] = Form.useForm<PlatformInvitePolicy>();
+    const [inviteSaving, setInviteSaving] = useState(false);
+
     const loadSettings = useCallback(async () => {
         setLoading(true);
         try {
-            const [authRes, webdavRes, mailRes, expiryRes, analyticsRes] = await Promise.all([
+            const [authRes, inviteRes, webdavRes, mailRes, expiryRes, analyticsRes] = await Promise.all([
                 adminApi.getAuthSettings(),
+                adminApi.getInviteSettings(),
                 adminApi.getWebdavSettings(),
                 adminApi.getMailSettings(),
                 adminApi.getStorageExpirySettings(),
@@ -74,6 +79,11 @@ export function AdminSystemSettingsPanel({ section }: { section: SystemSettingsS
             ]);
             setAllowRegister(authRes.allowRegister);
             setRequireEmailOnRegister(authRes.requireEmailOnRegister);
+            inviteForm.setFieldsValue({
+                enabled: inviteRes.enabled,
+                rebatePercent: inviteRes.rebatePercent,
+                includeAdminAdjust: inviteRes.includeAdminAdjust,
+            });
             setWebdavPasswordPreview(webdavRes.passwordPreview);
             webdavForm.setFieldsValue({
                 enabled: webdavRes.enabled,
@@ -116,7 +126,7 @@ export function AdminSystemSettingsPanel({ section }: { section: SystemSettingsS
         } finally {
             setLoading(false);
         }
-    }, [analyticsForm, mailForm, message, storageExpiryForm, t, webdavForm]);
+    }, [analyticsForm, inviteForm, mailForm, message, storageExpiryForm, t, webdavForm]);
 
     useEffect(() => {
         void loadSettings();
@@ -326,6 +336,27 @@ export function AdminSystemSettingsPanel({ section }: { section: SystemSettingsS
         }
     };
 
+    const handleSaveInvitePolicy = async (values: PlatformInvitePolicy) => {
+        setInviteSaving(true);
+        try {
+            const res = await adminApi.saveInviteSettings({
+                enabled: Boolean(values.enabled),
+                rebatePercent: Number(values.rebatePercent ?? 0),
+                includeAdminAdjust: Boolean(values.includeAdminAdjust),
+            });
+            inviteForm.setFieldsValue({
+                enabled: res.enabled,
+                rebatePercent: res.rebatePercent,
+                includeAdminAdjust: res.includeAdminAdjust,
+            });
+            message.success(t("admin.messages.inviteSaved"));
+        } catch (error) {
+            message.error(error instanceof Error ? error.message : t("admin.messages.inviteSaveFailed"));
+        } finally {
+            setInviteSaving(false);
+        }
+    };
+
     if (section === "auth") {
         return (
             <Spin spinning={loading}>
@@ -357,6 +388,58 @@ export function AdminSystemSettingsPanel({ section }: { section: SystemSettingsS
                             />
                         </div>
                     </div>
+                </Card>
+            </Spin>
+        );
+    }
+
+    if (section === "invite") {
+        return (
+            <Spin spinning={loading}>
+                <Card title={t("admin.settingsTab.invite.cardTitle")}>
+                    <Alert
+                        type="info"
+                        showIcon
+                        className="mb-4"
+                        message={t("admin.settingsTab.invite.alertTitle")}
+                        description={t("admin.settingsTab.invite.alertDesc")}
+                    />
+                    <Form
+                        form={inviteForm}
+                        layout="vertical"
+                        initialValues={{ enabled: false, rebatePercent: 10, includeAdminAdjust: false }}
+                        onFinish={handleSaveInvitePolicy}
+                    >
+                        <Row gutter={16}>
+                            <Col xs={24} md={8}>
+                                <Form.Item name="enabled" label={t("admin.settingsTab.invite.enabledLabel")} valuePropName="checked">
+                                    <Switch />
+                                </Form.Item>
+                            </Col>
+                            <Col xs={24} md={8}>
+                                <Form.Item
+                                    name="rebatePercent"
+                                    label={t("admin.settingsTab.invite.rebatePercentLabel")}
+                                    rules={[{ required: true, message: t("admin.settingsTab.invite.rebatePercentReq") }]}
+                                >
+                                    <InputNumber min={0} max={100} precision={2} suffix="%" className="w-full" />
+                                </Form.Item>
+                            </Col>
+                            <Col xs={24} md={8}>
+                                <Form.Item
+                                    name="includeAdminAdjust"
+                                    label={t("admin.settingsTab.invite.includeAdminAdjustLabel")}
+                                    extra={t("admin.settingsTab.invite.includeAdminAdjustDesc")}
+                                    valuePropName="checked"
+                                >
+                                    <Switch />
+                                </Form.Item>
+                            </Col>
+                        </Row>
+                        <Button type="primary" htmlType="submit" icon={<Save className="size-4" />} loading={inviteSaving}>
+                            {t("admin.storageTab.saveConfigBtn")}
+                        </Button>
+                    </Form>
                 </Card>
             </Spin>
         );

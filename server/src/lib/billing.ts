@@ -136,9 +136,9 @@ export type AdjustCreditsParams = {
   forceLedger?: boolean;
 };
 
-type DbTransaction = Parameters<Parameters<typeof db.transaction>[0]>[0];
+export type DbTransaction = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
-async function lockWalletBalance(tx: DbTransaction, userId: string) {
+export async function lockWalletBalance(tx: DbTransaction, userId: string) {
   await tx.insert(creditWallets).values({ userId, balance: 0 }).onConflictDoNothing();
   const rows = await tx.execute(
     sql`SELECT balance FROM credit_wallets WHERE user_id = ${userId} FOR UPDATE`,
@@ -218,36 +218,47 @@ export async function adjustWalletCredits(params: AdjustCreditsParams) {
   return result;
 }
 
+/** 在现有数据库事务内原子将用户积分清零为 0，并在余额非 0 时写入一条管理员调整流水。 */
+export async function clearWalletCreditsInTx(
+  tx: DbTransaction,
+  params: {
+    userId: string;
+    reason: string;
+    meta?: Record<string, unknown>;
+  },
+) {
+  const current = await lockWalletBalance(tx, params.userId);
+  if (await getReservedCredits(tx, params.userId)) {
+    return { ok: false as const, balance: current, delta: 0, ledgerId: "" };
+  }
+  if (current === 0) {
+    return { ok: true as const, balance: 0, delta: 0, ledgerId: "" };
+  }
+  const delta = roundCredits(-current);
+  const ledgerId = nanoid();
+  await tx
+    .update(creditWallets)
+    .set({ balance: 0, updatedAt: new Date() })
+    .where(eq(creditWallets.userId, params.userId));
+  await tx.insert(creditLedger).values({
+    id: ledgerId,
+    userId: params.userId,
+    delta,
+    balanceAfter: 0,
+    reason: params.reason,
+    refId: null,
+    meta: params.meta ?? {},
+  });
+  return { ok: true as const, balance: 0, delta, ledgerId };
+}
+
 /** 原子将用户积分清零为 0，并在余额非 0 时写入一条管理员调整流水。 */
 export async function clearWalletCredits(params: {
   userId: string;
   reason: string;
   meta?: Record<string, unknown>;
 }) {
-  return db.transaction(async (tx) => {
-    const current = await lockWalletBalance(tx, params.userId);
-    if (await getReservedCredits(tx, params.userId)) {
-      return { ok: false as const, balance: current };
-    }
-    if (current === 0) {
-      return { ok: true as const, balance: 0, delta: 0 };
-    }
-    const delta = roundCredits(-current);
-    await tx
-      .update(creditWallets)
-      .set({ balance: 0, updatedAt: new Date() })
-      .where(eq(creditWallets.userId, params.userId));
-    await tx.insert(creditLedger).values({
-      id: nanoid(),
-      userId: params.userId,
-      delta,
-      balanceAfter: 0,
-      reason: params.reason,
-      refId: null,
-      meta: params.meta ?? {},
-    });
-    return { ok: true as const, balance: 0, delta };
-  });
+  return db.transaction((tx) => clearWalletCreditsInTx(tx, params));
 }
 
 /** 回写指定账本记录的元数据字段（用于预扣后补充请求耗时与任务最终状态）。 */
@@ -590,7 +601,7 @@ export async function queryConsumptionMetrics(daysInput: number, userId?: string
 }
 
 export const USAGE_LOG_REASONS = ["text_gen", "image_gen", "video_gen", "audio_gen"] as const;
-export const WALLET_RECHARGE_REASONS = ["redeem_code", "admin_adjust", "plan_grant"] as const;
+export const WALLET_RECHARGE_REASONS = ["redeem_code", "admin_adjust", "plan_grant", "invite_rebate"] as const;
 
 export type QueryCreditLedgerParams = {
   userId?: string;
@@ -696,7 +707,7 @@ export async function queryCreditLedger(params: QueryCreditLedgerParams) {
     db
       .select({
         totalConsumed: totalConsumedExpr,
-        totalRecharged: sql<number>`COALESCE(SUM(CASE WHEN ${creditLedger.delta} > 0 THEN ${creditLedger.delta} ELSE COALESCE((${creditLedger.meta}->>'refundedCredits')::double precision, 0) END), 0)::double precision`,
+        totalRecharged: sql<number>`COALESCE(SUM(CASE WHEN ${creditLedger.reason} = 'invite_rebate' AND ${creditLedger.delta} < 0 THEN ${creditLedger.delta} WHEN ${creditLedger.delta} > 0 THEN ${creditLedger.delta} ELSE COALESCE((${creditLedger.meta}->>'refundedCredits')::double precision, 0) END), 0)::double precision`,
         // 统计调用次数与用量时同时包含 0 积分调用（免费模型或极低消耗四舍五入为 0 的请求）
         consumeCalls: sql<number>`COUNT(*) FILTER (WHERE ${creditLedger.reason} IN ('text_gen', 'image_gen', 'video_gen', 'audio_gen'))::int`,
         totalInputTokens: sql<number>`COALESCE(SUM(CASE WHEN ${creditLedger.reason} IN ('text_gen', 'image_gen', 'video_gen', 'audio_gen') THEN COALESCE((${creditLedger.meta}->>'inputTokens')::bigint, 0) ELSE 0 END), 0)::bigint`,

@@ -13,6 +13,7 @@ export const MAIL_CONFIG_KEY = "mail.smtp";
 export const STORAGE_EXPIRY_POLICY_KEY = "storage.expiry";
 export const PLATFORM_NOTICE_KEY = "announcement.notice";
 export const ANALYTICS_POLICY_KEY = "analytics.policy";
+export const INVITE_POLICY_KEY = "invite.policy";
 
 const settingsCache = new Map<string, { value: unknown; expiresAt: number }>();
 const settingsInFlight = new Map<string, Promise<unknown>>();
@@ -147,6 +148,12 @@ export type PlatformGlobalNotice = {
 export type PlatformAnalyticsPolicy = {
   sampleIntervalMinutes: number;
   logRetentionDays: number;
+};
+
+export type PlatformInvitePolicy = {
+  enabled: boolean;
+  rebatePercent: number;
+  includeAdminAdjust: boolean;
 };
 
 export type S3Provider = "s3" | "r2" | "oss" | "cos";
@@ -526,6 +533,40 @@ export async function savePlatformAnalyticsPolicy(policy: PlatformAnalyticsPolic
       set: { value: normalized, updatedBy, updatedAt: new Date() },
     });
   invalidateSettingCache(ANALYTICS_POLICY_KEY);
+  return normalized;
+}
+
+/** 读取平台邀请返利策略（是否开启、返利百分比、管理员调账是否计入返利）。 */
+export async function getPlatformInvitePolicy(): Promise<PlatformInvitePolicy> {
+  return getCachedSetting(INVITE_POLICY_KEY, async () => {
+    const row = await db.query.systemSettings.findFirst({ where: eq(systemSettings.key, INVITE_POLICY_KEY) });
+    const raw = (row?.value || {}) as Partial<PlatformInvitePolicy>;
+    const rawPercent = Number(raw.rebatePercent);
+    const rebatePercent = Number.isFinite(rawPercent) ? Math.max(0, Math.min(100, Math.round(rawPercent * 100) / 100)) : 10;
+    return {
+      enabled: Boolean(raw.enabled),
+      rebatePercent,
+      includeAdminAdjust: Boolean(raw.includeAdminAdjust),
+    };
+  });
+}
+
+/** 保存平台邀请返利策略并失效缓存。 */
+export async function savePlatformInvitePolicy(policy: PlatformInvitePolicy, updatedBy: string): Promise<PlatformInvitePolicy> {
+  const rawPercent = Number(policy.rebatePercent);
+  const normalized: PlatformInvitePolicy = {
+    enabled: Boolean(policy.enabled),
+    rebatePercent: Number.isFinite(rawPercent) ? Math.max(0, Math.min(100, Math.round(rawPercent * 100) / 100)) : 0,
+    includeAdminAdjust: Boolean(policy.includeAdminAdjust),
+  };
+  await db
+    .insert(systemSettings)
+    .values({ key: INVITE_POLICY_KEY, value: normalized, updatedBy, updatedAt: new Date() })
+    .onConflictDoUpdate({
+      target: systemSettings.key,
+      set: { value: normalized, updatedBy, updatedAt: new Date() },
+    });
+  invalidateSettingCache(INVITE_POLICY_KEY);
   return normalized;
 }
 

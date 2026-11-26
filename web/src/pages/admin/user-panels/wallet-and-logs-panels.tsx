@@ -4,11 +4,12 @@ import { Alert, App, Avatar, Button, Card, Col, DatePicker, Descriptions, Empty,
 import type { Dayjs } from "dayjs";
 import type { TFunction } from "i18next";
 import localforage from "localforage";
-import { AudioLines, Bell, Download, Eye, FileIcon, Gift, ImageIcon, KeyRound, Laptop, LogOut, Megaphone, Pin, RefreshCw, RotateCcw, Save, Search, Trash2, TrendingUp, User, Video } from "lucide-react";
+import { AudioLines, Bell, Copy, Download, Eye, FileIcon, Gift, ImageIcon, KeyRound, Laptop, Link2, LogOut, Megaphone, Pin, RefreshCw, RotateCcw, Save, Search, Trash2, TrendingUp, User, Users, Video } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
 
 import { useBatchZipDownload } from "@/hooks/use-batch-zip-download";
+import { useCopyText } from "@/hooks/use-copy-text";
 import { useEmailCodeSender } from "@/hooks/use-email-code-sender";
 import { formatCompactCredits, formatExactCredits } from "@/lib/format-number";
 import { createImageThumbnail, createVideoThumbnail } from "@/lib/image-thumbnail";
@@ -37,6 +38,8 @@ import {
     mediaDownloadFilename,
     storageApi,
     workbenchApi,
+    type AccountInviteItem,
+    type AccountInvitesResponse,
     type AccountOverviewResponse,
     type AccountProfileResponse,
     type AccountSessionItem,
@@ -58,9 +61,11 @@ export function MyWalletPanel({ compact = false, onOpenLogs }: { compact?: boole
     const { t, i18n } = useTranslation();
     const locale = i18n.resolvedLanguage || undefined;
     const { message } = App.useApp();
+    const copyText = useCopyText();
     const user = useUserStore((state) => state.user);
     const setUser = useUserStore((state) => state.setUser);
 
+    const [activeTab, setActiveTab] = useState<"recharge" | "invites">("recharge");
     const [balance, setBalance] = useState<number>(user?.creditBalance ?? 0);
     const [items, setItems] = useState<CreditLedgerItem[]>([]);
     const [total, setTotal] = useState(0);
@@ -76,6 +81,33 @@ export function MyWalletPanel({ compact = false, onOpenLogs }: { compact?: boole
     const [redeemCode, setRedeemCode] = useState("");
     const [redeeming, setRedeeming] = useState(false);
     const [detailItem, setDetailItem] = useState<CreditLedgerItem | null>(null);
+
+    const [inviteData, setInviteData] = useState<AccountInvitesResponse | null>(null);
+    const [inviteLoading, setInviteLoading] = useState(false);
+    const [invitePage, setInvitePage] = useState(1);
+    const [invitePageSize, setInvitePageSize] = useState(compact ? 10 : 20);
+
+    const loadInvites = useCallback(
+        async (targetPage = invitePage, targetPageSize = invitePageSize, notifySuccess = false) => {
+            setInviteLoading(true);
+            try {
+                const res = await accountApi.getInvites(targetPage, targetPageSize);
+                setInviteData(res);
+                if (notifySuccess) message.success(t("common.refreshed"));
+            } catch (error) {
+                message.error(error instanceof Error ? error.message : t("userPanels.wallet.inviteLoadFailed"));
+            } finally {
+                setInviteLoading(false);
+            }
+        },
+        [invitePage, invitePageSize, message, t],
+    );
+
+    useEffect(() => {
+        if (activeTab === "invites") {
+            void loadInvites(invitePage, invitePageSize);
+        }
+    }, [activeTab, invitePage, invitePageSize, loadInvites]);
 
     const loadLedger = useCallback(
         async (targetPage = page, nextReason = reasonFilter, nextRange = dateRange, nextPageSize = pageSize, notifySuccess = false) => {
@@ -188,133 +220,346 @@ export function MyWalletPanel({ compact = false, onOpenLogs }: { compact?: boole
                 </div>
             </Card>
 
-            <Card
-                size={compact ? "small" : "default"}
-                title={t("userPanels.wallet.cardTitle", { count: summary.recordCount })}
-                extra={
-                    <Button size="small" icon={<RefreshCw className="size-3.5" />} loading={loading} onClick={() => void loadLedger(page, reasonFilter, dateRange, pageSize, true)}>
-                        {t("common.refresh")}
-                    </Button>
-                }
-            >
-                <div className="mb-3 flex flex-wrap items-center gap-2">
-                    <Select
-                        value={reasonFilter}
-                        className="w-full! sm:w-[140px]!"
-                        onChange={(val) => {
-                            setPage(1);
-                            setReasonFilter(val);
-                        }}
-                        options={[
-                            { value: "", label: t("userPanels.wallet.allTypes") },
-                            { value: "redeem_code", label: t("userPanels.ledgerReasons.redeem_code") },
-                            { value: "admin_adjust", label: t("userPanels.ledgerReasons.admin_adjust") },
-                            { value: "plan_grant", label: t("userPanels.ledgerReasons.plan_grant") },
-                        ]}
-                    />
-                    <DatePicker.RangePicker
-                        className="w-full! sm:w-auto!"
-                        value={dateRange}
-                        onChange={(dates) => {
-                            setPage(1);
-                            setDateRange(dates);
-                        }}
-                        placeholder={[t("userPanels.wallet.startDate"), t("userPanels.wallet.endDate")]}
-                    />
-                    {reasonFilter || dateRange ? (
-                        <Button icon={<RotateCcw className="size-4" />} onClick={resetFilters}>
-                            {t("userPanels.wallet.resetFilters")}
-                        </Button>
-                    ) : null}
-                </div>
+            <Tabs
+                activeKey={activeTab}
+                onChange={(key) => setActiveTab(key as "recharge" | "invites")}
+                items={[
+                    {
+                        key: "recharge",
+                        label: t("userPanels.wallet.tabRecharge"),
+                        children: (
+                            <Card
+                                size={compact ? "small" : "default"}
+                                title={t("userPanels.wallet.cardTitle", { count: summary.recordCount })}
+                                extra={
+                                    <Button size="small" icon={<RefreshCw className="size-3.5" />} loading={loading} onClick={() => void loadLedger(page, reasonFilter, dateRange, pageSize, true)}>
+                                        {t("common.refresh")}
+                                    </Button>
+                                }
+                            >
+                                <div className="mb-3 flex flex-wrap items-center gap-2">
+                                    <Select
+                                        value={reasonFilter}
+                                        className="w-full! sm:w-[140px]!"
+                                        onChange={(val) => {
+                                            setPage(1);
+                                            setReasonFilter(val);
+                                        }}
+                                        options={[
+                                            { value: "", label: t("userPanels.wallet.allTypes") },
+                                            { value: "redeem_code", label: t("userPanels.ledgerReasons.redeem_code") },
+                                            { value: "admin_adjust", label: t("userPanels.ledgerReasons.admin_adjust") },
+                                            { value: "invite_rebate", label: t("userPanels.ledgerReasons.invite_rebate") },
+                                            { value: "plan_grant", label: t("userPanels.ledgerReasons.plan_grant") },
+                                        ]}
+                                    />
+                                    <DatePicker.RangePicker
+                                        className="w-full! sm:w-auto!"
+                                        value={dateRange}
+                                        onChange={(dates) => {
+                                            setPage(1);
+                                            setDateRange(dates);
+                                        }}
+                                        placeholder={[t("userPanels.wallet.startDate"), t("userPanels.wallet.endDate")]}
+                                    />
+                                    {reasonFilter || dateRange ? (
+                                        <Button icon={<RotateCcw className="size-4" />} onClick={resetFilters}>
+                                            {t("userPanels.wallet.resetFilters")}
+                                        </Button>
+                                    ) : null}
+                                </div>
 
-                <Table<CreditLedgerItem>
-                    rowKey="id"
-                    size="small"
-                    className={ADMIN_TABLE_CLASS}
-                    scroll={ADMIN_TABLE_SCROLL}
-                    loading={loading}
-                    dataSource={items}
-                    onRow={(record) => ({
-                        onClick: () => setDetailItem(record),
-                        className: "cursor-pointer",
-                    })}
-                    pagination={{
-                        current: page,
-                        pageSize,
-                        total,
-                        showTotal: (count) => t("common.totalItems", { count }),
-                        showSizeChanger: true,
-                        pageSizeOptions: [10, 20, 30, 50, 100],
-                        onChange: (p, size) => {
-                            if (size !== pageSize) {
-                                setPageSize(size);
-                                setPage(1);
-                            } else {
-                                setPage(p);
-                            }
-                        },
-                    }}
-                    columns={[
-                        {
-                            title: t("userPanels.wallet.colTime"),
-                            dataIndex: "createdAt",
-                            width: 170,
-                            render: (v: string) => new Date(v).toLocaleString(locale),
-                        },
-                        {
-                            title: t("userPanels.wallet.colType"),
-                            dataIndex: "reason",
-                            width: 110,
-                            render: (reason: string) => {
-                                const info = getLedgerReasonMeta(reason, t);
-                                return <Tag color={info?.color}>{info?.label || reason}</Tag>;
-                            },
-                        },
-                        {
-                            title: t("userPanels.wallet.colDetail"),
-                            key: "detail",
-                            width: 240,
-                            render: (_, record) => {
-                                const text = formatLedgerUsageDetail(record, t);
-                                return (
-                                    <Typography.Text type="secondary" ellipsis={{ tooltip: text }} className="block max-w-[220px]">
-                                        {text}
-                                    </Typography.Text>
-                                );
-                            },
-                        },
-                        {
-                            title: t("userPanels.wallet.colDelta"),
-                            dataIndex: "delta",
-                            width: 110,
-                            render: (_: unknown, record: CreditLedgerItem) => <LedgerDeltaTag record={record} t={t} />,
-                        },
-                        {
-                            title: t("userPanels.wallet.colBalanceAfter"),
-                            dataIndex: "balanceAfter",
-                            width: 90,
-                        },
-                        {
-                            title: t("userPanels.wallet.colActions"),
-                            key: "actions",
-                            width: 72,
-                            fixed: "right",
-                            render: (_, record) => (
-                                <TableRowActions
-                                    items={[
+                                <Table<CreditLedgerItem>
+                                    rowKey="id"
+                                    size="small"
+                                    className={ADMIN_TABLE_CLASS}
+                                    scroll={ADMIN_TABLE_SCROLL}
+                                    loading={loading}
+                                    dataSource={items}
+                                    onRow={(record) => ({
+                                        onClick: () => setDetailItem(record),
+                                        className: "cursor-pointer",
+                                    })}
+                                    pagination={{
+                                        current: page,
+                                        pageSize,
+                                        total,
+                                        showTotal: (count) => t("common.totalItems", { count }),
+                                        showSizeChanger: true,
+                                        pageSizeOptions: [10, 20, 30, 50, 100],
+                                        onChange: (p, size) => {
+                                            if (size !== pageSize) {
+                                                setPageSize(size);
+                                                setPage(1);
+                                            } else {
+                                                setPage(p);
+                                            }
+                                        },
+                                    }}
+                                    columns={[
                                         {
+                                            title: t("userPanels.wallet.colTime"),
+                                            dataIndex: "createdAt",
+                                            width: 170,
+                                            render: (v: string) => new Date(v).toLocaleString(locale),
+                                        },
+                                        {
+                                            title: t("userPanels.wallet.colType"),
+                                            dataIndex: "reason",
+                                            width: 110,
+                                            render: (reason: string) => {
+                                                const info = getLedgerReasonMeta(reason, t);
+                                                return <Tag color={info?.color}>{info?.label || reason}</Tag>;
+                                            },
+                                        },
+                                        {
+                                            title: t("userPanels.wallet.colDetail"),
                                             key: "detail",
-                                            label: t("common.details"),
-                                            onClick: () => setDetailItem(record),
+                                            width: 240,
+                                            render: (_, record) => {
+                                                const text = formatLedgerUsageDetail(record, t);
+                                                return (
+                                                    <Typography.Text type="secondary" ellipsis={{ tooltip: text }} className="block max-w-[220px]">
+                                                        {text}
+                                                    </Typography.Text>
+                                                );
+                                            },
+                                        },
+                                        {
+                                            title: t("userPanels.wallet.colDelta"),
+                                            dataIndex: "delta",
+                                            width: 110,
+                                            render: (_: unknown, record: CreditLedgerItem) => <LedgerDeltaTag record={record} t={t} />,
+                                        },
+                                        {
+                                            title: t("userPanels.wallet.colBalanceAfter"),
+                                            dataIndex: "balanceAfter",
+                                            width: 90,
+                                        },
+                                        {
+                                            title: t("userPanels.wallet.colActions"),
+                                            key: "actions",
+                                            width: 72,
+                                            fixed: "right",
+                                            render: (_, record) => (
+                                                <TableRowActions
+                                                    items={[
+                                                        {
+                                                            key: "detail",
+                                                            label: t("common.details"),
+                                                            onClick: () => setDetailItem(record),
+                                                        },
+                                                    ]}
+                                                />
+                                            ),
                                         },
                                     ]}
                                 />
-                            ),
-                        },
-                    ]}
-                />
-            </Card>
+                            </Card>
+                        ),
+                    },
+                    {
+                        key: "invites",
+                        label: (
+                            <span className="inline-flex items-center gap-1.5">
+                                <Users className="size-3.5" />
+                                {t("userPanels.wallet.tabInvites")}
+                            </span>
+                        ),
+                        children: (
+                            <div className="flex flex-col gap-4">
+                                <Card
+                                    size={compact ? "small" : "default"}
+                                    loading={!inviteData && inviteLoading}
+                                    title={
+                                        <Space size={8} wrap>
+                                            <span>{t("userPanels.wallet.inviteOverviewTitle")}</span>
+                                            {inviteData ? (
+                                                <Tag color={inviteData.enabled ? "green" : "default"} style={{ marginInlineEnd: 0 }}>
+                                                    {inviteData.enabled
+                                                        ? t("userPanels.wallet.inviteRateTag", { percent: inviteData.rebatePercent })
+                                                        : t("userPanels.wallet.inviteDisabledTag")}
+                                                </Tag>
+                                            ) : null}
+                                        </Space>
+                                    }
+                                    extra={
+                                        <Button
+                                            size="small"
+                                            icon={<RefreshCw className="size-3.5" />}
+                                            loading={inviteLoading}
+                                            onClick={() => void loadInvites(invitePage, invitePageSize, true)}
+                                        >
+                                            {t("common.refresh")}
+                                        </Button>
+                                    }
+                                >
+                                    <div className="flex flex-col gap-4">
+                                        {inviteData && !inviteData.enabled ? (
+                                            <Alert type="info" showIcon title={t("userPanels.wallet.inviteDisabledAlert")} />
+                                        ) : null}
+                                        <Row gutter={[16, 16]}>
+                                            <Col xs={12} sm={6}>
+                                                <Statistic title={t("userPanels.wallet.invitedCount")} value={inviteData?.invitedCount ?? 0} />
+                                            </Col>
+                                            <Col xs={12} sm={6}>
+                                                <Tooltip
+                                                    title={t("userPanels.wallet.rebateBreakdownTip", {
+                                                        gross: formatExactCredits(inviteData?.grossRebateCredits ?? 0),
+                                                        reclaimed: formatExactCredits(inviteData?.reclaimedRebateCredits ?? 0),
+                                                    })}
+                                                >
+                                                    <div>
+                                                        <Statistic
+                                                            title={t("userPanels.wallet.netRebateCredits")}
+                                                            value={formatCompactCredits(inviteData?.netRebateCredits ?? 0)}
+                                                        />
+                                                    </div>
+                                                </Tooltip>
+                                            </Col>
+                                            <Col xs={24} sm={12}>
+                                                <div className="flex flex-col gap-2">
+                                                    <div className="flex flex-wrap items-center justify-between gap-2">
+                                                        <Typography.Text type="secondary" className="text-xs">
+                                                            {t("userPanels.wallet.myInviteCode")}
+                                                        </Typography.Text>
+                                                        <Space size={6}>
+                                                            <Typography.Text code strong className="text-sm">
+                                                                {inviteData?.inviteCode || "—"}
+                                                            </Typography.Text>
+                                                            <Button
+                                                                size="small"
+                                                                icon={<Copy className="size-3.5" />}
+                                                                disabled={!inviteData?.inviteCode}
+                                                                onClick={() =>
+                                                                    inviteData?.inviteCode &&
+                                                                    copyText(inviteData.inviteCode, t("userPanels.wallet.inviteCodeCopied"))
+                                                                }
+                                                            >
+                                                                {t("userPanels.wallet.copyCode")}
+                                                            </Button>
+                                                        </Space>
+                                                    </div>
+                                                    <div className="flex flex-wrap items-center justify-between gap-2">
+                                                        <Typography.Text type="secondary" className="text-xs">
+                                                            {t("userPanels.wallet.myInviteLink")}
+                                                        </Typography.Text>
+                                                        <Button
+                                                            size="small"
+                                                            icon={<Link2 className="size-3.5" />}
+                                                            disabled={!inviteData?.inviteCode}
+                                                            onClick={() => {
+                                                                if (!inviteData?.inviteCode) return;
+                                                                const url = `${window.location.origin}/auth?invite=${encodeURIComponent(inviteData.inviteCode)}`;
+                                                                copyText(url, t("userPanels.wallet.inviteLinkCopied"));
+                                                            }}
+                                                        >
+                                                            {t("userPanels.wallet.copyLink")}
+                                                        </Button>
+                                                    </div>
+                                                </div>
+                                            </Col>
+                                        </Row>
+                                    </div>
+                                </Card>
+
+                                <Card size={compact ? "small" : "default"} title={t("userPanels.wallet.inviteesCardTitle", { count: inviteData?.invitedCount ?? 0 })}>
+                                    <Table<AccountInviteItem>
+                                        rowKey="id"
+                                        size="small"
+                                        className={ADMIN_TABLE_CLASS}
+                                        scroll={ADMIN_TABLE_SCROLL}
+                                        loading={inviteLoading}
+                                        dataSource={inviteData?.items ?? []}
+                                        locale={{ emptyText: t("userPanels.wallet.inviteesEmpty") }}
+                                        pagination={{
+                                            current: invitePage,
+                                            pageSize: invitePageSize,
+                                            total: inviteData?.invitedCount ?? 0,
+                                            showTotal: (count) => t("common.totalItems", { count }),
+                                            showSizeChanger: true,
+                                            pageSizeOptions: [10, 20, 30, 50, 100],
+                                            onChange: (p, size) => {
+                                                if (size !== invitePageSize) {
+                                                    setInvitePageSize(size);
+                                                    setInvitePage(1);
+                                                } else {
+                                                    setInvitePage(p);
+                                                }
+                                            },
+                                        }}
+                                        columns={[
+                                            {
+                                                title: t("userPanels.wallet.colInvitee"),
+                                                key: "displayName",
+                                                width: 150,
+                                                render: (_, row) => (
+                                                    <Typography.Text ellipsis={{ tooltip: row.displayName || row.username }} className="block max-w-[135px] font-medium">
+                                                        {row.displayName || row.username}
+                                                    </Typography.Text>
+                                                ),
+                                            },
+                                            {
+                                                title: t("userPanels.wallet.colInviteeUsername"),
+                                                dataIndex: "username",
+                                                width: 130,
+                                                render: (username: string) => (
+                                                    <Typography.Text type="secondary" className="text-xs">
+                                                        @{username}
+                                                    </Typography.Text>
+                                                ),
+                                            },
+                                            {
+                                                title: t("userPanels.wallet.colInviteeStatus"),
+                                                dataIndex: "status",
+                                                width: 90,
+                                                render: (status: string) => (
+                                                    <Tag color={status === "active" ? "green" : "red"} style={{ marginInlineEnd: 0 }}>
+                                                        {status === "active" ? t("userDetail.statusActive") : t("userDetail.statusDisabled")}
+                                                    </Tag>
+                                                ),
+                                            },
+                                            {
+                                                title: t("userPanels.wallet.colTriggeredRecharge"),
+                                                dataIndex: "rechargedCredits",
+                                                width: 120,
+                                                render: (v: number) => (
+                                                    <Tooltip title={formatExactCredits(v)}>
+                                                        <span className="tabular-nums">{formatCompactCredits(v)}</span>
+                                                    </Tooltip>
+                                                ),
+                                            },
+                                            {
+                                                title: t("userPanels.wallet.colContributedRebate"),
+                                                dataIndex: "netRebateCredits",
+                                                width: 130,
+                                                render: (v: number, row) => (
+                                                    <Tooltip
+                                                        title={t("userPanels.wallet.rebateBreakdownTip", {
+                                                            gross: formatExactCredits(row.rebateCredits),
+                                                            reclaimed: formatExactCredits(row.reclaimedCredits),
+                                                        })}
+                                                    >
+                                                        <Tag color={v > 0 ? "green" : "default"} style={{ marginInlineEnd: 0 }}>
+                                                            {v > 0 ? `+${formatCompactCredits(v)}` : formatCompactCredits(v)}
+                                                        </Tag>
+                                                    </Tooltip>
+                                                ),
+                                            },
+                                            {
+                                                title: t("userPanels.wallet.colRegisteredAt"),
+                                                dataIndex: "createdAt",
+                                                width: 170,
+                                                render: (v: string) => new Date(v).toLocaleString(locale),
+                                            },
+                                        ]}
+                                    />
+                                </Card>
+                            </div>
+                        ),
+                    },
+                ]}
+            />
 
             <LedgerDetailModal item={detailItem} onClose={() => setDetailItem(null)} />
         </div>

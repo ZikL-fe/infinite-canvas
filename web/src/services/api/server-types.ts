@@ -482,6 +482,38 @@ export type PlatformAnalyticsPolicy = {
     logRetentionDays: number;
 };
 
+export type PlatformInvitePolicy = {
+    enabled: boolean;
+    rebatePercent: number;
+    includeAdminAdjust: boolean;
+};
+
+export type AccountInviteItem = {
+    id: string;
+    username: string;
+    displayName: string;
+    status: UserStatus;
+    createdAt: string;
+    rechargedCredits: number;
+    rebateCredits: number;
+    reclaimedCredits: number;
+    netRebateCredits: number;
+};
+
+export type AccountInvitesResponse = {
+    enabled: boolean;
+    rebatePercent: number;
+    includeAdminAdjust: boolean;
+    inviteCode: string;
+    invitedCount: number;
+    grossRebateCredits: number;
+    reclaimedRebateCredits: number;
+    netRebateCredits: number;
+    page: number;
+    pageSize: number;
+    items: AccountInviteItem[];
+};
+
 export type AnalyticsDashboardResponse = {
     range: DashboardRange;
     sampledAt: string;

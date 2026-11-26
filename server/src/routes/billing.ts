@@ -6,6 +6,7 @@ import { z } from "zod";
 import { db } from "../db/index.ts";
 import { adjustWalletCreditsInTx, getWalletBalance, queryCreditLedger } from "../lib/billing.ts";
 import { scheduleWalletBalanceAlertCheck } from "../lib/billing-alert.ts";
+import { applyInviteRebateInTx } from "../lib/invite.ts";
 import { claimRedeemCodeInTx } from "../lib/redeem.ts";
 import { requireAuth, type AppEnv } from "../middleware/auth.ts";
 
@@ -63,6 +64,13 @@ billingRoutes.post("/redeem", zValidator("json", redeemSchema), async (c) => {
       reason: "redeem_code",
       refId: codeRow.code,
       meta: { codeId: codeRow.id, code: codeRow.code, note: codeRow.note },
+    });
+
+    await applyInviteRebateInTx(tx, {
+      inviteeUserId: user.id,
+      sourceLedgerId: walletRes.ledgerId,
+      sourceReason: "redeem_code",
+      sourceAmount: codeRow.credits,
     });
 
     return { ok: true as const, kind: "credits" as const, creditsAdded: codeRow.credits, balance: walletRes.balance };

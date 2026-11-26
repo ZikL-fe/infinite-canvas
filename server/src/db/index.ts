@@ -41,6 +41,8 @@ export function ensureSchemaReady() {
             low_balance_alert_enabled boolean,
             low_balance_threshold double precision,
             low_balance_alerted_at timestamptz,
+            invite_code text UNIQUE,
+            invited_by_user_id text REFERENCES users(id) ON DELETE SET NULL,
             last_login_at timestamptz,
             created_at timestamptz NOT NULL DEFAULT now(),
             updated_at timestamptz NOT NULL DEFAULT now()
@@ -308,6 +310,28 @@ export function ensureSchemaReady() {
         sqlClient`CREATE INDEX IF NOT EXISTS media_objects_user_video_task_idx ON media_objects (user_id, (meta->>'videoTaskId')) WHERE meta ? 'videoTaskId'`,
         sqlClient`CREATE INDEX IF NOT EXISTS credit_ledger_user_client_task_idx ON credit_ledger (user_id, (meta->>'clientTaskId')) WHERE meta ? 'clientTaskId'`,
         sqlClient`CREATE INDEX IF NOT EXISTS credit_ledger_user_task_id_idx ON credit_ledger (user_id, (meta->>'taskId')) WHERE meta ? 'taskId'`,
+        sqlClient`ALTER TABLE users ADD COLUMN IF NOT EXISTS invite_code text UNIQUE`,
+        sqlClient`ALTER TABLE users ADD COLUMN IF NOT EXISTS invited_by_user_id text REFERENCES users(id) ON DELETE SET NULL`,
+        sqlClient`CREATE INDEX IF NOT EXISTS users_invited_by_idx ON users (invited_by_user_id)`,
+        sqlClient`
+          CREATE TABLE IF NOT EXISTS invite_rebate_records (
+            id text PRIMARY KEY,
+            inviter_user_id text NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            invitee_user_id text NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            source_ledger_id text NOT NULL UNIQUE,
+            source_reason text NOT NULL,
+            source_amount double precision NOT NULL,
+            rebate_percent double precision NOT NULL,
+            rebate_credits double precision NOT NULL,
+            reclaimed_source_amount double precision NOT NULL DEFAULT 0,
+            reclaimed_credits double precision NOT NULL DEFAULT 0,
+            inviter_ledger_id text,
+            created_at timestamptz NOT NULL DEFAULT now(),
+            updated_at timestamptz NOT NULL DEFAULT now()
+          )
+        `,
+        sqlClient`CREATE INDEX IF NOT EXISTS invite_rebate_records_inviter_idx ON invite_rebate_records (inviter_user_id, created_at DESC)`,
+        sqlClient`CREATE INDEX IF NOT EXISTS invite_rebate_records_invitee_idx ON invite_rebate_records (invitee_user_id, created_at DESC)`,
       ];
       try {
         for (const stmt of statements) {

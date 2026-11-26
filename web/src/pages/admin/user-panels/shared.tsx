@@ -98,6 +98,7 @@ const ledgerReasonColors: Record<string, string> = {
     admin_adjust: "gold",
     refund: "lime",
     plan_grant: "green",
+    invite_rebate: "magenta",
 };
 
 export function getLedgerReasonMeta(reason: string, t: TFunction): { label: string; color: string } | undefined {
@@ -196,6 +197,29 @@ export function formatLedgerUsageDetail(record: CreditLedgerItem, t: TFunction) 
     if (meta.hasReferenceVideo === true) parts.push(t("userPanels.usageDetail.hasRefVideo"));
     if (typeof meta.durationSeconds === "number") parts.push(t("userPanels.usageDetail.durationSeconds", { seconds: meta.durationSeconds }));
     if (typeof meta.code === "string" && meta.code) parts.push(t("userPanels.usageDetail.redeemCode", { code: meta.code }));
+    if (record.reason === "invite_rebate") {
+        const inviteeName =
+            (typeof meta.inviteeDisplayName === "string" && meta.inviteeDisplayName) ||
+            (typeof meta.inviteeUsername === "string" && meta.inviteeUsername) ||
+            "";
+        if (meta.direction === "clawback") {
+            parts.push(
+                t("userPanels.usageDetail.inviteClawback", {
+                    user: inviteeName ? `@${meta.inviteeUsername || inviteeName}` : "",
+                    source: meta.deductedSourceCredits ?? 0,
+                    capped: meta.cappedAtZero ? t("userPanels.usageDetail.inviteClawbackCapped") : "",
+                }),
+            );
+        } else if (meta.direction === "earn") {
+            parts.push(
+                t("userPanels.usageDetail.inviteEarn", {
+                    user: inviteeName ? `@${meta.inviteeUsername || inviteeName}` : "",
+                    amount: meta.sourceAmount ?? 0,
+                    percent: meta.rebatePercent ?? 0,
+                }),
+            );
+        }
+    }
     if (typeof meta.detail === "string" && meta.detail) parts.push(meta.detail);
     if (typeof meta.note === "string" && meta.note) parts.push(meta.note);
     return parts.join(" · ") || "—";
@@ -246,8 +270,8 @@ export function LedgerDeltaTag({ record, t }: { record: CreditLedgerItem; t: TFu
         );
     }
     return (
-        <Tag color={delta >= 0 ? "green" : "volcano"} style={{ marginInlineEnd: 0 }}>
-            {delta >= 0 ? `+${delta}` : delta}
+        <Tag color={delta > 0 ? "green" : delta === 0 ? "orange" : "volcano"} style={{ marginInlineEnd: 0 }}>
+            {delta > 0 ? `+${delta}` : delta}
         </Tag>
     );
 }

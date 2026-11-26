@@ -5,8 +5,18 @@ import { Hono } from "hono";
 import { z } from "zod";
 
 import { canvasProjects, creditLedger, creditWallets, db, mediaObjects, userAssets, userSessions, userStorageGrants, users, workbenchLogs } from "../../db/index.ts";
-import { adjustWalletCredits, clearWalletCredits, getWalletBalance, queryConsumptionMetrics, queryCreditLedger, roundCredits } from "../../lib/billing.ts";
+import {
+  WALLET_RECHARGE_REASONS,
+  adjustWalletCreditsInTx,
+  clearWalletCreditsInTx,
+  getWalletBalance,
+  queryConsumptionMetrics,
+  queryCreditLedger,
+  roundCredits,
+} from "../../lib/billing.ts";
+import { scheduleWalletBalanceAlertCheck } from "../../lib/billing-alert.ts";
 import { encryptSecretValue, hashPassword } from "../../lib/crypto.ts";
+import { applyInviteRebateInTx, reclaimInviteRebateInTx } from "../../lib/invite.ts";
 import { mediaTotalBytesSql } from "../../lib/media-cleanup.ts";
 import { getUserStorageQuotaSummary, getUsersStorageQuotaMap, serializeStorageGrant } from "../../lib/storage-quota.ts";
 import type { AppEnv } from "../../middleware/auth.ts";
@@ -248,10 +258,10 @@ adminUsersRoutes.get("/users/:id/detail", async (c) => {
       .where(and(eq(workbenchLogs.userId, targetId), eq(workbenchLogs.kind, "video"), isNull(workbenchLogs.deletedAt))),
     db
       .select({
-        total: sql<number>`COALESCE(SUM(CASE WHEN ${creditLedger.delta} > 0 THEN ${creditLedger.delta} ELSE 0 END), 0)::double precision`,
+        total: sql<number>`COALESCE(SUM(CASE WHEN ${creditLedger.reason} = 'invite_rebate' AND ${creditLedger.delta} < 0 THEN ${creditLedger.delta} WHEN ${creditLedger.delta} > 0 THEN ${creditLedger.delta} ELSE 0 END), 0)::double precision`,
       })
       .from(creditLedger)
-      .where(and(eq(creditLedger.userId, targetId), inArray(creditLedger.reason, ["redeem_code", "admin_adjust", "plan_grant"]))),
+      .where(and(eq(creditLedger.userId, targetId), inArray(creditLedger.reason, [...WALLET_RECHARGE_REASONS]))),
     queryCreditLedger({ userId: targetId, category: "recharge", page: 1, pageSize: 100 }),
     db.query.userSessions.findMany({
       where: eq(userSessions.userId, targetId),
@@ -319,28 +329,84 @@ adminUsersRoutes.post("/users/:id/credits", zValidator("json", adjustCreditsSche
   if (!target) {
     return c.json({ error: "用户不存在" }, 404);
   }
+  const adminId = c.get("user").id;
+
   if (body.clear) {
-    const result = await clearWalletCredits({
-      userId: targetId,
-      reason: "admin_adjust",
-      meta: { adminId: c.get("user").id, note: body.note || "管理员清零积分", action: "clear" },
+    const clearNote = body.note || "管理员清零积分";
+    const outcome = await db.transaction(async (tx) => {
+      const result = await clearWalletCreditsInTx(tx, {
+        userId: targetId,
+        reason: "admin_adjust",
+        meta: { adminId, note: clearNote, action: "clear" },
+      });
+      if (!result.ok) {
+        return { ok: false as const };
+      }
+      const clawbacks =
+        result.delta < 0 && result.ledgerId
+          ? await reclaimInviteRebateInTx(tx, {
+              inviteeUserId: targetId,
+              deductedAmount: Math.abs(result.delta),
+              action: "clear",
+              sourceLedgerId: result.ledgerId,
+              adminId,
+              note: clearNote,
+            })
+          : [];
+      return { ok: true as const, balance: result.balance, clawbacks };
     });
-    if (!result.ok) {
+    if (!outcome.ok) {
       return c.json({ error: "用户积分正在用于生成任务，请稍后重试" }, 409);
     }
-    return c.json({ ok: true, balance: result.balance });
+    for (const cb of outcome.clawbacks) {
+      if (cb.delta < 0) scheduleWalletBalanceAlertCheck(cb.userId, cb.delta, cb.balance);
+    }
+    return c.json({ ok: true, balance: outcome.balance });
   }
-  const result = await adjustWalletCredits({
-    userId: targetId,
-    delta: body.delta!,
-    reason: "admin_adjust",
-    allowNegative: true,
-    meta: { adminId: c.get("user").id, note: body.note || "" },
+
+  const delta = body.delta!;
+  const outcome = await db.transaction(async (tx) => {
+    const result = await adjustWalletCreditsInTx(tx, {
+      userId: targetId,
+      delta,
+      reason: "admin_adjust",
+      allowNegative: true,
+      meta: { adminId, note: body.note || "" },
+    });
+    if (!result.ok) {
+      return { ok: false as const };
+    }
+    if (delta > 0) {
+      await applyInviteRebateInTx(tx, {
+        inviteeUserId: targetId,
+        sourceLedgerId: result.ledgerId,
+        sourceReason: "admin_adjust",
+        sourceAmount: delta,
+      });
+    }
+    const clawbacks =
+      delta < 0
+        ? await reclaimInviteRebateInTx(tx, {
+            inviteeUserId: targetId,
+            deductedAmount: Math.abs(delta),
+            action: "deduct",
+            sourceLedgerId: result.ledgerId,
+            adminId,
+            note: body.note || "",
+          })
+        : [];
+    return { ok: true as const, balance: result.balance, clawbacks };
   });
-  if (!result.ok) {
+  if (!outcome.ok) {
     return c.json({ error: "扣减后余额会低于正在使用的积分，请稍后重试" }, 409);
   }
-  return c.json({ ok: true, balance: result.balance });
+  if (delta !== 0) {
+    scheduleWalletBalanceAlertCheck(targetId, roundCredits(delta), outcome.balance);
+  }
+  for (const cb of outcome.clawbacks) {
+    if (cb.delta < 0) scheduleWalletBalanceAlertCheck(cb.userId, cb.delta, cb.balance);
+  }
+  return c.json({ ok: true, balance: outcome.balance });
 });
 
 const resetUserPasswordSchema = z.object({
