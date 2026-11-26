@@ -2,7 +2,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Alert, App, Button, Card, DatePicker, Form, Input, InputNumber, Modal, Radio, Select, Space, Switch, Table, Tag, Tooltip, Typography, theme as antdTheme } from "antd";
 import dayjs, { type Dayjs } from "dayjs";
-import { Copy } from "lucide-react";
+import { Copy, RefreshCw } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { useCopyText } from "@/hooks/use-copy-text";
@@ -42,6 +42,7 @@ export function AdminUsersPanel() {
     const [statusFilter, setStatusFilter] = useState("");
     const [sort, setSort] = useState("created_desc");
     const [loading, setLoading] = useState(false);
+    const [refreshing, setRefreshing] = useState(false);
 
     const [creditUser, setCreditUser] = useState<AdminUserItem | null>(null);
     const [creditForm] = Form.useForm<UserCreditForm>();
@@ -69,16 +70,20 @@ export function AdminUsersPanel() {
             status = statusFilter,
             nextSort = sort,
             nextPageSize = pageSize,
+            notifySuccess = false,
         ) => {
-            setLoading(true);
+            if (notifySuccess) setRefreshing(true);
+            else setLoading(true);
             try {
                 const res = await adminApi.listUsers({ page: nextPage, pageSize: nextPageSize, q, role, status, sort: nextSort });
                 setUsersList(res.items);
                 setTotal(res.total);
+                if (notifySuccess) message.success(t("common.refreshed"));
             } catch (error) {
                 message.error(error instanceof Error ? error.message : t("admin.messages.loadUsersFailed"));
             } finally {
-                setLoading(false);
+                if (notifySuccess) setRefreshing(false);
+                else setLoading(false);
             }
         },
         [message, page, pageSize, query, roleFilter, sort, statusFilter, t],
@@ -262,6 +267,13 @@ export function AdminUsersPanel() {
                                 setQuery(value.trim());
                             }}
                         />
+                        <Button
+                            icon={<RefreshCw className="size-4" />}
+                            loading={refreshing || loading}
+                            onClick={() => void loadUsers(page, query, roleFilter, statusFilter, sort, pageSize, true)}
+                        >
+                            {t("common.refresh")}
+                        </Button>
                     </div>
                 }
             >

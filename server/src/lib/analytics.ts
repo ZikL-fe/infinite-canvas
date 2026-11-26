@@ -2,7 +2,7 @@
 import { sql } from "drizzle-orm";
 
 import { db } from "../db/index.ts";
-import { roundCredits } from "./billing.ts";
+import { BEIJING_OFFSET_MINUTES, formatBeijingDayKey, getBeijingDateParts, roundCredits } from "./billing.ts";
 import { getPlatformAnalyticsPolicy } from "./settings.ts";
 
 export type DashboardRange = "today" | "24h" | "7d" | "30d";
@@ -80,28 +80,34 @@ export function normalizeDashboardRange(raw?: string): DashboardRange {
 
 function buildTimeBuckets(range: DashboardRange, now: Date) {
   const pad2 = (n: number) => String(n).padStart(2, "0");
-  const fmtHourKey = (d: Date) =>
-    `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())} ${pad2(d.getHours())}:00`;
-  const fmtHourLabel = (d: Date) => `${pad2(d.getMonth() + 1)}-${pad2(d.getDate())} ${pad2(d.getHours())}:00`;
-  const fmtDayKey = (d: Date) => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
-  const fmtDayLabel = (d: Date) => `${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+  const fmtHourKey = (d: Date) => {
+    const { hour } = getBeijingDateParts(d);
+    return `${formatBeijingDayKey(d)} ${pad2(hour)}:00`;
+  };
+  const fmtHourLabel = (d: Date) => {
+    const { month, day, hour } = getBeijingDateParts(d);
+    return `${pad2(month + 1)}-${pad2(day)} ${pad2(hour)}:00`;
+  };
+  const fmtDayLabel = (d: Date) => {
+    const { month, day } = getBeijingDateParts(d);
+    return `${pad2(month + 1)}-${pad2(day)}`;
+  };
 
   const keys: string[] = [];
   const labels: string[] = [];
+  const { dayStart: todayStart, hour: currentHour } = getBeijingDateParts(now);
 
   if (range === "today") {
-    const start = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
-    const currentHour = now.getHours();
     for (let h = 0; h <= currentHour; h += 1) {
-      const d = new Date(start.getTime() + h * 3_600_000);
+      const d = new Date(todayStart.getTime() + h * 3_600_000);
       keys.push(fmtHourKey(d));
       labels.push(fmtHourLabel(d));
     }
-    const spanMinutes = Math.max(1, Math.round((now.getTime() - start.getTime()) / 60_000));
+    const spanMinutes = Math.max(1, Math.round((now.getTime() - todayStart.getTime()) / 60_000));
     return {
       bucketUnit: "hour" as const,
       pgFormat: "YYYY-MM-DD HH24:00",
-      rangeStart: start,
+      rangeStart: todayStart,
       spanMinutes,
       keys,
       labels,
@@ -109,7 +115,7 @@ function buildTimeBuckets(range: DashboardRange, now: Date) {
   }
 
   if (range === "24h") {
-    const endHour = new Date(now.getFullYear(), now.getMonth(), now.getDate(), now.getHours(), 0, 0, 0);
+    const endHour = new Date(todayStart.getTime() + currentHour * 3_600_000);
     const start = new Date(endHour.getTime() - 23 * 3_600_000);
     for (let i = 0; i < 24; i += 1) {
       const d = new Date(start.getTime() + i * 3_600_000);
@@ -127,11 +133,10 @@ function buildTimeBuckets(range: DashboardRange, now: Date) {
   }
 
   const days = range === "30d" ? 30 : 7;
-  const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
   const start = new Date(todayStart.getTime() - (days - 1) * 86_400_000);
   for (let i = 0; i < days; i += 1) {
     const d = new Date(start.getTime() + i * 86_400_000);
-    keys.push(fmtDayKey(d));
+    keys.push(formatBeijingDayKey(d));
     labels.push(fmtDayLabel(d));
   }
   const spanMinutes = Math.max(1, Math.round((now.getTime() - start.getTime()) / 60_000));
@@ -149,7 +154,6 @@ async function computeDashboardSnapshot(range: DashboardRange, sampleIntervalMin
   const now = new Date();
   const { bucketUnit, pgFormat, rangeStart, spanMinutes, keys, labels } = buildTimeBuckets(range, now);
   const rangeStartIso = rangeStart.toISOString();
-  const localOffsetMinutes = -now.getTimezoneOffset();
   const userFilter = userId ? sql`AND cl.user_id = ${userId}` : sql``;
 
   const [summaryRows, modelSummaryRows, modelBucketRows, userRankRows] = await Promise.all([
@@ -185,7 +189,7 @@ async function computeDashboardSnapshot(range: DashboardRange, sampleIntervalMin
     `),
     db.execute(sql`
       SELECT
-        TO_CHAR((cl.created_at AT TIME ZONE 'UTC') + (${localOffsetMinutes} * INTERVAL '1 minute'), ${pgFormat}) AS bucket,
+        TO_CHAR((cl.created_at AT TIME ZONE 'UTC') + (${BEIJING_OFFSET_MINUTES} * INTERVAL '1 minute'), ${pgFormat}) AS bucket,
         COALESCE(NULLIF(cl.meta->>'model', ''), cl.reason) AS model,
         COALESCE(SUM(CASE WHEN cl.delta < 0 AND COALESCE(cl.meta->>'taskStatus', '') NOT IN ('failed', 'failed_refunded') THEN -cl.delta ELSE 0 END), 0)::double precision AS credits,
         COUNT(*) FILTER (WHERE cl.reason IN ('text_gen', 'image_gen', 'video_gen', 'audio_gen'))::int AS calls
@@ -268,7 +272,7 @@ async function computeDashboardSnapshot(range: DashboardRange, sampleIntervalMin
       const userBucketRows = await db.execute(sql`
         SELECT
           cl.user_id,
-          TO_CHAR((cl.created_at AT TIME ZONE 'UTC') + (${localOffsetMinutes} * INTERVAL '1 minute'), ${pgFormat}) AS bucket,
+          TO_CHAR((cl.created_at AT TIME ZONE 'UTC') + (${BEIJING_OFFSET_MINUTES} * INTERVAL '1 minute'), ${pgFormat}) AS bucket,
           COALESCE(SUM(CASE WHEN cl.delta < 0 AND COALESCE(cl.meta->>'taskStatus', '') NOT IN ('failed', 'failed_refunded') THEN -cl.delta ELSE 0 END), 0)::double precision AS credits
         FROM credit_ledger cl
         WHERE cl.reason IN ('text_gen', 'image_gen', 'video_gen', 'audio_gen')

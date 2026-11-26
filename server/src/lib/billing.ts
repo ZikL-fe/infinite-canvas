@@ -489,15 +489,35 @@ export async function refundLedgerCharge(params: {
   });
 }
 
-/** 聚合指定周期（7/14/30 天）内的积分消耗总量、每日趋势与热门消耗模型排行。 */
+/** 北京时间（UTC+8）固定偏移分钟数，统计与看板统一按北京时间划分，不依赖服务器时区。 */
+export const BEIJING_OFFSET_MINUTES = 8 * 60;
+const BEIJING_OFFSET_MS = BEIJING_OFFSET_MINUTES * 60_000;
+
+/** 提取指定时刻在北京时间（UTC+8）下的年月日时与当日零点对应的 UTC Date。 */
+export function getBeijingDateParts(date: Date) {
+  const shifted = new Date(date.getTime() + BEIJING_OFFSET_MS);
+  const year = shifted.getUTCFullYear();
+  const month = shifted.getUTCMonth();
+  const day = shifted.getUTCDate();
+  const hour = shifted.getUTCHours();
+  const dayStart = new Date(Date.UTC(year, month, day, 0, 0, 0, 0) - BEIJING_OFFSET_MS);
+  return { year, month, day, hour, dayStart };
+}
+
+/** 将 Date 格式化为北京时间 `YYYY-MM-DD` 日期键。 */
+export function formatBeijingDayKey(date: Date) {
+  const { year, month, day } = getBeijingDateParts(date);
+  return `${year}-${String(month + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+}
+
+/** 聚合指定周期（7/14/30 天）内的积分消耗总量、每日趋势与热门消耗模型排行（按北京时间统计）。 */
 export async function queryConsumptionMetrics(daysInput: number, userId?: string) {
   const days = [7, 14, 30].includes(daysInput) ? daysInput : 7;
   const now = new Date();
-  const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const { dayStart: todayStart } = getBeijingDateParts(now);
   const rangeStart = new Date(todayStart.getTime() - (days - 1) * 86_400_000);
   const todayStartIso = todayStart.toISOString();
   const rangeStartIso = rangeStart.toISOString();
-  const localOffsetMinutes = -now.getTimezoneOffset();
   const userFilter = userId ? sql`AND user_id = ${userId}` : sql``;
 
   const [totalsRows, dailyRows, modelRows] = await Promise.all([
@@ -512,7 +532,7 @@ export async function queryConsumptionMetrics(daysInput: number, userId?: string
     `),
     db.execute(sql`
       SELECT
-        TO_CHAR((created_at AT TIME ZONE 'UTC') + (${localOffsetMinutes} * INTERVAL '1 minute'), 'YYYY-MM-DD') AS day,
+        TO_CHAR((created_at AT TIME ZONE 'UTC') + (${BEIJING_OFFSET_MINUTES} * INTERVAL '1 minute'), 'YYYY-MM-DD') AS day,
         COALESCE(SUM(CASE WHEN delta < 0 AND COALESCE(meta->>'taskStatus', '') NOT IN ('failed', 'failed_refunded') THEN -delta ELSE 0 END), 0)::double precision AS credits,
         COUNT(*)::int AS calls
       FROM credit_ledger
@@ -539,17 +559,10 @@ export async function queryConsumptionMetrics(daysInput: number, userId?: string
     dailyMap.set(row.day, { credits: roundCredits(Number(row.credits)), calls: Number(row.calls) });
   }
 
-  const formatLocalDayKey = (d: Date) => {
-    const y = d.getFullYear();
-    const m = String(d.getMonth() + 1).padStart(2, "0");
-    const day = String(d.getDate()).padStart(2, "0");
-    return `${y}-${m}-${day}`;
-  };
-
   const dailyTrend: Array<{ date: string; credits: number; calls: number }> = [];
   for (let i = 0; i < days; i += 1) {
     const d = new Date(rangeStart.getTime() + i * 86_400_000);
-    const key = formatLocalDayKey(d);
+    const key = formatBeijingDayKey(d);
     const hit = dailyMap.get(key);
     dailyTrend.push({ date: key, credits: hit?.credits ?? 0, calls: hit?.calls ?? 0 });
   }

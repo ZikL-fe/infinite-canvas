@@ -600,7 +600,7 @@ export function AnalyticsDashboardPanel({ scope }: { scope: "all" | "self" }) {
                             <Typography.Text type="secondary" className="text-xs">
                                 {t("dashboard.sampleStatus", {
                                     minutes: data.sampleIntervalMinutes,
-                                    time: new Date(data.sampledAt).toLocaleTimeString(locale),
+                                    time: new Date(data.sampledAt).toLocaleTimeString(locale, { timeZone: "Asia/Shanghai" }),
                                 })}
                             </Typography.Text>
                         ) : null}
