@@ -46,6 +46,14 @@ export default function AuthPage() {
 
     const handleSuccessRedirect = (role: "admin" | "user") => {
         if (redirectTarget) {
+            if (role === "admin" && redirectTarget.startsWith("/console")) {
+                navigate(`/admin${redirectTarget.slice("/console".length)}`, { replace: true });
+                return;
+            }
+            if (role !== "admin" && redirectTarget.startsWith("/admin")) {
+                navigate(`/console${redirectTarget.slice("/admin".length)}`, { replace: true });
+                return;
+            }
             navigate(redirectTarget, { replace: true });
             return;
         }
