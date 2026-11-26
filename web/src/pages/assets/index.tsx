@@ -1,6 +1,6 @@
 import { CheckSquare, Copy, Download, Eye, HardDrive, PencilLine, Search, Trash2, Upload } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
-import { App, Button, Card, Checkbox, Drawer, Empty, Form, Image, Input, Modal, Pagination, Progress, Select, Space, Tag, Typography } from "antd";
+import { App, Button, Card, Checkbox, Drawer, Empty, Form, Image, Input, Modal, Pagination, Popconfirm, Progress, Select, Space, Tag, Typography } from "antd";
 import { saveAs } from "file-saver";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
@@ -9,7 +9,7 @@ import { useBatchZipDownload } from "@/hooks/use-batch-zip-download";
 import { useCopyText } from "@/hooks/use-copy-text";
 import { formatBytes, formatStoragePair, readFileAsDataUrl } from "@/lib/image-utils";
 import { getMediaBlob } from "@/services/file-storage";
-import { deleteAssetWithCloud } from "@/services/cloud-sync";
+import { deleteAssetsWithCloud, deleteAssetWithCloud } from "@/services/cloud-sync";
 import { ensureImagePreview, getImageBlob, getImagePreviewRevision, previewUrlFor, subscribeImagePreviews, uploadImage } from "@/services/image-storage";
 import { cn } from "@/lib/utils";
 import { assetCoverUrl, useAssetStore, type Asset, type AssetKind, type ImageAsset } from "@/stores/use-asset-store";
@@ -60,6 +60,7 @@ export default function AssetsPage() {
     const [exportingAssets, setExportingAssets] = useState(false);
     const [downloadingId, setDownloadingId] = useState<string | null>(null);
     const [selectedIds, setSelectedIds] = useState<string[]>([]);
+    const [batchDeleting, setBatchDeleting] = useState(false);
     const { downloading: batchDownloading, downloadZip } = useBatchZipDownload();
     const coverUrl = Form.useWatch("coverUrl", form) || "";
     const title = Form.useWatch("title", form) || "";
@@ -282,6 +283,21 @@ export default function AssetsPage() {
         }
     };
 
+    const handleBatchDelete = async () => {
+        if (!selectedIds.length || batchDeleting) return;
+        const deletingIds = [...selectedIds];
+        setBatchDeleting(true);
+        try {
+            await deleteAssetsWithCloud(deletingIds);
+            setSelectedIds([]);
+            message.success(t("common.deletedCount", { count: deletingIds.length }));
+        } catch (error) {
+            message.error(error instanceof Error ? error.message : t("common.deleteFailed"));
+        } finally {
+            setBatchDeleting(false);
+        }
+    };
+
     return (
         <div className="flex h-full flex-col overflow-hidden bg-background text-stone-900 dark:text-stone-100">
             <main className="min-h-0 flex-1 overflow-y-auto bg-[radial-gradient(#e5e7eb_1px,transparent_1px)] px-4 py-6 [background-size:16px_16px] sm:px-6 lg:px-10 dark:bg-[radial-gradient(rgba(245,245,244,.14)_1px,transparent_1px)]">
@@ -391,15 +407,35 @@ export default function AssetsPage() {
                                 {allPageSelected ? t("common.deselectAll") : t("common.selectAllPage")}
                             </Button>
                             {selectedIds.length > 0 ? (
-                                <Button
-                                    size="small"
-                                    type="primary"
-                                    icon={<Download className="size-3.5" />}
-                                    loading={batchDownloading}
-                                    onClick={() => void handleBatchDownload()}
-                                >
-                                    {t("common.batchDownloadCount", { count: selectedIds.length })}
-                                </Button>
+                                <>
+                                    <Button
+                                        size="small"
+                                        type="primary"
+                                        icon={<Download className="size-3.5" />}
+                                        loading={batchDownloading}
+                                        disabled={batchDeleting}
+                                        onClick={() => void handleBatchDownload()}
+                                    >
+                                        {t("common.batchDownloadCount", { count: selectedIds.length })}
+                                    </Button>
+                                    <Popconfirm
+                                        title={t("assets.batchDeleteConfirm", { count: selectedIds.length })}
+                                        okText={t("common.delete")}
+                                        okButtonProps={{ danger: true }}
+                                        cancelText={t("common.cancel")}
+                                        onConfirm={() => void handleBatchDelete()}
+                                    >
+                                        <Button
+                                            size="small"
+                                            danger
+                                            icon={<Trash2 className="size-3.5" />}
+                                            loading={batchDeleting}
+                                            disabled={batchDownloading}
+                                        >
+                                            {t("common.batchDeleteCount", { count: selectedIds.length })}
+                                        </Button>
+                                    </Popconfirm>
+                                </>
                             ) : null}
                             <button
                                 type="button"
@@ -627,7 +663,7 @@ function AssetCard({ asset, selected, downloading, onSelectedChange, onOpen, onE
     return (
         <Card
             hoverable
-            className={`flex h-full flex-col overflow-hidden ${selected ? "ring-2 ring-stone-900 dark:ring-stone-100" : ""}`}
+            className={`flex h-full flex-col overflow-hidden ${selected ? "!border-stone-900 outline-2 -outline-offset-2 outline-stone-900 dark:!border-stone-100 dark:outline-stone-100" : ""}`}
             styles={{ body: { padding: 0, flex: 1, display: "flex", flexDirection: "column" } }}
             cover={
                 <div className="relative">

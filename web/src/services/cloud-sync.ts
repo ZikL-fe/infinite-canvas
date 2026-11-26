@@ -605,16 +605,23 @@ export async function deleteCanvasProjectsWithCloud(ids: string[]) {
 }
 
 /** 先确认云端删除资产成功，再移除本地资产与孤立媒体缓存（接口失败会抛出错误且保留本地数据）。 */
-export async function deleteAssetWithCloud(id: string) {
-    if (!id) return;
+export async function deleteAssetsWithCloud(ids: string[]) {
+    const uniqueIds = Array.from(new Set(ids)).filter(Boolean);
+    if (!uniqueIds.length) return;
     if (isCloudAuthenticated()) {
-        await assetsApi.remove(id);
-        cloudDeletedAssetIds.add(id);
+        await assetsApi.batchRemove(uniqueIds);
+        uniqueIds.forEach((id) => cloudDeletedAssetIds.add(id));
         notifyCloudWorkspaceChanged("assets", { sync: false });
         void authApi
             .me()
             .then((res) => useUserStore.getState().setUser(res.user))
             .catch(() => undefined);
     }
-    useAssetStore.getState().removeAsset(id);
+    useAssetStore.getState().removeAssets(uniqueIds);
+}
+
+/** 先确认云端删除单个资产成功，再移除本地资产与孤立媒体缓存。 */
+export async function deleteAssetWithCloud(id: string) {
+    if (!id) return;
+    await deleteAssetsWithCloud([id]);
 }

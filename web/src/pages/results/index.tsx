@@ -42,6 +42,7 @@ export default function ResultsPage() {
     const [previewOriginalUrl, setPreviewOriginalUrl] = useState("");
     const [loadingOriginalId, setLoadingOriginalId] = useState<string | null>(null);
     const [selectedIds, setSelectedIds] = useState<string[]>([]);
+    const [batchDeleting, setBatchDeleting] = useState(false);
     const { downloading: batchDownloading, downloadZip } = useBatchZipDownload();
 
     const loadResults = useCallback(
@@ -240,6 +241,45 @@ export default function ResultsPage() {
         }
     };
 
+    const handleBatchDelete = async () => {
+        if (!selectedIds.length || batchDeleting) return;
+        const targets = [...selectedIds];
+        setBatchDeleting(true);
+        try {
+            const res = await storageApi.batchRemove(targets);
+            if (res.deletedCount > 0) {
+                await Promise.all([purgeLocalStoredImages(targets), purgeLocalStoredMedia(targets)]);
+                void authApi
+                    .me()
+                    .then((meRes) => useUserStore.getState().setUser(meRes.user))
+                    .catch(() => undefined);
+                notifyCloudWorkspaceChanged("all");
+                void syncCloudWorkspace();
+            }
+            if (res.failedCount && res.failedCount > 0) {
+                message.warning(
+                    t("results.batchDeletePartial", {
+                        deleted: res.deletedCount,
+                        failed: res.failedCount,
+                        reason: res.firstError ? `：${res.firstError}` : "",
+                    }),
+                );
+            } else {
+                message.success(t("common.deletedCount", { count: res.deletedCount }));
+            }
+            setSelectedIds([]);
+            if (res.deletedCount >= items.length && page > 1) {
+                setPage((prev) => Math.max(1, prev - 1));
+            } else {
+                void loadResults();
+            }
+        } catch (error) {
+            message.error(error instanceof Error ? error.message : t("results.deleteFailed"));
+        } finally {
+            setBatchDeleting(false);
+        }
+    };
+
     if (!user || !accessToken) {
         return (
             <div className="flex h-full items-center justify-center p-6">
@@ -353,15 +393,35 @@ export default function ResultsPage() {
                                 {allPageSelected ? t("common.deselectAll") : t("common.selectAllPage")}
                             </Button>
                             {selectedIds.length > 0 ? (
-                                <Button
-                                    size="small"
-                                    type="primary"
-                                    icon={<Download className="size-3.5" />}
-                                    loading={batchDownloading}
-                                    onClick={() => void handleBatchDownload()}
-                                >
-                                    {t("common.batchDownloadCount", { count: selectedIds.length })}
-                                </Button>
+                                <>
+                                    <Button
+                                        size="small"
+                                        type="primary"
+                                        icon={<Download className="size-3.5" />}
+                                        loading={batchDownloading}
+                                        disabled={batchDeleting}
+                                        onClick={() => void handleBatchDownload()}
+                                    >
+                                        {t("common.batchDownloadCount", { count: selectedIds.length })}
+                                    </Button>
+                                    <Popconfirm
+                                        title={t("results.batchDeleteConfirm", { count: selectedIds.length })}
+                                        okText={t("common.delete")}
+                                        okButtonProps={{ danger: true }}
+                                        cancelText={t("common.cancel")}
+                                        onConfirm={() => void handleBatchDelete()}
+                                    >
+                                        <Button
+                                            size="small"
+                                            danger
+                                            icon={<Trash2 className="size-3.5" />}
+                                            loading={batchDeleting}
+                                            disabled={batchDownloading}
+                                        >
+                                            {t("common.batchDeleteCount", { count: selectedIds.length })}
+                                        </Button>
+                                    </Popconfirm>
+                                </>
                             ) : null}
                             <Button size="small" icon={<RefreshCw className="size-3.5" />} loading={loading} onClick={() => void loadResults(true)}>
                                 {t("common.refresh")}
@@ -383,7 +443,7 @@ export default function ResultsPage() {
                                         <Card
                                             key={item.id}
                                             hoverable
-                                            className={`flex h-full flex-col overflow-hidden ${selected ? "ring-2 ring-stone-900 dark:ring-stone-100" : ""}`}
+                                            className={`flex h-full flex-col overflow-hidden ${selected ? "!border-stone-900 outline-2 -outline-offset-2 outline-stone-900 dark:!border-stone-100 dark:outline-stone-100" : ""}`}
                                             styles={{ body: { padding: 14, flex: 1, display: "flex", flexDirection: "column" } }}
                                             cover={
                                                 <div className="relative">

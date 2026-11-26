@@ -1,6 +1,6 @@
 /** 「我的素材」云端增量同步与软删除接口。 */
 import { zValidator } from "@hono/zod-validator";
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, inArray } from "drizzle-orm";
 import { Hono } from "hono";
 import { z } from "zod";
 
@@ -132,36 +132,73 @@ assetRoutes.put("/:id", zValidator("json", upsertAssetSchema), async (c) => {
   return c.json({ ok: true, deletedMediaCount });
 });
 
-assetRoutes.delete("/:id", async (c) => {
-  const user = c.get("user");
-  const id = c.req.param("id");
-  const existing = await db.query.userAssets.findFirst({ where: eq(userAssets.id, id) });
-  if (existing && existing.userId !== user.id) {
-    return c.json({ error: "无权删除该素材" }, 403);
+const batchDeleteAssetsSchema = z.object({
+  ids: z.array(z.string().min(1)).min(1),
+});
+
+async function softDeleteUserAssets(userId: string, rawIds: string[]) {
+  const ids = Array.from(new Set(rawIds));
+  const existingRows = await db.query.userAssets.findMany({
+    where: inArray(userAssets.id, ids),
+  });
+  if (existingRows.some((row) => row.userId !== userId)) {
+    return { forbidden: true as const, deletedCount: 0, deletedMediaCount: 0 };
   }
+
   const now = new Date();
   const candidateKeys = new Set<string>();
-  if (existing) {
-    if (existing.mediaId) candidateKeys.add(existing.mediaId);
-    extractStorageKeys(existing.data, candidateKeys);
+  const existingIds = new Set<string>();
+  for (const row of existingRows) {
+    existingIds.add(row.id);
+    if (row.mediaId) candidateKeys.add(row.mediaId);
+    extractStorageKeys(row.data, candidateKeys);
+  }
+
+  if (existingRows.length) {
     await db
       .update(userAssets)
       .set({ deletedAt: now, updatedAt: now })
-      .where(and(eq(userAssets.id, id), eq(userAssets.userId, user.id)));
-  } else {
+      .where(and(inArray(userAssets.id, existingRows.map((row) => row.id)), eq(userAssets.userId, userId)));
+  }
+
+  const missingIds = ids.filter((id) => !existingIds.has(id));
+  if (missingIds.length) {
     await db
       .insert(userAssets)
-      .values({
-        id,
-        userId: user.id,
-        kind: "text",
-        title: "已删除素材",
-        deletedAt: now,
-        createdAt: now,
-        updatedAt: now,
-      })
+      .values(
+        missingIds.map((id) => ({
+          id,
+          userId,
+          kind: "text" as const,
+          title: "已删除素材",
+          deletedAt: now,
+          createdAt: now,
+          updatedAt: now,
+        })),
+      )
       .onConflictDoNothing();
   }
-  const deletedMediaCount = await cleanupOrphanedUserMedia(user.id, candidateKeys);
-  return c.json({ ok: true, deletedMediaCount });
+
+  const deletedMediaCount = await cleanupOrphanedUserMedia(userId, candidateKeys);
+  return { forbidden: false as const, deletedCount: ids.length, deletedMediaCount };
+}
+
+assetRoutes.post("/batch-delete", zValidator("json", batchDeleteAssetsSchema), async (c) => {
+  const user = c.get("user");
+  const { ids } = c.req.valid("json");
+  const result = await softDeleteUserAssets(user.id, ids);
+  if (result.forbidden) {
+    return c.json({ error: "无权删除该素材" }, 403);
+  }
+  return c.json({ ok: true, deletedCount: result.deletedCount, deletedMediaCount: result.deletedMediaCount });
+});
+
+assetRoutes.delete("/:id", async (c) => {
+  const user = c.get("user");
+  const id = c.req.param("id");
+  const result = await softDeleteUserAssets(user.id, [id]);
+  if (result.forbidden) {
+    return c.json({ error: "无权删除该素材" }, 403);
+  }
+  return c.json({ ok: true, deletedMediaCount: result.deletedMediaCount });
 });

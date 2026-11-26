@@ -31,6 +31,7 @@ type AssetStore = {
     addAsset: (asset: Omit<Asset, "id" | "createdAt" | "updatedAt">) => string;
     updateAsset: (id: string, patch: Partial<Omit<Asset, "id" | "createdAt">>) => void;
     removeAsset: (id: string) => void;
+    removeAssets: (ids: string[]) => void;
     replaceAssets: (assets: Asset[]) => void;
     cleanupImages: (extra?: unknown) => void;
 };
@@ -94,12 +95,16 @@ export const useAssetStore = create<AssetStore>()(
                 set((state) => ({
                     assets: state.assets.map((asset) => (asset.id === id ? ({ ...asset, ...patch, updatedAt: new Date().toISOString() } as Asset) : asset)),
                 })),
-            removeAsset: (id) =>
+            removeAsset: (id) => get().removeAssets([id]),
+            removeAssets: (ids) => {
+                const idSet = new Set(ids);
+                if (!idSet.size) return;
                 set((state) => {
-                    const assets = state.assets.filter((asset) => asset.id !== id);
+                    const assets = state.assets.filter((asset) => !idSet.has(asset.id));
                     get().cleanupImages({ assets });
                     return { assets };
-                }),
+                });
+            },
             replaceAssets: (assets) => set({ assets }),
             cleanupImages: (extra) => {
                 window.setTimeout(async () => {

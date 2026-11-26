@@ -938,7 +938,12 @@ export const assetsApi = {
             method: "PUT",
             body: JSON.stringify(payload),
         }),
-    remove: (id: string) => requestServer<{ ok: boolean }>(`/assets/${encodeURIComponent(id)}`, { method: "DELETE" }),
+    remove: (id: string) => requestServer<{ ok: boolean; deletedMediaCount?: number }>(`/assets/${encodeURIComponent(id)}`, { method: "DELETE" }),
+    batchRemove: (ids: string[]) =>
+        requestServer<{ ok: boolean; deletedCount: number; deletedMediaCount?: number }>("/assets/batch-delete", {
+            method: "POST",
+            body: JSON.stringify({ ids }),
+        }),
 };
 
 export const runtimeApi = {
