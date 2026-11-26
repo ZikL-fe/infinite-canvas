@@ -16,6 +16,7 @@ export function ClientRootInit({ children }: { children: ReactNode }) {
     const channelsCount = useConfigStore((state) => state.config.channels.length);
     const setBootstrapStatus = useUserStore((state) => state.setBootstrapStatus);
     const setUser = useUserStore((state) => state.setUser);
+    const setUserLoading = useUserStore((state) => state.setUserLoading);
 
     usePromptSourceScheduler();
 
@@ -28,6 +29,7 @@ export function ClientRootInit({ children }: { children: ReactNode }) {
             .then(setBootstrapStatus)
             .catch(() => undefined);
         if (accessToken || refreshToken) {
+            setUserLoading(true);
             void syncRuntimeSettings();
             authApi
                 .me()
@@ -35,9 +37,10 @@ export function ClientRootInit({ children }: { children: ReactNode }) {
                     setUser(res.user);
                     void syncCloudWorkspace();
                 })
-                .catch(() => undefined);
+                .catch(() => undefined)
+                .finally(() => setUserLoading(false));
         }
-    }, [accessToken, refreshToken, setBootstrapStatus, setUser]);
+    }, [accessToken, refreshToken, setBootstrapStatus, setUser, setUserLoading]);
 
     useEffect(() => {
         if (!accessToken) {

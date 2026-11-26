@@ -27,6 +27,9 @@ export default function ResultsPage() {
     useSyncExternalStore(subscribeImagePreviews, getImagePreviewRevision);
     const user = useUserStore((state) => state.user);
     const accessToken = useUserStore((state) => state.accessToken);
+    const refreshToken = useUserStore((state) => state.refreshToken);
+    const userLoading = useUserStore((state) => state.userLoading);
+    const userLoaded = useUserStore((state) => state.userLoaded);
     const addAsset = useAssetStore((state) => state.addAsset);
 
     const [items, setItems] = useState<MediaItem[]>([]);
@@ -35,7 +38,7 @@ export default function ResultsPage() {
     const [pageSize, setPageSize] = useState(20);
     const [kind, setKind] = useState("");
     const [keyword, setKeyword] = useState("");
-    const [loading, setLoading] = useState(false);
+    const [loading, setLoading] = useState(true);
     const [savingId, setSavingId] = useState<string | null>(null);
     const [deletingId, setDeletingId] = useState<string | null>(null);
     const [previewItem, setPreviewItem] = useState<MediaItem | null>(null);
@@ -280,6 +283,14 @@ export default function ResultsPage() {
         }
     };
 
+    if (!user && (accessToken || refreshToken) && userLoading) {
+        return (
+            <div className="flex h-full items-center justify-center p-6">
+                <Spin size="large" />
+            </div>
+        );
+    }
+
     if (!user || !accessToken) {
         return (
             <div className="flex h-full items-center justify-center p-6">
@@ -297,8 +308,9 @@ export default function ResultsPage() {
         );
     }
 
-    const expired = Boolean(user.storageQuotaExpiresAt && new Date(user.storageQuotaExpiresAt).getTime() <= Date.now());
-    const exceeded = expired || (user.storageQuotaBytes ?? 0) <= 0 || (user.storageUsedBytes ?? 0) >= (user.storageQuotaBytes ?? 0);
+    const quotaPending = (userLoading && !userLoaded) || typeof user.storageQuotaBytes !== "number";
+    const expired = !quotaPending && Boolean(user.storageQuotaExpiresAt && new Date(user.storageQuotaExpiresAt).getTime() <= Date.now());
+    const exceeded = !quotaPending && (expired || (user.storageQuotaBytes ?? 0) <= 0 || (user.storageUsedBytes ?? 0) >= (user.storageQuotaBytes ?? 0));
 
     return (
         <div className="flex h-full flex-col overflow-hidden bg-background text-stone-900 dark:text-stone-100">
@@ -311,20 +323,24 @@ export default function ResultsPage() {
                                 <div className="inline-flex flex-wrap items-center gap-2.5 rounded-full border border-stone-200 bg-background/90 px-3 py-1 text-xs shadow-xs dark:border-stone-800">
                                     <span className="inline-flex items-center gap-1.5 font-medium text-stone-700 dark:text-stone-200">
                                         <HardDrive className="size-3.5" />
-                                        {t("assets.cloudQuotaLabel", { pair: formatStoragePair(user.storageUsedBytes, user.storageQuotaBytes) })}
+                                        {quotaPending
+                                            ? t("topNav.storageItemLoading")
+                                            : t("assets.cloudQuotaLabel", { pair: formatStoragePair(user.storageUsedBytes, user.storageQuotaBytes) })}
                                     </span>
-                                    <div className="w-20">
-                                        <Progress
-                                            percent={
-                                                (user.storageQuotaBytes ?? 0) > 0
-                                                    ? Math.min(100, Math.round(((user.storageUsedBytes ?? 0) / (user.storageQuotaBytes ?? 1)) * 100))
-                                                    : 100
-                                            }
-                                            size="small"
-                                            showInfo={false}
-                                            status={exceeded ? "exception" : "active"}
-                                        />
-                                    </div>
+                                    {!quotaPending ? (
+                                        <div className="w-20">
+                                            <Progress
+                                                percent={
+                                                    (user.storageQuotaBytes ?? 0) > 0
+                                                        ? Math.min(100, Math.round(((user.storageUsedBytes ?? 0) / (user.storageQuotaBytes ?? 1)) * 100))
+                                                        : 100
+                                                }
+                                                size="small"
+                                                showInfo={false}
+                                                status={exceeded ? "exception" : "active"}
+                                            />
+                                        </div>
+                                    ) : null}
                                     {expired ? (
                                         <Tag
                                             color="red"

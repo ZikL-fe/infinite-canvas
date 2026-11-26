@@ -42,9 +42,12 @@ type UserStore = {
     accessToken: string;
     refreshToken: string;
     bootstrapStatus: BootstrapStatus | null;
+    userLoading: boolean;
+    userLoaded: boolean;
     setSession: (payload: { user: LocalUser; accessToken: string; refreshToken: string }) => void;
     setTokens: (payload: { accessToken: string; refreshToken: string }) => void;
     setUser: (user: LocalUser | null) => void;
+    setUserLoading: (loading: boolean) => void;
     setBootstrapStatus: (status: BootstrapStatus) => void;
     clearSession: () => void;
 };
@@ -56,11 +59,15 @@ export const useUserStore = create<UserStore>()(
             accessToken: "",
             refreshToken: "",
             bootstrapStatus: null,
-            setSession: ({ user, accessToken, refreshToken }) => set({ user, accessToken, refreshToken }),
+            userLoading: false,
+            userLoaded: false,
+            setSession: ({ user, accessToken, refreshToken }) =>
+                set({ user, accessToken, refreshToken, userLoading: false, userLoaded: true }),
             setTokens: ({ accessToken, refreshToken }) => set({ accessToken, refreshToken }),
-            setUser: (user) => set({ user }),
+            setUser: (user) => set({ user, userLoading: false, userLoaded: Boolean(user) }),
+            setUserLoading: (userLoading) => set({ userLoading }),
             setBootstrapStatus: (bootstrapStatus) => set({ bootstrapStatus }),
-            clearSession: () => set({ user: null, accessToken: "", refreshToken: "" }),
+            clearSession: () => set({ user: null, accessToken: "", refreshToken: "", userLoading: false, userLoaded: false }),
         }),
         {
             name: "infinite-canvas:user_session",

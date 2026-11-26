@@ -1,6 +1,6 @@
 import { CheckSquare, Copy, Download, Eye, HardDrive, PencilLine, Search, Trash2, Upload } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
-import { App, Button, Card, Checkbox, Drawer, Empty, Form, Image, Input, Modal, Pagination, Popconfirm, Progress, Select, Space, Tag, Typography } from "antd";
+import { App, Button, Card, Checkbox, Drawer, Empty, Form, Image, Input, Modal, Pagination, Popconfirm, Progress, Select, Space, Spin, Tag, Typography } from "antd";
 import { saveAs } from "file-saver";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
@@ -9,7 +9,7 @@ import { useBatchZipDownload } from "@/hooks/use-batch-zip-download";
 import { useCopyText } from "@/hooks/use-copy-text";
 import { formatBytes, formatStoragePair, readFileAsDataUrl } from "@/lib/image-utils";
 import { getMediaBlob } from "@/services/file-storage";
-import { deleteAssetsWithCloud, deleteAssetWithCloud } from "@/services/cloud-sync";
+import { deleteAssetsWithCloud, deleteAssetWithCloud, useCloudSyncing } from "@/services/cloud-sync";
 import { ensureImagePreview, getImageBlob, getImagePreviewRevision, previewUrlFor, subscribeImagePreviews, uploadImage } from "@/services/image-storage";
 import { cn } from "@/lib/utils";
 import { assetCoverUrl, useAssetStore, type Asset, type AssetKind, type ImageAsset } from "@/stores/use-asset-store";
@@ -41,6 +41,8 @@ export default function AssetsPage() {
     const imageInputRef = useRef<HTMLInputElement>(null);
     const assetInputRef = useRef<HTMLInputElement>(null);
     const assets = useAssetStore((state) => state.assets);
+    const hydrated = useAssetStore((state) => state.hydrated);
+    const cloudSyncing = useCloudSyncing();
     const addAsset = useAssetStore((state) => state.addAsset);
     const updateAsset = useAssetStore((state) => state.updateAsset);
     const [deleting, setDeleting] = useState(false);
@@ -465,28 +467,37 @@ export default function AssetsPage() {
                 </div>
 
                 <div className="mx-auto flex w-full max-w-[1600px] flex-col gap-5">
-                    <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
-                        {visibleAssets.map((asset) => (
-                            <AssetCard
-                                key={asset.id}
-                                asset={asset}
-                                selected={selectedIds.includes(asset.id)}
-                                downloading={downloadingId === asset.id}
-                                onSelectedChange={(checked) =>
-                                    setSelectedIds((prev) =>
-                                        checked ? Array.from(new Set([...prev, asset.id])) : prev.filter((id) => id !== asset.id),
-                                    )
-                                }
-                                onOpen={() => setPreviewAsset(asset)}
-                                onEdit={() => openEdit(asset)}
-                                onCopy={copyAssetText}
-                                onDownload={downloadImage}
-                                onDelete={() => setDeletingAsset(asset)}
-                            />
-                        ))}
-                    </div>
+                    {!hydrated || (cloudSyncing && !validAssets.length) ? (
+                        <div className="flex min-h-[280px] flex-col items-center justify-center gap-3 text-sm text-stone-500">
+                            <Spin />
+                            <span>{t("assets.loading")}</span>
+                        </div>
+                    ) : (
+                        <>
+                            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
+                                {visibleAssets.map((asset) => (
+                                    <AssetCard
+                                        key={asset.id}
+                                        asset={asset}
+                                        selected={selectedIds.includes(asset.id)}
+                                        downloading={downloadingId === asset.id}
+                                        onSelectedChange={(checked) =>
+                                            setSelectedIds((prev) =>
+                                                checked ? Array.from(new Set([...prev, asset.id])) : prev.filter((id) => id !== asset.id),
+                                            )
+                                        }
+                                        onOpen={() => setPreviewAsset(asset)}
+                                        onEdit={() => openEdit(asset)}
+                                        onCopy={copyAssetText}
+                                        onDownload={downloadImage}
+                                        onDelete={() => setDeletingAsset(asset)}
+                                    />
+                                ))}
+                            </div>
 
-                    {!visibleAssets.length ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={t("assets.empty")} className="py-20" /> : null}
+                            {!visibleAssets.length ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={t("assets.empty")} className="py-20" /> : null}
+                        </>
+                    )}
 
                     <div className="flex justify-center">
                         <Pagination

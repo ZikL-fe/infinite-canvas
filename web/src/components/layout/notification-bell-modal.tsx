@@ -1,6 +1,6 @@
 import type { CSSProperties } from "react";
 import { useEffect } from "react";
-import { Badge, Button, Empty, Modal, Tag, Timeline, Typography, theme as antdTheme } from "antd";
+import { Badge, Button, Empty, Modal, Spin, Tag, Timeline, Typography, theme as antdTheme } from "antd";
 import { Bell, Megaphone } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { Streamdown } from "streamdown";
@@ -30,6 +30,8 @@ export function NotificationBellModal({ className, style }: NotificationBellModa
     const { token } = antdTheme.useToken();
     const notice = useNotificationStore((state) => state.notice);
     const timeline = useNotificationStore((state) => state.timeline);
+    const loaded = useNotificationStore((state) => state.loaded);
+    const loading = useNotificationStore((state) => state.loading);
     const modalOpen = useNotificationStore((state) => state.modalOpen);
     const activeTab = useNotificationStore((state) => state.activeTab);
     const readNoticeUpdatedAt = useNotificationStore((state) => state.readNoticeUpdatedAt);
@@ -165,7 +167,11 @@ export function NotificationBellModal({ className, style }: NotificationBellModa
                 </div>
 
                 <div className="max-h-[58vh] overflow-y-auto pr-1">
-                    {activeTab === "notice" ? (
+                    {!loaded && loading ? (
+                        <div className="flex justify-center py-12">
+                            <Spin />
+                        </div>
+                    ) : activeTab === "notice" ? (
                         hasActiveNotice && notice ? (
                             <div
                                 className="rounded-xl border p-4"

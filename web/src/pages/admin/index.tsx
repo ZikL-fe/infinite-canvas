@@ -1,6 +1,6 @@
 /** 后台管理与个人后台入口页：采用左侧导航菜单与全宽内容区，管理员支持平台全局管控与个人中心切换。 */
 import { useCallback, useEffect, useState, type ReactNode } from "react";
-import { Alert, App, Button, Card, Col, DatePicker, Descriptions, Drawer, Form, Image, Input, InputNumber, Menu, Modal, Popconfirm, Progress, Radio, Result, Row, Select, Space, Statistic, Switch, Table, Tabs, Tag, Tooltip, Typography, Upload, theme as antdTheme } from "antd";
+import { Alert, App, Button, Card, Col, DatePicker, Descriptions, Drawer, Form, Image, Input, InputNumber, Menu, Modal, Popconfirm, Progress, Radio, Result, Row, Select, Space, Spin, Statistic, Switch, Table, Tabs, Tag, Tooltip, Typography, Upload, theme as antdTheme } from "antd";
 import type { MenuProps, UploadProps } from "antd";
 import dayjs, { type Dayjs } from "dayjs";
 import type { TFunction } from "i18next";
@@ -180,11 +180,11 @@ export default function AdminPage() {
         }
     }, [isAdmin, isAdminRoute, normalizeTab, requestedTab]);
     const [overview, setOverview] = useState<AdminOverview | null>(null);
-    const [overviewLoading, setOverviewLoading] = useState(false);
+    const [overviewLoading, setOverviewLoading] = useState(isAdmin);
     const [overviewDays, setOverviewDays] = useState<7 | 14 | 30>(7);
 
     const [channels, setChannels] = useState<AdminChannelItem[]>([]);
-    const [channelsLoading, setChannelsLoading] = useState(false);
+    const [channelsLoading, setChannelsLoading] = useState(isAdmin);
     const [channelsSaving, setChannelsSaving] = useState(false);
     const [editingChannel, setEditingChannel] = useState<ModelChannel | null>(null);
 
@@ -216,8 +216,10 @@ export default function AdminPage() {
     const [storageForm] = Form.useForm<S3StorageConfigForm>();
     const [storagePreview, setStoragePreview] = useState("");
     const [storageConfigured, setStorageConfigured] = useState(false);
+    const [storageLoading, setStorageLoading] = useState(isAdmin);
     const [storageSaving, setStorageSaving] = useState(false);
     const [storageTesting, setStorageTesting] = useState(false);
+    const [settingsLoading, setSettingsLoading] = useState(isAdmin);
 
     const [webdavForm] = Form.useForm<WebdavPlatformForm>();
     const [webdavPasswordPreview, setWebdavPasswordPreview] = useState("");
@@ -346,6 +348,7 @@ export default function AdminPage() {
     );
 
     const loadStorageSettings = useCallback(async () => {
+        setStorageLoading(true);
         try {
             const res = await adminApi.getStorageSettings();
             setStorageConfigured(res.configured);
@@ -362,6 +365,8 @@ export default function AdminPage() {
             });
         } catch (error) {
             message.error(error instanceof Error ? error.message : t("admin.messages.loadStorageFailed"));
+        } finally {
+            setStorageLoading(false);
         }
     }, [message, storageForm, t]);
 
@@ -403,6 +408,7 @@ export default function AdminPage() {
     );
 
     const loadAuthAndWebdavSettings = useCallback(async () => {
+        setSettingsLoading(true);
         try {
             const [authRes, webdavRes, mailRes, expiryRes, analyticsRes] = await Promise.all([
                 adminApi.getAuthSettings(),
@@ -452,6 +458,8 @@ export default function AdminPage() {
             });
         } catch (error) {
             message.error(error instanceof Error ? error.message : t("admin.messages.loadSettingsFailed"));
+        } finally {
+            setSettingsLoading(false);
         }
     }, [analyticsForm, mailForm, message, storageExpiryForm, t, webdavForm]);
 
@@ -2522,10 +2530,11 @@ export default function AdminPage() {
                             ),
                             children: (
                                 <div className="flex flex-col gap-5">
-                                    <Card
-                                        title={t("admin.storageTab.cardTitle")}
-                                        extra={storageConfigured ? <Tag color="green">{t("admin.storageTab.configured")}</Tag> : <Tag color="orange">{t("admin.storageTab.pending")}</Tag>}
-                                    >
+                                    <Spin spinning={storageLoading}>
+                                        <Card
+                                            title={t("admin.storageTab.cardTitle")}
+                                            extra={storageLoading ? <Tag>{t("topNav.loading")}</Tag> : storageConfigured ? <Tag color="green">{t("admin.storageTab.configured")}</Tag> : <Tag color="orange">{t("admin.storageTab.pending")}</Tag>}
+                                        >
                                         <Alert
                                             type="info"
                                             showIcon
@@ -2602,6 +2611,7 @@ export default function AdminPage() {
                                             </Space>
                                         </Form>
                                     </Card>
+                                    </Spin>
 
                                     <Card
                                         title={t("admin.storageTab.directUploadTitle")}
@@ -2637,7 +2647,8 @@ export default function AdminPage() {
                                     ),
                                     pageTitle: t("admin.settingsTab.auth.pageTitle"),
                                     children: (
-                                        <Card title={t("admin.settingsTab.auth.cardTitle")}>
+                                        <Spin spinning={settingsLoading}>
+                                            <Card title={t("admin.settingsTab.auth.cardTitle")}>
                                             <div className="flex flex-col gap-4">
                                                 <div className="flex items-center justify-between gap-4">
                                                     <div>
@@ -2668,6 +2679,7 @@ export default function AdminPage() {
                                                 </div>
                                             </div>
                                         </Card>
+                                        </Spin>
                                     ),
                                 },
                                 {
@@ -2680,7 +2692,8 @@ export default function AdminPage() {
                                     ),
                                     pageTitle: t("admin.settingsTab.mail.pageTitle"),
                                     children: (
-                                        <Card
+                                        <Spin spinning={settingsLoading}>
+                                            <Card
                                             title={
                                                 <span className="inline-flex items-center gap-2">
                                                     <Mail className="size-4" />
@@ -2785,6 +2798,7 @@ export default function AdminPage() {
                                                 </div>
                                             </Form>
                                         </Card>
+                                        </Spin>
                                     ),
                                 },
                                 {
@@ -2797,7 +2811,8 @@ export default function AdminPage() {
                                     ),
                                     pageTitle: t("admin.settingsTab.webdav.pageTitle"),
                                     children: (
-                                        <Card title={t("admin.settingsTab.webdav.cardTitle")}>
+                                        <Spin spinning={settingsLoading}>
+                                            <Card title={t("admin.settingsTab.webdav.cardTitle")}>
                                             <Form
                                                 form={webdavForm}
                                                 layout="vertical"
@@ -2849,6 +2864,7 @@ export default function AdminPage() {
                                                 </Space>
                                             </Form>
                                         </Card>
+                                        </Spin>
                                     ),
                                 },
                                 {
@@ -2861,7 +2877,8 @@ export default function AdminPage() {
                                     ),
                                     pageTitle: t("admin.settingsTab.storageExpiry.pageTitle"),
                                     children: (
-                                        <Card
+                                        <Spin spinning={settingsLoading}>
+                                            <Card
                                             title={
                                                 <span className="inline-flex items-center gap-2">
                                                     <HardDrive className="size-4" />
@@ -3154,6 +3171,7 @@ export default function AdminPage() {
                                                 </div>
                                             ) : null}
                                         </Card>
+                                        </Spin>
                                     ),
                                 },
                                 {
@@ -3330,7 +3348,8 @@ export default function AdminPage() {
                                     ),
                                     pageTitle: t("admin.settingsTab.analytics.pageTitle"),
                                     children: (
-                                        <Card title={t("admin.settingsTab.analytics.cardTitle")}>
+                                        <Spin spinning={settingsLoading}>
+                                            <Card title={t("admin.settingsTab.analytics.cardTitle")}>
                                             <Alert
                                                 type="info"
                                                 showIcon
@@ -3409,6 +3428,7 @@ export default function AdminPage() {
                                                 </Space>
                                             </Form>
                                         </Card>
+                                        </Spin>
                                     ),
                                 },
                             ],

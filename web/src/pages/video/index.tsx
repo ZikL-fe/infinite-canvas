@@ -1,6 +1,6 @@
 import { ArrowLeft, ArrowRight, BookOpen, CheckSquare, ClipboardPaste, Download, FolderPlus, History, LoaderCircle, Plus, RotateCcw, SlidersHorizontal, Sparkles, Trash2, Upload, VideoIcon } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type DragEvent } from "react";
-import { App, Button, Checkbox, Drawer, Empty, Input, Modal, Pagination, Tag, Typography } from "antd";
+import { App, Button, Checkbox, Drawer, Empty, Input, Modal, Pagination, Spin, Tag, Typography } from "antd";
 import localforage from "localforage";
 import { nanoid } from "nanoid";
 import { saveAs } from "file-saver";
@@ -89,6 +89,7 @@ export default function VideoPage() {
     const [references, setReferences] = useState<ReferenceImage[]>([]);
     const [results, setResults] = useState<GenerationResult[]>([]);
     const [logs, setLogs] = useState<GenerationLog[]>([]);
+    const [logsLoading, setLogsLoading] = useState(true);
     const [running, setRunning] = useState(false);
     const [logsOpen, setLogsOpen] = useState(false);
     const [settingsOpen, setSettingsOpen] = useState(false);
@@ -121,9 +122,13 @@ export default function VideoPage() {
 
     useEffect(() => {
         const syncAndRefresh = (resumePending = true) => {
-            void refreshLogs(resumePending).then(() => {
-                void syncWorkbenchLogsWithCloud("video", logStore, serializeLog).then(() => refreshLogs(resumePending));
-            });
+            setLogsLoading(true);
+            void refreshLogs(resumePending)
+                .then((localLogs) => {
+                    if (localLogs.length > 0) setLogsLoading(false);
+                    return syncWorkbenchLogsWithCloud("video", logStore, serializeLog).then(() => refreshLogs(resumePending));
+                })
+                .finally(() => setLogsLoading(false));
         };
         syncAndRefresh(true);
         const handleSessionChanged = () => {
@@ -472,7 +477,7 @@ export default function VideoPage() {
         <div className="flex h-full flex-col overflow-hidden bg-stone-50 text-stone-900 dark:bg-stone-950 dark:text-stone-100">
             <main className="mx-auto grid min-h-0 w-full max-w-[1680px] flex-1 grid-cols-1 gap-3 overflow-y-auto px-4 py-3 sm:px-6 lg:grid-cols-[300px_minmax(0,1fr)] lg:overflow-hidden lg:px-10 xl:grid-cols-[320px_minmax(0,1fr)]">
                 <aside className="thin-scrollbar hidden min-h-0 overflow-y-auto rounded-lg border border-stone-200 bg-card p-4 shadow-sm dark:border-stone-800 lg:block">
-                    <LogPanel logs={logs} selectedLogIds={selectedLogIds} activeLogId={previewLog?.id} onSelectedLogIdsChange={setSelectedLogIds} onCreateSession={createSession} onDeleteSelected={() => setDeleteConfirmOpen(true)} onPreviewLog={previewGenerationLog} />
+                    <LogPanel logs={logs} loading={logsLoading} selectedLogIds={selectedLogIds} activeLogId={previewLog?.id} onSelectedLogIdsChange={setSelectedLogIds} onCreateSession={createSession} onDeleteSelected={() => setDeleteConfirmOpen(true)} onPreviewLog={previewGenerationLog} />
                 </aside>
 
                 <section className="grid gap-3 lg:min-h-0 lg:overflow-hidden xl:grid-cols-[420px_minmax(0,1fr)]">
@@ -595,7 +600,7 @@ export default function VideoPage() {
                 }}
             />
             <Drawer title={t("workbench.logs")} placement="bottom" size="large" open={logsOpen} onClose={() => setLogsOpen(false)}>
-                <LogPanel logs={logs} selectedLogIds={selectedLogIds} activeLogId={previewLog?.id} onSelectedLogIdsChange={setSelectedLogIds} onCreateSession={createSession} onDeleteSelected={() => setDeleteConfirmOpen(true)} onPreviewLog={previewGenerationLog} />
+                <LogPanel logs={logs} loading={logsLoading} selectedLogIds={selectedLogIds} activeLogId={previewLog?.id} onSelectedLogIdsChange={setSelectedLogIds} onCreateSession={createSession} onDeleteSelected={() => setDeleteConfirmOpen(true)} onPreviewLog={previewGenerationLog} />
             </Drawer>
             <Drawer title={t("workbench.settings")} placement="bottom" height="82vh" open={settingsOpen} onClose={() => setSettingsOpen(false)}>
                 <div className="grid grid-cols-2 gap-3 pb-4">
@@ -699,6 +704,7 @@ function FailedVideoCard({ error, onRetry }: { error: string; onRetry: () => voi
 
 function LogPanel({
     logs,
+    loading,
     selectedLogIds,
     activeLogId,
     onSelectedLogIdsChange,
@@ -707,6 +713,7 @@ function LogPanel({
     onPreviewLog,
 }: {
     logs: GenerationLog[];
+    loading?: boolean;
     selectedLogIds: string[];
     activeLogId?: string;
     onSelectedLogIdsChange: (ids: string[]) => void;
@@ -746,7 +753,12 @@ function LogPanel({
                 {pagedLogs.map((log) => (
                     <LogCard key={log.id} log={log} selected={selectedLogIds.includes(log.id)} active={activeLogId === log.id} onSelectedChange={(checked) => onSelectedLogIdsChange(checked ? [...selectedLogIds, log.id] : selectedLogIds.filter((id) => id !== log.id))} onClick={() => onPreviewLog(log)} />
                 ))}
-                {!logs.length ? <div className="flex min-h-48 items-center justify-center rounded-lg border border-dashed border-stone-300 text-center text-sm text-stone-500 dark:border-stone-700">{t("workbench.noLogs")}</div> : null}
+                {!logs.length ? (
+                    <div className="flex min-h-48 flex-col items-center justify-center gap-2 rounded-lg border border-dashed border-stone-300 text-center text-sm text-stone-500 dark:border-stone-700">
+                        {loading ? <Spin size="small" /> : null}
+                        <span>{loading ? t("workbench.loadingLogs") : t("workbench.noLogs")}</span>
+                    </div>
+                ) : null}
             </div>
             {logs.length > pageSize ? (
                 <div className="mt-4 flex justify-center">

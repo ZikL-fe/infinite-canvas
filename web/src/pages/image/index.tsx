@@ -1,6 +1,6 @@
 import { ArrowLeft, ArrowRight, BookOpen, CheckSquare, ClipboardPaste, Download, Eye, FolderPlus, History, ImagePlus, LoaderCircle, PenLine, Plus, RotateCcw, SlidersHorizontal, Sparkles, Square, Trash2, Upload } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
-import { App, Button, Checkbox, Drawer, Empty, Image, Input, Modal, Pagination, Segmented, Tag, Tooltip, Typography } from "antd";
+import { App, Button, Checkbox, Drawer, Empty, Image, Input, Modal, Pagination, Segmented, Spin, Tag, Tooltip, Typography } from "antd";
 import localforage from "localforage";
 import { saveAs } from "file-saver";
 import { useTranslation } from "react-i18next";
@@ -111,6 +111,7 @@ export default function ImagePage() {
     const [prompt, setPrompt] = useState("");
     const [references, setReferences] = useState<ReferenceImage[]>([]);
     const [logs, setLogs] = useState<GenerationLog[]>([]);
+    const [logsLoading, setLogsLoading] = useState(true);
     const [logsOpen, setLogsOpen] = useState(false);
     const [settingsOpen, setSettingsOpen] = useState(false);
     const [promptDialogOpen, setPromptDialogOpen] = useState(false);
@@ -244,9 +245,13 @@ export default function ImagePage() {
 
     useEffect(() => {
         const syncAndRefresh = () => {
-            void refreshLogs().then(() => {
-                void syncWorkbenchLogsWithCloud("image", logStore, serializeLog).then(() => refreshLogs());
-            });
+            setLogsLoading(true);
+            void refreshLogs()
+                .then((localLogs) => {
+                    if (localLogs.length > 0) setLogsLoading(false);
+                    return syncWorkbenchLogsWithCloud("image", logStore, serializeLog).then(() => refreshLogs());
+                })
+                .finally(() => setLogsLoading(false));
         };
         syncAndRefresh();
         const handleSessionChanged = () => {
@@ -1271,6 +1276,7 @@ export default function ImagePage() {
                 <aside className="thin-scrollbar hidden min-h-0 overflow-y-auto rounded-lg border border-stone-200 bg-card p-4 shadow-sm dark:border-stone-800 lg:block">
                     <LogPanel
                         logs={logs}
+                        loading={logsLoading}
                         selectedLogIds={selectedLogIds}
                         activeLogId={previewLog?.id}
                         onSelectedLogIdsChange={setSelectedLogIds}
@@ -1741,6 +1747,7 @@ export default function ImagePage() {
             <Drawer title={t("workbench.logs")} placement="bottom" size="large" open={logsOpen} onClose={() => setLogsOpen(false)}>
                 <LogPanel
                     logs={logs}
+                    loading={logsLoading}
                     selectedLogIds={selectedLogIds}
                     activeLogId={previewLog?.id}
                     onSelectedLogIdsChange={setSelectedLogIds}
@@ -1932,6 +1939,7 @@ function updateResultAt(results: GenerationResult[], index: number, next: Partia
 
 function LogPanel({
     logs,
+    loading,
     selectedLogIds,
     activeLogId,
     downloadingSelected,
@@ -1942,6 +1950,7 @@ function LogPanel({
     onPreviewLog,
 }: {
     logs: GenerationLog[];
+    loading?: boolean;
     selectedLogIds: string[];
     activeLogId?: string;
     downloadingSelected?: boolean;
@@ -2004,7 +2013,12 @@ function LogPanel({
                         onClick={() => onPreviewLog(log)}
                     />
                 ))}
-                {!logs.length ? <div className="flex min-h-48 items-center justify-center rounded-lg border border-dashed border-stone-300 text-center text-sm text-stone-500 dark:border-stone-700">{t("workbench.noLogs")}</div> : null}
+                {!logs.length ? (
+                    <div className="flex min-h-48 flex-col items-center justify-center gap-2 rounded-lg border border-dashed border-stone-300 text-center text-sm text-stone-500 dark:border-stone-700">
+                        {loading ? <Spin size="small" /> : null}
+                        <span>{loading ? t("workbench.loadingLogs") : t("workbench.noLogs")}</span>
+                    </div>
+                ) : null}
             </div>
             {logs.length > pageSize ? (
                 <div className="mt-4 flex justify-center">

@@ -456,7 +456,7 @@ export function UserOverviewPanel({ onOpenWallet, onOpenMedia }: { onOpenWallet?
     const user = useUserStore((state) => state.user);
     const [days, setDays] = useState(7);
     const [data, setData] = useState<AccountOverviewResponse | null>(null);
-    const [loading, setLoading] = useState(false);
+    const [loading, setLoading] = useState(true);
 
     const loadOverview = useCallback(
         async (targetDays = days) => {
@@ -606,13 +606,13 @@ export function ProfileSecurityPanel() {
     const setUser = useUserStore((state) => state.setUser);
 
     const [profileData, setProfileData] = useState<AccountProfileResponse | null>(null);
-    const [loading, setLoading] = useState(false);
+    const [loading, setLoading] = useState(true);
     const [savingProfile, setSavingProfile] = useState(false);
     const [changingPassword, setChangingPassword] = useState(false);
     const [savingAlert, setSavingAlert] = useState(false);
     const [passwordMode, setPasswordMode] = useState<"password" | "email">("password");
     const [sessions, setSessions] = useState<AccountSessionItem[]>([]);
-    const [sessionsLoading, setSessionsLoading] = useState(false);
+    const [sessionsLoading, setSessionsLoading] = useState(true);
 
     const bindEmailCodeSender = useEmailCodeSender();
     const changePasswordCodeSender = useEmailCodeSender();
@@ -1809,7 +1809,8 @@ export function MyWalletPanel({ compact = false, onOpenLogs }: { compact?: boole
     const [page, setPage] = useState(1);
     const [pageSize, setPageSize] = useState(compact ? 10 : 20);
     const [summary, setSummary] = useState<CreditLedgerSummary>(emptyLedgerSummary);
-    const [loading, setLoading] = useState(false);
+    const [loading, setLoading] = useState(true);
+    const [initialized, setInitialized] = useState(false);
 
     const [reasonFilter, setReasonFilter] = useState("");
     const [dateRange, setDateRange] = useState<[Dayjs | null, Dayjs | null] | null>(null);
@@ -1843,6 +1844,7 @@ export function MyWalletPanel({ compact = false, onOpenLogs }: { compact?: boole
                 message.error(error instanceof Error ? error.message : t("userPanels.wallet.loadFailed"));
             } finally {
                 setLoading(false);
+                setInitialized(true);
             }
         },
         [dateRange, message, page, pageSize, reasonFilter, setUser, t],
@@ -1881,20 +1883,21 @@ export function MyWalletPanel({ compact = false, onOpenLogs }: { compact?: boole
         setPage(1);
     };
 
-    const creditAlert = resolveCreditAlert(balance, user?.lowBalanceThreshold);
-    const creditAlertCopy = formatCreditAlertCopy(t, creditAlert);
+    const balanceReady = initialized || typeof user?.creditBalance === "number";
+    const creditAlert = balanceReady ? resolveCreditAlert(balance, user?.lowBalanceThreshold) : null;
+    const creditAlertCopy = creditAlert ? formatCreditAlertCopy(t, creditAlert) : null;
 
     return (
         <div className="flex flex-col gap-4">
             {creditAlertCopy ? (
                 <Alert
-                    type={creditAlert.level === "error" ? "error" : "warning"}
+                    type={creditAlert?.level === "error" ? "error" : "warning"}
                     showIcon
                     title={creditAlertCopy.title}
                     description={creditAlertCopy.description}
                 />
             ) : null}
-            <Card size={compact ? "small" : "default"}>
+            <Card size={compact ? "small" : "default"} loading={!initialized && loading}>
                 <div className="flex flex-wrap items-center justify-between gap-4">
                     <div className="flex flex-wrap items-center gap-6">
                         <Tooltip title={t("userPanels.overview.exactBalance", { value: formatExactCredits(balance) })}>
@@ -2113,7 +2116,7 @@ export function UsageLogsPanel({ defaultScope = "self" }: { defaultScope?: "all"
     const [page, setPage] = useState(1);
     const [pageSize, setPageSize] = useState(20);
     const [summary, setSummary] = useState<CreditLedgerSummary>(emptyLedgerSummary);
-    const [loading, setLoading] = useState(false);
+    const [loading, setLoading] = useState(true);
 
     const [reasonFilter, setReasonFilter] = useState("");
     const [statusFilter, setStatusFilter] = useState("");
@@ -2645,7 +2648,8 @@ export function MyMediaPanel() {
     const [q, setQ] = useState("");
     const [kind, setKind] = useState("");
     const [moduleFilter, setModuleFilter] = useState("");
-    const [loading, setLoading] = useState(false);
+    const [loading, setLoading] = useState(true);
+    const [initialized, setInitialized] = useState(false);
     const [usedBytes, setUsedBytes] = useState(user?.storageUsedBytes ?? 0);
     const [quotaBytes, setQuotaBytes] = useState(user?.storageQuotaBytes ?? 0);
     const [quotaExpiresAt, setQuotaExpiresAt] = useState<string | null>(user?.storageQuotaExpiresAt ?? null);
@@ -2710,6 +2714,7 @@ export function MyMediaPanel() {
                 message.error(error instanceof Error ? error.message : t("userPanels.myMedia.loadFailed"));
             } finally {
                 setLoading(false);
+                setInitialized(true);
             }
         },
         [kind, message, moduleFilter, page, pageSize, q, setUser, t],
@@ -2959,19 +2964,21 @@ export function MyMediaPanel() {
         }
     };
 
-    const storageAlert = resolveStorageAlert({
-        usedBytes,
-        quotaBytes,
-        expiresAt: quotaExpiresAt,
-        expiringAt: storageExpiringAt,
-        expiringBytes: storageExpiringBytes,
-        remainingAfterExpiryBytes: storageRemainingAfterExpiryBytes,
-        expiringWillExceed: storageExpiringWillExceed,
-        warningDays: storageWarningDays,
-    });
-    const storageAlertCopy = formatStorageAlertCopy(t, storageAlert, locale);
-    const quotaExpired = storageAlert.expired;
-    const quotaExceeded = storageAlert.expired || storageAlert.overQuota || quotaBytes <= 0;
+    const storageAlert = initialized
+        ? resolveStorageAlert({
+              usedBytes,
+              quotaBytes,
+              expiresAt: quotaExpiresAt,
+              expiringAt: storageExpiringAt,
+              expiringBytes: storageExpiringBytes,
+              remainingAfterExpiryBytes: storageRemainingAfterExpiryBytes,
+              expiringWillExceed: storageExpiringWillExceed,
+              warningDays: storageWarningDays,
+          })
+        : null;
+    const storageAlertCopy = storageAlert ? formatStorageAlertCopy(t, storageAlert, locale) : null;
+    const quotaExpired = Boolean(storageAlert?.expired);
+    const quotaExceeded = Boolean(storageAlert && (storageAlert.expired || storageAlert.overQuota || quotaBytes <= 0));
     const quotaPercent = quotaBytes > 0 ? Math.min(100, Math.round((usedBytes / quotaBytes) * 100)) : 100;
     const baseQuotaExpired = Boolean(baseQuotaExpiresAt && new Date(baseQuotaExpiresAt).getTime() <= Date.now());
     const warnHorizonMs = storageWarningDays > 0 ? Date.now() + storageWarningDays * 86_400_000 : 0;
@@ -2983,7 +2990,7 @@ export function MyMediaPanel() {
 
     return (
         <div className="flex flex-col gap-5">
-            {storageAlertCopy ? (
+            {storageAlertCopy && storageAlert ? (
                 <Alert
                     type={storageAlert.level === "error" ? "error" : "warning"}
                     showIcon
@@ -2993,30 +3000,35 @@ export function MyMediaPanel() {
             ) : null}
 
             <Card
-                title={t("userPanels.myMedia.cardTitle", {
-                    used: formatBytes(usedBytes),
-                    quota: formatBytes(quotaBytes),
-                    expiry:
-                        storagePermanentBytes > 0 && storageTimedBytes > 0 && storageTimedExpiresAt
-                            ? ` · ${formatStorageQuotaCaption(
-                                  t,
-                                  {
-                                      permanentBytes: storagePermanentBytes,
-                                      timedBytes: storageTimedBytes,
-                                      timedExpiresAt: storageTimedExpiresAt,
-                                  },
-                                  locale,
-                              )}`
-                            : quotaExpiresAt
-                              ? t("userPanels.profile.expiryUntil", { time: new Date(quotaExpiresAt).toLocaleString(locale) })
-                              : t("userPanels.profile.expiryNone"),
-                })}
+                loading={!initialized && loading}
+                title={
+                    !initialized && loading
+                        ? t("topNav.cloudStorage")
+                        : t("userPanels.myMedia.cardTitle", {
+                              used: formatBytes(usedBytes),
+                              quota: formatBytes(quotaBytes),
+                              expiry:
+                                  storagePermanentBytes > 0 && storageTimedBytes > 0 && storageTimedExpiresAt
+                                      ? ` · ${formatStorageQuotaCaption(
+                                            t,
+                                            {
+                                                permanentBytes: storagePermanentBytes,
+                                                timedBytes: storageTimedBytes,
+                                                timedExpiresAt: storageTimedExpiresAt,
+                                            },
+                                            locale,
+                                        )}`
+                                      : quotaExpiresAt
+                                        ? t("userPanels.profile.expiryUntil", { time: new Date(quotaExpiresAt).toLocaleString(locale) })
+                                        : t("userPanels.profile.expiryNone"),
+                          })
+                }
                 extra={
-                    quotaExpired ? (
+                    !initialized && loading ? null : quotaExpired ? (
                         <Tag color="red">{t("userPanels.myMedia.quotaExpiredTag")}</Tag>
                     ) : quotaExceeded ? (
                         <Tag color="red">{t("userPanels.myMedia.quotaFullTag")}</Tag>
-                    ) : storageAlert.expiringSoon ? (
+                    ) : storageAlert?.expiringSoon ? (
                         <Tag color="orange">
                             {t("userPanels.myMedia.quotaExpiringSoonTag", {
                                 days: storageAlert.daysLeft ?? 1,

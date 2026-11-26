@@ -1,7 +1,7 @@
 import type { CSSProperties } from "react";
 import { useState } from "react";
-import { App, Dropdown, Modal, Popover, Progress, Tooltip, type MenuProps, theme as antdTheme } from "antd";
-import { AlertTriangle, Coins, HardDrive, Keyboard, LogIn, LogOut, Puzzle, Shield, User } from "lucide-react";
+import { App, Dropdown, Modal, Popover, Progress, Spin, Tooltip, type MenuProps, theme as antdTheme } from "antd";
+import { AlertTriangle, Coins, HardDrive, Keyboard, Loader2, LogIn, LogOut, Puzzle, Shield, User } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
 
@@ -58,27 +58,35 @@ export function UserStatusActions({ variant = "default", onOpenShortcuts, onOpen
     const theme = useThemeStore((state) => state.theme);
     const setTheme = useThemeStore((state) => state.setTheme);
     const user = useUserStore((state) => state.user);
+    const accessToken = useUserStore((state) => state.accessToken);
+    const refreshToken = useUserStore((state) => state.refreshToken);
+    const userLoading = useUserStore((state) => state.userLoading);
+    const userLoaded = useUserStore((state) => state.userLoaded);
     const clearSession = useUserStore((state) => state.clearSession);
 
     const [walletOpen, setWalletOpen] = useState(false);
 
+    const profilePending = Boolean(user && ((userLoading && !userLoaded) || typeof user.creditBalance !== "number"));
+    const sessionPending = Boolean(!user && (accessToken || refreshToken) && userLoading);
     const usedBytes = user?.storageUsedBytes ?? 0;
     const quotaBytes = user?.storageQuotaBytes ?? 0;
     const storagePercent = quotaBytes > 0 ? Math.min(100, Math.round((usedBytes / quotaBytes) * 100)) : usedBytes > 0 ? 100 : 0;
     const locale = i18n.resolvedLanguage as AppLocale;
-    const creditAlert = resolveCreditAlert(user?.creditBalance, user?.lowBalanceThreshold);
-    const storageAlert = resolveStorageAlert({
-        usedBytes,
-        quotaBytes,
-        expiresAt: user?.storageQuotaExpiresAt,
-        expiringAt: user?.storageExpiringAt,
-        expiringBytes: user?.storageExpiringBytes,
-        remainingAfterExpiryBytes: user?.storageRemainingAfterExpiryBytes,
-        expiringWillExceed: user?.storageExpiringWillExceed,
-        warningDays: user?.storageWarningDays,
-    });
-    const creditAlertCopy = formatCreditAlertCopy(t, creditAlert);
-    const storageAlertCopy = formatStorageAlertCopy(t, storageAlert, locale);
+    const creditAlert = profilePending ? { level: "none" as const } : resolveCreditAlert(user?.creditBalance, user?.lowBalanceThreshold);
+    const storageAlert = profilePending
+        ? { level: "none" as const, expired: false, expiringSoon: false, overQuota: false }
+        : resolveStorageAlert({
+              usedBytes,
+              quotaBytes,
+              expiresAt: user?.storageQuotaExpiresAt,
+              expiringAt: user?.storageExpiringAt,
+              expiringBytes: user?.storageExpiringBytes,
+              remainingAfterExpiryBytes: user?.storageRemainingAfterExpiryBytes,
+              expiringWillExceed: user?.storageExpiringWillExceed,
+              warningDays: user?.storageWarningDays,
+          });
+    const creditAlertCopy = profilePending ? null : formatCreditAlertCopy(t, creditAlert);
+    const storageAlertCopy = profilePending ? null : formatStorageAlertCopy(t, storageAlert, locale);
     const topAlertSeverity = maxAlertSeverity(creditAlert.level, storageAlert.level);
 
     const canvasTheme = canvasThemes[theme];
@@ -97,13 +105,17 @@ export function UserStatusActions({ variant = "default", onOpenShortcuts, onOpen
               {
                   key: "credits",
                   icon: <Coins className="size-4" />,
-                  label: t("topNav.walletItem", { balance: formatCompactCredits(user.creditBalance ?? 0) }),
+                  label: profilePending
+                      ? t("topNav.walletItemLoading")
+                      : t("topNav.walletItem", { balance: formatCompactCredits(user.creditBalance ?? 0) }),
                   onClick: () => setWalletOpen(true),
               },
               {
                   key: "storage-quota",
                   icon: <HardDrive className="size-4" />,
-                  label: t("topNav.storageItem", { pair: formatStoragePair(user.storageUsedBytes, user.storageQuotaBytes) }),
+                  label: profilePending
+                      ? t("topNav.storageItemLoading")
+                      : t("topNav.storageItem", { pair: formatStoragePair(user.storageUsedBytes, user.storageQuotaBytes) }),
                   onClick: () => navigate(user.role === "admin" ? "/admin?tab=my-media" : "/console?tab=my-media"),
               },
               {
@@ -179,7 +191,14 @@ export function UserStatusActions({ variant = "default", onOpenShortcuts, onOpen
                                                       : token.colorText,
                                         }}
                                     >
-                                        {formatExactCredits(user.creditBalance ?? 0)}
+                                        {profilePending ? (
+                                            <span className="inline-flex items-center gap-1.5 text-xs font-normal" style={{ color: token.colorTextSecondary }}>
+                                                <Spin size="small" />
+                                                <span>{t("topNav.loading")}</span>
+                                            </span>
+                                        ) : (
+                                            formatExactCredits(user.creditBalance ?? 0)
+                                        )}
                                     </div>
                                     {creditAlertCopy && creditAlert.level !== "none" ? (
                                         <PopoverAlertStrip level={creditAlert.level} text={creditAlertCopy.short} />
@@ -201,7 +220,7 @@ export function UserStatusActions({ variant = "default", onOpenShortcuts, onOpen
                                         </button>
                                     </div>
                                     <div className="mt-1 text-xs font-medium tabular-nums" style={{ color: token.colorText }}>
-                                        {formatStoragePair(user.storageUsedBytes, user.storageQuotaBytes)}
+                                        {profilePending ? t("topNav.loading") : formatStoragePair(user.storageUsedBytes, user.storageQuotaBytes)}
                                     </div>
                                     <Progress
                                         percent={storagePercent}
@@ -253,8 +272,16 @@ export function UserStatusActions({ variant = "default", onOpenShortcuts, onOpen
                             }
                             onClick={() => setWalletOpen(true)}
                         >
-                            <Coins className="size-3.5 shrink-0" />
-                            <span>{t("topNav.creditsBadge", { balance: formatCompactCredits(user.creditBalance ?? 0) })}</span>
+                            {profilePending ? (
+                                <Loader2 className="size-3.5 shrink-0 animate-spin" />
+                            ) : (
+                                <Coins className="size-3.5 shrink-0" />
+                            )}
+                            <span>
+                                {profilePending
+                                    ? t("topNav.creditsLoadingBadge")
+                                    : t("topNav.creditsBadge", { balance: formatCompactCredits(user.creditBalance ?? 0) })}
+                            </span>
                             {topAlertSeverity !== "none" ? (
                                 <span
                                     className="size-1.5 shrink-0 rounded-full"
@@ -263,6 +290,11 @@ export function UserStatusActions({ variant = "default", onOpenShortcuts, onOpen
                             ) : null}
                         </button>
                     </Popover>
+                ) : sessionPending && variant === "default" ? (
+                    <span className="hidden h-7 items-center gap-1 px-2 text-xs text-stone-500 sm:inline-flex dark:text-stone-400">
+                        <Loader2 className="size-3.5 animate-spin" />
+                        <span>{t("topNav.creditsLoadingBadge")}</span>
+                    </span>
                 ) : null}
                 {onOpenShortcuts ? (
                     <button type="button" className={naturalIconClass} style={iconStyle} onClick={onOpenShortcuts} aria-label={t("topNav.shortcuts")} title={t("topNav.shortcuts")}>
@@ -271,10 +303,27 @@ export function UserStatusActions({ variant = "default", onOpenShortcuts, onOpen
                 ) : null}
                 {user ? (
                     <Dropdown menu={{ items: accountMenuItems }} trigger={["click"]} placement="bottomRight">
-                        <button type="button" className={naturalIconClass} style={iconStyle} aria-label={user.displayName || user.username} title={t("topNav.creditsTooltip", { name: user.displayName || user.username, balance: formatExactCredits(user.creditBalance ?? 0) })}>
+                        <button
+                            type="button"
+                            className={naturalIconClass}
+                            style={iconStyle}
+                            aria-label={user.displayName || user.username}
+                            title={
+                                profilePending
+                                    ? `${user.displayName || user.username} · ${t("topNav.loading")}`
+                                    : t("topNav.creditsTooltip", {
+                                          name: user.displayName || user.username,
+                                          balance: formatExactCredits(user.creditBalance ?? 0),
+                                      })
+                            }
+                        >
                             <User className="size-4" />
                         </button>
                     </Dropdown>
+                ) : sessionPending ? (
+                    <span className={naturalIconClass} style={iconStyle} title={t("topNav.loading")}>
+                        <Loader2 className="size-4 animate-spin" />
+                    </span>
                 ) : (
                     <Tooltip title={t("topNav.login")} mouseEnterDelay={0.2}>
                         <button type="button" className={naturalIconClass} style={iconStyle} onClick={() => navigate("/auth")} aria-label={t("topNav.login")}>

@@ -1,4 +1,5 @@
 /** 工作区云端同步与平台运行时配置拉取：管理画布/资产/工作台合并、定时去抖推送及模型渠道自愈同步。 */
+import { useSyncExternalStore } from "react";
 import localforage from "localforage";
 
 import { assetsApi, authApi, canvasApi, runtimeApi } from "@/services/api/server";
@@ -31,7 +32,28 @@ let listenersInitialized = false;
 let applyingRemote = false;
 let syncInFlight: Promise<void> | null = null;
 let syncQueued = false;
+let cloudWorkspaceSyncing = false;
+const cloudSyncListeners = new Set<() => void>();
 let runtimeSyncInFlight: Promise<boolean> | null = null;
+
+function setCloudWorkspaceSyncing(next: boolean) {
+    if (cloudWorkspaceSyncing === next) return;
+    cloudWorkspaceSyncing = next;
+    cloudSyncListeners.forEach((listener) => listener());
+}
+
+/** 订阅云端工作区是否正在同步中（用于在无本地缓存时展示加载态）。 */
+export function useCloudSyncing() {
+    return useSyncExternalStore(
+        (listener) => {
+            cloudSyncListeners.add(listener);
+            return () => {
+                cloudSyncListeners.delete(listener);
+            };
+        },
+        () => cloudWorkspaceSyncing,
+    );
+}
 const projectSaveTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const pendingProjectsToSync = new Map<string, CanvasProject>();
 const deletedProjectIds = new Set<string>();
@@ -314,6 +336,7 @@ export async function syncCloudWorkspace() {
         return syncInFlight;
     }
 
+    setCloudWorkspaceSyncing(true);
     syncInFlight = (async () => {
         try {
             await Promise.all([
@@ -409,6 +432,8 @@ export async function syncCloudWorkspace() {
             if (syncQueued) {
                 syncQueued = false;
                 void syncCloudWorkspace();
+            } else {
+                setCloudWorkspaceSyncing(false);
             }
         }
     })();
