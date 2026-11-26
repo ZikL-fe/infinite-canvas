@@ -294,6 +294,7 @@ export type RedeemCodeRedemption = {
 export type RedeemCodeItem = {
     id: string;
     code: string;
+    name: string;
     kind: RedeemCodeKind;
     credits: number;
     storageQuotaBytes: number;
@@ -1145,10 +1146,11 @@ export const adminApi = {
     },
     deleteWorkspaceData: (kind: "canvas" | "image_workbench" | "video_workbench", id: string) =>
         requestServer<{ ok: boolean; deletedMediaCount?: number }>(`/admin/workspace-data/${encodeURIComponent(kind)}/${encodeURIComponent(id)}`, { method: "DELETE" }),
-    listRedeemCodes: (params?: { q?: string; status?: string; kind?: RedeemCodeKind | ""; page?: number; pageSize?: number }) => {
+    listRedeemCodes: (params?: { q?: string; status?: string; used?: string; kind?: RedeemCodeKind | ""; page?: number; pageSize?: number }) => {
         const query = new URLSearchParams();
         if (params?.q) query.set("q", params.q);
         if (params?.status) query.set("status", params.status);
+        if (params?.used) query.set("used", params.used);
         if (params?.kind) query.set("kind", params.kind);
         if (params?.page) query.set("page", String(params.page));
         if (params?.pageSize) query.set("pageSize", String(params.pageSize));
@@ -1156,6 +1158,7 @@ export const adminApi = {
         return requestServer<{ items: RedeemCodeItem[]; total: number; page: number; pageSize: number }>(`/admin/redeem-codes${suffix}`);
     },
     createRedeemCodes: (payload: {
+        name: string;
         kind: RedeemCodeKind;
         count: number;
         credits?: number;

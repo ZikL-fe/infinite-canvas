@@ -185,6 +185,7 @@ export function ensureSchemaReady() {
           CREATE TABLE IF NOT EXISTS redeem_codes (
             id text PRIMARY KEY,
             code text NOT NULL UNIQUE,
+            name text NOT NULL DEFAULT '',
             kind text NOT NULL DEFAULT 'credits',
             credits double precision NOT NULL DEFAULT 0,
             storage_quota_bytes bigint NOT NULL DEFAULT 0,
@@ -244,6 +245,7 @@ export function ensureSchemaReady() {
             updated_at timestamptz NOT NULL DEFAULT now()
           )
         `,
+        sqlClient`ALTER TABLE redeem_codes ADD COLUMN IF NOT EXISTS name text NOT NULL DEFAULT ''`,
         sqlClient`ALTER TABLE redeem_codes ADD COLUMN IF NOT EXISTS kind text NOT NULL DEFAULT 'credits'`,
         sqlClient`ALTER TABLE redeem_codes ADD COLUMN IF NOT EXISTS storage_quota_bytes bigint NOT NULL DEFAULT 0`,
         sqlClient`ALTER TABLE redeem_codes ADD COLUMN IF NOT EXISTS storage_duration_days integer`,

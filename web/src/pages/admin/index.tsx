@@ -97,6 +97,7 @@ type UserStorageQuotaForm = {
 };
 
 type CreateRedeemForm = {
+    name: string;
     kind: RedeemCodeKind;
     count: number;
     credits: number;
@@ -284,6 +285,7 @@ export default function AdminPage() {
     const [redeemPageSize, setRedeemPageSize] = useState(20);
     const [redeemQuery, setRedeemQuery] = useState("");
     const [redeemStatusFilter, setRedeemStatusFilter] = useState("");
+    const [redeemUsedFilter, setRedeemUsedFilter] = useState("");
     const [redeemActiveKind, setRedeemActiveKind] = useState<RedeemCodeKind>("credits");
     const [selectedRedeemIds, setSelectedRedeemIds] = useState<string[]>([]);
     const [batchDeletingRedeem, setBatchDeletingRedeem] = useState(false);
@@ -465,10 +467,17 @@ export default function AdminPage() {
     }, [analyticsForm, mailForm, message, storageExpiryForm, t, webdavForm]);
 
     const loadRedeemCodes = useCallback(
-        async (page = redeemPage, q = redeemQuery, status = redeemStatusFilter, kind = redeemActiveKind, pageSize = redeemPageSize) => {
+        async (
+            page = redeemPage,
+            q = redeemQuery,
+            status = redeemStatusFilter,
+            used = redeemUsedFilter,
+            kind = redeemActiveKind,
+            pageSize = redeemPageSize,
+        ) => {
             setRedeemLoading(true);
             try {
-                const res = await adminApi.listRedeemCodes({ page, pageSize, q, status, kind });
+                const res = await adminApi.listRedeemCodes({ page, pageSize, q, status, used, kind });
                 setRedeemItems(res.items);
                 setRedeemTotal(res.total);
             } catch (error) {
@@ -477,7 +486,7 @@ export default function AdminPage() {
                 setRedeemLoading(false);
             }
         },
-        [message, redeemActiveKind, redeemPage, redeemPageSize, redeemQuery, redeemStatusFilter, t],
+        [message, redeemActiveKind, redeemPage, redeemPageSize, redeemQuery, redeemStatusFilter, redeemUsedFilter, t],
     );
 
     const loadAnnouncements = useCallback(async () => {
@@ -549,8 +558,8 @@ export default function AdminPage() {
 
     useEffect(() => {
         if (!isAdmin || activeTab !== "redeem-codes") return;
-        void loadRedeemCodes(redeemPage, redeemQuery, redeemStatusFilter, redeemActiveKind);
-    }, [activeTab, isAdmin, loadRedeemCodes, redeemActiveKind, redeemPage, redeemQuery, redeemStatusFilter]);
+        void loadRedeemCodes(redeemPage, redeemQuery, redeemStatusFilter, redeemUsedFilter, redeemActiveKind);
+    }, [activeTab, isAdmin, loadRedeemCodes, redeemActiveKind, redeemPage, redeemQuery, redeemStatusFilter, redeemUsedFilter]);
 
     useEffect(() => {
         if (!isAdmin || activeTab !== "settings-announcements") return;
@@ -871,6 +880,7 @@ export default function AdminPage() {
         try {
             const kind = values.kind || redeemActiveKind;
             const res = await adminApi.createRedeemCodes({
+                name: values.name.trim(),
                 kind,
                 count: Number(values.count || 1),
                 ...(kind === "credits"
@@ -897,7 +907,7 @@ export default function AdminPage() {
                 setRedeemPage(1);
                 setRedeemActiveKind(kind);
             } else {
-                void loadRedeemCodes(1, redeemQuery, redeemStatusFilter, kind);
+                void loadRedeemCodes(1, redeemQuery, redeemStatusFilter, redeemUsedFilter, kind);
             }
         } catch (error) {
             message.error(error instanceof Error ? error.message : t("admin.messages.redeemCreateFailed"));
@@ -1628,6 +1638,7 @@ export default function AdminPage() {
                                     />
                                     <Table<AdminChannelItem>
                                         rowKey="id"
+                                        size="small"
                                         className={ADMIN_TABLE_CLASS}
                                         scroll={ADMIN_TABLE_SCROLL}
                                         dataSource={channels}
@@ -1635,42 +1646,54 @@ export default function AdminPage() {
                                         columns={[
                                             {
                                                 title: t("admin.channelsTab.colName"),
-                                                key: "name",
-                                                width: 260,
-                                                render: (_, record) => (
-                                                    <div className="max-w-[240px]">
-                                                        <div className="truncate font-medium">{record.name}</div>
-                                                        <Typography.Text type="secondary" ellipsis={{ tooltip: record.baseUrl }} className="block text-xs">
-                                                            {record.baseUrl || t("admin.channelsTab.noBaseUrl")}
-                                                        </Typography.Text>
-                                                    </div>
+                                                dataIndex: "name",
+                                                width: 170,
+                                                ellipsis: true,
+                                                render: (name: string) => <span className="font-medium">{name}</span>,
+                                            },
+                                            {
+                                                title: t("admin.channelsTab.colBaseUrl"),
+                                                dataIndex: "baseUrl",
+                                                width: 220,
+                                                render: (baseUrl: string) => (
+                                                    <Typography.Text type="secondary" ellipsis={{ tooltip: baseUrl }} className="block max-w-[205px] text-xs">
+                                                        {baseUrl || t("admin.channelsTab.noBaseUrl")}
+                                                    </Typography.Text>
                                                 ),
                                             },
                                             {
                                                 title: t("admin.channelsTab.colFormat"),
                                                 dataIndex: "apiFormat",
-                                                width: 90,
-                                                render: (fmt: string) => <Tag>{fmt === "gemini" ? "Gemini" : "OpenAI"}</Tag>,
+                                                width: 88,
+                                                render: (fmt: string) => <Tag style={{ marginInlineEnd: 0 }}>{fmt === "gemini" ? "Gemini" : "OpenAI"}</Tag>,
                                             },
                                             {
                                                 title: t("admin.channelsTab.colKeyStatus"),
                                                 key: "apiKey",
-                                                width: 140,
+                                                width: 135,
                                                 render: (_, record) =>
-                                                    record.hasApiKey ? <Tag color="green">{record.apiKeyPreview}</Tag> : <Tag color="red">{t("admin.channelsTab.noKey")}</Tag>,
+                                                    record.hasApiKey ? (
+                                                        <Tag color="green" style={{ marginInlineEnd: 0 }}>
+                                                            {record.apiKeyPreview}
+                                                        </Tag>
+                                                    ) : (
+                                                        <Tag color="red" style={{ marginInlineEnd: 0 }}>
+                                                            {t("admin.channelsTab.noKey")}
+                                                        </Tag>
+                                                    ),
                                             },
                                             {
                                                 title: t("admin.channelsTab.colModels"),
                                                 key: "models",
-                                                width: 85,
+                                                width: 80,
                                                 render: (_, record) => t("admin.channelsTab.modelsCount", { count: record.models.length }),
                                             },
                                             {
                                                 title: t("admin.channelsTab.colEnabled"),
                                                 dataIndex: "enabled",
-                                                width: 80,
+                                                width: 72,
                                                 render: (enabled: boolean, record) => (
-                                                    <Switch checked={enabled} loading={channelsSaving} onChange={(checked) => void handleToggleChannelEnabled(record.id, checked)} />
+                                                    <Switch size="small" checked={enabled} loading={channelsSaving} onChange={(checked) => void handleToggleChannelEnabled(record.id, checked)} />
                                                 ),
                                             },
                                             {
@@ -1756,7 +1779,7 @@ export default function AdminPage() {
                                             <Input.Search
                                                 allowClear
                                                 placeholder={t("admin.usersTab.searchPlaceholder")}
-                                                className="w-full! sm:w-[220px]!"
+                                                className="w-full! sm:w-[250px]!"
                                                 onSearch={(value) => {
                                                     setUsersPage(1);
                                                     setUserQuery(value.trim());
@@ -1767,6 +1790,7 @@ export default function AdminPage() {
                                 >
                                     <Table<AdminUserItem>
                                         rowKey="id"
+                                        size="small"
                                         className={ADMIN_TABLE_CLASS}
                                         scroll={ADMIN_TABLE_SCROLL}
                                         loading={usersLoading}
@@ -1789,34 +1813,72 @@ export default function AdminPage() {
                                         }}
                                         columns={[
                                             {
-                                                title: t("admin.usersTab.colAccount"),
-                                                key: "account",
-                                                width: 220,
-                                                render: (_, record) => (
-                                                    <div className="max-w-[200px]">
-                                                        <div className="truncate font-medium">
-                                                            <button
-                                                                type="button"
-                                                                className="cursor-pointer border-0 bg-transparent p-0 text-left font-medium hover:underline"
-                                                                onClick={() => setDetailUserId(record.id)}
-                                                            >
-                                                                {record.displayName || record.username}
-                                                            </button>
-                                                            {record.id === user.id ? <Tag className="ml-2">{t("admin.usersTab.currentTag")}</Tag> : null}
-                                                        </div>
-                                                        <Typography.Text type="secondary" ellipsis className="block text-xs">
-                                                            @{record.username}
-                                                            {record.email ? ` · ${record.email}` : ""}
+                                                title: t("admin.usersTab.colUserId"),
+                                                dataIndex: "id",
+                                                width: 210,
+                                                render: (id: string) => (
+                                                    <Space size={4}>
+                                                        <Typography.Text type="secondary" code className="text-xs">
+                                                            {id}
                                                         </Typography.Text>
+                                                        <Button
+                                                            size="small"
+                                                            type="text"
+                                                            icon={<Copy className="size-3" />}
+                                                            className="!h-5 !w-5 !min-w-0 !p-0"
+                                                            onClick={() => copyText(id, t("admin.redeemTab.copiedUserId"))}
+                                                        />
+                                                    </Space>
+                                                ),
+                                            },
+                                            {
+                                                title: t("admin.usersTab.colAccount"),
+                                                key: "displayName",
+                                                width: 145,
+                                                render: (_, record) => (
+                                                    <div className="flex max-w-[135px] items-center gap-1.5">
+                                                        <button
+                                                            type="button"
+                                                            className="cursor-pointer truncate border-0 bg-transparent p-0 text-left font-medium hover:underline"
+                                                            onClick={() => setDetailUserId(record.id)}
+                                                        >
+                                                            {record.displayName || record.username}
+                                                        </button>
+                                                        {record.id === user.id ? (
+                                                            <Tag style={{ marginInlineEnd: 0 }}>{t("admin.usersTab.currentTag")}</Tag>
+                                                        ) : null}
                                                     </div>
                                                 ),
                                             },
                                             {
+                                                title: t("admin.usersTab.colUsername"),
+                                                dataIndex: "username",
+                                                width: 120,
+                                                render: (username: string) => (
+                                                    <Typography.Text type="secondary" className="block max-w-[110px] truncate text-xs">
+                                                        @{username}
+                                                    </Typography.Text>
+                                                ),
+                                            },
+                                            {
+                                                title: t("admin.usersTab.colEmail"),
+                                                dataIndex: "email",
+                                                width: 170,
+                                                render: (email?: string | null) =>
+                                                    email ? (
+                                                        <Typography.Text type="secondary" ellipsis={{ tooltip: email }} className="block max-w-[155px] text-xs">
+                                                            {email}
+                                                        </Typography.Text>
+                                                    ) : (
+                                                        <Typography.Text type="secondary">—</Typography.Text>
+                                                    ),
+                                            },
+                                            {
                                                 title: t("admin.usersTab.colRole"),
                                                 dataIndex: "role",
-                                                width: 90,
+                                                width: 85,
                                                 render: (role: string) => (
-                                                    <Tag color={role === "admin" ? "blue" : "default"}>
+                                                    <Tag color={role === "admin" ? "blue" : "default"} style={{ marginInlineEnd: 0 }}>
                                                         {role === "admin" ? t("admin.usersTab.roleAdmin") : t("admin.usersTab.roleUser")}
                                                     </Tag>
                                                 ),
@@ -1824,9 +1886,9 @@ export default function AdminPage() {
                                             {
                                                 title: t("admin.usersTab.colStatus"),
                                                 dataIndex: "status",
-                                                width: 80,
+                                                width: 78,
                                                 render: (status: string) => (
-                                                    <Tag color={status === "active" ? "green" : "red"}>
+                                                    <Tag color={status === "active" ? "green" : "red"} style={{ marginInlineEnd: 0 }}>
                                                         {status === "active" ? t("admin.usersTab.statusActive") : t("admin.usersTab.statusDisabled")}
                                                     </Tag>
                                                 ),
@@ -1834,61 +1896,74 @@ export default function AdminPage() {
                                             {
                                                 title: t("admin.usersTab.colCredits"),
                                                 dataIndex: "creditBalance",
-                                                width: 105,
+                                                width: 95,
                                                 render: (balance?: number) => (
                                                     <Tooltip title={t("admin.usersTab.exactBalanceTip", { value: formatExactCredits(balance ?? 0) })}>
-                                                        <Tag color="gold">{formatCompactCredits(balance ?? 0)}</Tag>
+                                                        <Tag color="gold" style={{ marginInlineEnd: 0 }}>
+                                                            {formatCompactCredits(balance ?? 0)}
+                                                        </Tag>
                                                     </Tooltip>
                                                 ),
                                             },
                                             {
-                                                title: t("admin.usersTab.colCanvasMedia"),
-                                                key: "counts",
-                                                width: 100,
-                                                render: (_, record) => `${record.projectCount ?? 0} / ${record.mediaCount ?? 0}`,
+                                                title: t("admin.usersTab.colCanvasCount"),
+                                                dataIndex: "projectCount",
+                                                width: 68,
+                                                render: (v?: number) => <span className="tabular-nums">{v ?? 0}</span>,
                                             },
                                             {
-                                                title: t("admin.usersTab.colStorageQuota"),
-                                                key: "storageQuota",
-                                                width: 205,
+                                                title: t("admin.usersTab.colMediaCount"),
+                                                dataIndex: "mediaCount",
+                                                width: 68,
+                                                render: (v?: number) => <span className="tabular-nums">{v ?? 0}</span>,
+                                            },
+                                            {
+                                                title: t("admin.usersTab.colUsedStorage"),
+                                                dataIndex: "storageUsedBytes",
+                                                width: 95,
+                                                render: (used?: number) => <span className="whitespace-nowrap tabular-nums">{formatBytes(used ?? 0)}</span>,
+                                            },
+                                            {
+                                                title: t("admin.usersTab.colQuotaLimit"),
+                                                key: "storageQuotaLimit",
+                                                width: 135,
                                                 render: (_, record) => {
                                                     const used = record.storageUsedBytes ?? 0;
                                                     const quota = record.storageQuotaBytes ?? 0;
                                                     const expired = Boolean(record.storageQuotaExpiresAt && new Date(record.storageQuotaExpiresAt).getTime() <= Date.now());
                                                     const exceeded = expired || quota <= 0 || used >= quota;
                                                     return (
-                                                        <div className="flex w-[180px] flex-col gap-0.5">
-                                                            <div className="flex items-center gap-1.5">
-                                                                <span className="text-xs font-medium">
-                                                                    {formatBytes(used)} / {formatBytes(quota)}
-                                                                </span>
-                                                                {expired ? (
-                                                                    <Tag color="red" style={{ marginInlineEnd: 0 }}>
-                                                                        {t("admin.usersTab.expiredTag")}
-                                                                    </Tag>
-                                                                ) : exceeded ? (
-                                                                    <Tag color="red" style={{ marginInlineEnd: 0 }}>
-                                                                        {quota <= 0 ? "0MB" : t("admin.usersTab.fullTag")}
-                                                                    </Tag>
-                                                                ) : null}
-                                                            </div>
-                                                            <Progress
-                                                                percent={quota > 0 ? Math.min(100, Math.round((used / quota) * 100)) : 100}
-                                                                size="small"
-                                                                showInfo={false}
-                                                                status={exceeded ? "exception" : "normal"}
-                                                            />
-                                                            <Typography.Text type="secondary" className="text-[11px]">
-                                                                {record.storageQuotaExpiresAt
-                                                                    ? t("admin.usersTab.untilDate", {
-                                                                          date: new Date(record.storageQuotaExpiresAt).toLocaleDateString(locale),
-                                                                      })
-                                                                    : t("admin.usersTab.permanent")}
-                                                                {record.activeGrantCount
-                                                                    ? t("admin.usersTab.activeGrantsSuffix", { count: record.activeGrantCount })
-                                                                    : ""}
-                                                            </Typography.Text>
-                                                        </div>
+                                                        <span className="inline-flex items-center gap-1.5 whitespace-nowrap">
+                                                            <span className="tabular-nums">{formatBytes(quota)}</span>
+                                                            {expired ? (
+                                                                <Tag color="red" style={{ marginInlineEnd: 0 }}>
+                                                                    {t("admin.usersTab.expiredTag")}
+                                                                </Tag>
+                                                            ) : exceeded ? (
+                                                                <Tag color="red" style={{ marginInlineEnd: 0 }}>
+                                                                    {quota <= 0 ? "0MB" : t("admin.usersTab.fullTag")}
+                                                                </Tag>
+                                                            ) : null}
+                                                        </span>
+                                                    );
+                                                },
+                                            },
+                                            {
+                                                title: t("admin.usersTab.colQuotaExpiry"),
+                                                key: "storageExpiry",
+                                                width: 145,
+                                                render: (_, record) => {
+                                                    const expirySummary = `${
+                                                        record.storageQuotaExpiresAt
+                                                            ? t("admin.usersTab.untilDate", {
+                                                                  date: new Date(record.storageQuotaExpiresAt).toLocaleDateString(locale),
+                                                              })
+                                                            : t("admin.usersTab.permanent")
+                                                    }${record.activeGrantCount ? t("admin.usersTab.activeGrantsSuffix", { count: record.activeGrantCount }) : ""}`;
+                                                    return (
+                                                        <Typography.Text type="secondary" ellipsis={{ tooltip: expirySummary }} className="block max-w-[135px] text-xs">
+                                                            {expirySummary}
+                                                        </Typography.Text>
                                                     );
                                                 },
                                             },
@@ -1983,14 +2058,30 @@ export default function AdminPage() {
                                                     }}
                                                     options={[
                                                         { value: "", label: t("admin.redeemTab.allStatuses") },
-                                                        { value: "active", label: t("admin.redeemTab.statusActive") },
+                                                        { value: "available", label: t("admin.redeemTab.statusAvailable") },
+                                                        { value: "used", label: t("admin.redeemTab.statusUsed") },
                                                         { value: "disabled", label: t("admin.redeemTab.statusDisabled") },
+                                                        { value: "expired", label: t("admin.redeemTab.statusExpired") },
+                                                    ]}
+                                                />
+                                                <Select
+                                                    value={redeemUsedFilter}
+                                                    className="min-w-[120px] flex-1 sm:w-[130px]! sm:flex-none"
+                                                    onChange={(value) => {
+                                                        setRedeemPage(1);
+                                                        setSelectedRedeemIds([]);
+                                                        setRedeemUsedFilter(value);
+                                                    }}
+                                                    options={[
+                                                        { value: "", label: t("admin.redeemTab.allUsed") },
+                                                        { value: "unused", label: t("admin.redeemTab.usedUnused") },
+                                                        { value: "used", label: t("admin.redeemTab.usedUsed") },
                                                     ]}
                                                 />
                                                 <Input.Search
                                                     allowClear
                                                     placeholder={t("admin.redeemTab.searchPlaceholder")}
-                                                    className="w-full! sm:w-[200px]!"
+                                                    className="w-full! sm:w-[220px]!"
                                                     onSearch={(value) => {
                                                         setRedeemPage(1);
                                                         setSelectedRedeemIds([]);
@@ -2002,6 +2093,7 @@ export default function AdminPage() {
                                                     icon={<Plus className="size-4" />}
                                                     onClick={() => {
                                                         createRedeemForm.setFieldsValue({
+                                                            name: "",
                                                             kind: redeemActiveKind,
                                                             count: 1,
                                                             credits: 100,
@@ -2075,6 +2167,7 @@ export default function AdminPage() {
 
                                         <Table<RedeemCodeItem>
                                             rowKey="id"
+                                            size="small"
                                             className={ADMIN_TABLE_CLASS}
                                             scroll={ADMIN_TABLE_SCROLL}
                                             loading={redeemLoading}
@@ -2102,78 +2195,138 @@ export default function AdminPage() {
                                             }}
                                             columns={[
                                                 {
+                                                    title: t("admin.redeemTab.colName"),
+                                                    dataIndex: "name",
+                                                    width: 150,
+                                                    render: (name: string) =>
+                                                        name ? (
+                                                            <Typography.Text ellipsis={{ tooltip: name }} className="block max-w-[135px] font-medium">
+                                                                {name}
+                                                            </Typography.Text>
+                                                        ) : (
+                                                            <Typography.Text type="secondary">—</Typography.Text>
+                                                        ),
+                                                },
+                                                {
                                                     title: t("admin.redeemTab.colCode"),
                                                     dataIndex: "code",
-                                                    width: 210,
+                                                    width: 280,
                                                     render: (code: string) => (
                                                         <Space size={4}>
                                                             <Typography.Text code>{code}</Typography.Text>
-                                                            <Button size="small" type="text" icon={<Copy className="size-3.5" />} onClick={() => copyText(code)} />
+                                                            <Button size="small" type="text" icon={<Copy className="size-3.5" />} className="!h-5 !w-5 !min-w-0 !p-0" onClick={() => copyText(code)} />
                                                         </Space>
                                                     ),
                                                 },
                                                 {
                                                     title: t("admin.redeemTab.colReward"),
                                                     key: "reward",
-                                                    width: 185,
+                                                    width: 165,
                                                     render: (_, record) =>
                                                         record.kind === "storage" ? (
-                                                            <Tag color="cyan">
+                                                            <Tag color="cyan" style={{ marginInlineEnd: 0 }}>
                                                                 +{formatBytes(record.storageQuotaBytes)}
                                                                 {record.storageDurationDays
                                                                     ? t("admin.redeemTab.rewardDays", { days: record.storageDurationDays })
                                                                     : t("admin.redeemTab.rewardPermanent")}
                                                             </Tag>
                                                         ) : (
-                                                            <Tag color="gold">{t("admin.redeemTab.rewardCredits", { credits: record.credits })}</Tag>
+                                                            <Tag color="gold" style={{ marginInlineEnd: 0 }}>
+                                                                {t("admin.redeemTab.rewardCredits", { credits: record.credits })}
+                                                            </Tag>
                                                         ),
                                                 },
                                                 {
                                                     title: t("admin.redeemTab.colState"),
                                                     key: "state",
-                                                    width: 90,
+                                                    width: 85,
                                                     render: (_, record) => {
-                                                        if (record.usedCount > 0 || record.usedCount >= record.maxUses) return <Tag color="orange">{t("admin.redeemTab.stateUsed")}</Tag>;
-                                                        if (record.status === "disabled") return <Tag color="default">{t("admin.redeemTab.stateDisabled")}</Tag>;
-                                                        if (record.expiresAt && new Date(record.expiresAt).getTime() <= Date.now()) return <Tag color="red">{t("admin.redeemTab.stateExpired")}</Tag>;
-                                                        return <Tag color="green">{t("admin.redeemTab.stateAvailable")}</Tag>;
-                                                    },
-                                                },
-                                                {
-                                                    title: t("admin.redeemTab.colRedemption"),
-                                                    key: "redemption",
-                                                    width: 250,
-                                                    render: (_, record) => {
-                                                        const r = record.redemption;
-                                                        if (!r) return <Typography.Text type="secondary">—</Typography.Text>;
+                                                        if (record.usedCount > 0 || record.usedCount >= record.maxUses) {
+                                                            return (
+                                                                <Tag color="orange" style={{ marginInlineEnd: 0 }}>
+                                                                    {t("admin.redeemTab.stateUsed")}
+                                                                </Tag>
+                                                            );
+                                                        }
+                                                        if (record.status === "disabled") {
+                                                            return (
+                                                                <Tag color="default" style={{ marginInlineEnd: 0 }}>
+                                                                    {t("admin.redeemTab.stateDisabled")}
+                                                                </Tag>
+                                                            );
+                                                        }
+                                                        if (record.expiresAt && new Date(record.expiresAt).getTime() <= Date.now()) {
+                                                            return (
+                                                                <Tag color="red" style={{ marginInlineEnd: 0 }}>
+                                                                    {t("admin.redeemTab.stateExpired")}
+                                                                </Tag>
+                                                            );
+                                                        }
                                                         return (
-                                                            <div className="flex flex-col text-xs leading-5">
-                                                                <div className="flex items-center gap-1.5">
-                                                                    <span className="font-medium">{r.username || r.displayName || t("admin.redeemTab.unknownUser")}</span>
-                                                                    <Typography.Text type="secondary" code className="text-[11px]">
-                                                                        {r.userId}
-                                                                    </Typography.Text>
-                                                                    <Button size="small" type="text" icon={<Copy className="size-3" />} onClick={() => copyText(r.userId, t("admin.redeemTab.copiedUserId"))} />
-                                                                </div>
-                                                                <Typography.Text type="secondary" className="text-[11px]">
-                                                                    {new Date(r.redeemedAt).toLocaleString(locale)}
-                                                                </Typography.Text>
-                                                            </div>
+                                                            <Tag color="green" style={{ marginInlineEnd: 0 }}>
+                                                                {t("admin.redeemTab.stateAvailable")}
+                                                            </Tag>
                                                         );
                                                     },
                                                 },
                                                 {
+                                                    title: t("admin.redeemTab.colRedeemUser"),
+                                                    key: "redeemUser",
+                                                    width: 120,
+                                                    render: (_, record) =>
+                                                        record.redemption ? (
+                                                            <span className="font-medium">
+                                                                {record.redemption.username || record.redemption.displayName || t("admin.redeemTab.unknownUser")}
+                                                            </span>
+                                                        ) : (
+                                                            <Typography.Text type="secondary">—</Typography.Text>
+                                                        ),
+                                                },
+                                                {
+                                                    title: t("admin.redeemTab.colRedeemUserId"),
+                                                    key: "redeemUserId",
+                                                    width: 215,
+                                                    render: (_, record) =>
+                                                        record.redemption ? (
+                                                            <Space size={4}>
+                                                                <Typography.Text type="secondary" code className="text-xs">
+                                                                    {record.redemption.userId}
+                                                                </Typography.Text>
+                                                                <Button
+                                                                    size="small"
+                                                                    type="text"
+                                                                    icon={<Copy className="size-3" />}
+                                                                    className="!h-5 !w-5 !min-w-0 !p-0"
+                                                                    onClick={() => copyText(record.redemption!.userId, t("admin.redeemTab.copiedUserId"))}
+                                                                />
+                                                            </Space>
+                                                        ) : (
+                                                            <Typography.Text type="secondary">—</Typography.Text>
+                                                        ),
+                                                },
+                                                {
+                                                    title: t("admin.redeemTab.colRedeemTime"),
+                                                    key: "redeemTime",
+                                                    width: 160,
+                                                    render: (_, record) =>
+                                                        record.redemption ? (
+                                                            new Date(record.redemption.redeemedAt).toLocaleString(locale)
+                                                        ) : (
+                                                            <Typography.Text type="secondary">—</Typography.Text>
+                                                        ),
+                                                },
+                                                {
                                                     title: t("admin.redeemTab.colExpiresAt"),
                                                     dataIndex: "expiresAt",
-                                                    width: 170,
+                                                    width: 160,
                                                     render: (v?: string | null) => (v ? new Date(v).toLocaleString(locale) : t("admin.redeemTab.neverExpires")),
                                                 },
                                                 {
                                                     title: t("admin.redeemTab.colNote"),
                                                     dataIndex: "note",
-                                                    width: 180,
+                                                    width: 160,
                                                     render: (v: string) => (
-                                                        <Typography.Text ellipsis={{ tooltip: v || "—" }} className="block max-w-[160px]">
+                                                        <Typography.Text ellipsis={{ tooltip: v || "—" }} className="block max-w-[145px]">
                                                             {v || "—"}
                                                         </Typography.Text>
                                                     ),
@@ -2317,6 +2470,7 @@ export default function AdminPage() {
                                                 children: (
                                                     <Table<MediaItem>
                                                         rowKey="id"
+                                                        size="small"
                                                         className={ADMIN_TABLE_CLASS}
                                                         scroll={ADMIN_TABLE_SCROLL}
                                                         loading={mediaLoading}
@@ -2339,50 +2493,61 @@ export default function AdminPage() {
                                                         }}
                                                         columns={[
                                                             {
-                                                                title: t("admin.mediaTab.colPreviewPath"),
+                                                                title: t("admin.mediaTab.colPreview"),
                                                                 key: "preview",
-                                                                width: 300,
-                                                                render: (_, record) => (
-                                                                    <div className="flex max-w-[280px] items-center gap-3">
-                                                                        {record.thumbnailUrl ? (
-                                                                            <img src={record.thumbnailUrl} alt={record.objectKey} className="size-10 shrink-0 rounded object-cover" />
-                                                                        ) : (
-                                                                            <div className="flex size-10 shrink-0 items-center justify-center rounded bg-black/5 text-stone-400 dark:bg-white/10">
-                                                                                {record.kind === "video" ? <Video className="size-4" /> : record.kind === "audio" ? <AudioLines className="size-4" /> : record.kind === "image" ? <ImageIcon className="size-4" /> : <FileIcon className="size-4" />}
-                                                                            </div>
-                                                                        )}
-                                                                        <div className="min-w-0">
-                                                                            <div className="truncate font-mono text-xs">{record.objectKey}</div>
-                                                                            <Typography.Text type="secondary" className="block truncate text-xs">
-                                                                                {record.mimeType}
-                                                                            </Typography.Text>
+                                                                width: 64,
+                                                                render: (_, record) =>
+                                                                    record.thumbnailUrl ? (
+                                                                        <img src={record.thumbnailUrl} alt={record.objectKey} className="size-8 shrink-0 rounded object-cover" />
+                                                                    ) : (
+                                                                        <div className="flex size-8 shrink-0 items-center justify-center rounded bg-black/5 text-stone-400 dark:bg-white/10">
+                                                                            {record.kind === "video" ? <Video className="size-4" /> : record.kind === "audio" ? <AudioLines className="size-4" /> : record.kind === "image" ? <ImageIcon className="size-4" /> : <FileIcon className="size-4" />}
                                                                         </div>
-                                                                    </div>
+                                                                    ),
+                                                            },
+                                                            {
+                                                                title: t("admin.mediaTab.colObjectKey"),
+                                                                dataIndex: "objectKey",
+                                                                width: 220,
+                                                                render: (objectKey: string) => (
+                                                                    <Typography.Text ellipsis={{ tooltip: objectKey }} className="block max-w-[205px] font-mono text-xs">
+                                                                        {objectKey}
+                                                                    </Typography.Text>
                                                                 ),
                                                             },
-                                                            { title: t("admin.mediaTab.colOwner"), dataIndex: "username", width: 120 },
+                                                            { title: t("admin.mediaTab.colOwner"), dataIndex: "username", width: 110, ellipsis: true },
                                                             {
                                                                 title: t("admin.mediaTab.colModule"),
                                                                 key: "modules",
-                                                                width: 170,
+                                                                width: 155,
                                                                 render: (_, record) => <MediaModuleTags modules={record.modules} />,
                                                             },
                                                             {
                                                                 title: t("admin.mediaTab.colKind"),
                                                                 dataIndex: "kind",
-                                                                width: 85,
-                                                                render: (kind: string) => <Tag>{getKindLabel(kind, t)}</Tag>,
+                                                                width: 80,
+                                                                render: (kind: string) => <Tag style={{ marginInlineEnd: 0 }}>{getKindLabel(kind, t)}</Tag>,
+                                                            },
+                                                            {
+                                                                title: t("admin.mediaTab.colMimeType"),
+                                                                dataIndex: "mimeType",
+                                                                width: 120,
+                                                                render: (mimeType: string) => (
+                                                                    <Typography.Text type="secondary" ellipsis={{ tooltip: mimeType }} className="block max-w-[105px] font-mono text-xs">
+                                                                        {mimeType}
+                                                                    </Typography.Text>
+                                                                ),
                                                             },
                                                             {
                                                                 title: t("admin.mediaTab.colSize"),
                                                                 dataIndex: "bytes",
-                                                                width: 105,
+                                                                width: 95,
                                                                 render: (bytes: number) => <span className="whitespace-nowrap">{formatBytes(bytes)}</span>,
                                                             },
                                                             {
                                                                 title: t("admin.mediaTab.colThumbSize"),
                                                                 key: "thumbBytes",
-                                                                width: 115,
+                                                                width: 100,
                                                                 render: (_, record: MediaItem) => {
                                                                     const thumbBytes = getMediaThumbBytes(record.meta);
                                                                     return <span className="whitespace-nowrap">{thumbBytes > 0 ? formatBytes(thumbBytes) : "—"}</span>;
@@ -2391,7 +2556,7 @@ export default function AdminPage() {
                                                             {
                                                                 title: t("admin.mediaTab.colUploadedAt"),
                                                                 dataIndex: "createdAt",
-                                                                width: 170,
+                                                                width: 165,
                                                                 render: (value: string) => new Date(value).toLocaleString(locale),
                                                             },
                                                             {
@@ -2440,6 +2605,7 @@ export default function AdminPage() {
                                                 children: (
                                                     <Table<WorkspaceDataItem>
                                                         rowKey="id"
+                                                        size="small"
                                                         className={ADMIN_TABLE_CLASS}
                                                         scroll={ADMIN_TABLE_SCROLL}
                                                         loading={workspaceDataLoading}
@@ -2464,25 +2630,25 @@ export default function AdminPage() {
                                                             {
                                                                 title: tabCfg.key === "canvas" ? t("admin.mediaTab.colCanvasTitle") : t("admin.mediaTab.colPromptTitle"),
                                                                 key: "title",
-                                                                width: 280,
+                                                                width: 260,
                                                                 render: (_, rec) => (
-                                                                    <div className="max-w-[260px] truncate" title={rec.prompt || rec.title}>
+                                                                    <div className="max-w-[245px] truncate" title={rec.prompt || rec.title}>
                                                                         {rec.prompt || rec.title}
                                                                     </div>
                                                                 ),
                                                             },
-                                                            { title: t("admin.mediaTab.colOwner"), dataIndex: "username", width: 120 },
+                                                            { title: t("admin.mediaTab.colOwner"), dataIndex: "username", width: 115, ellipsis: true },
                                                             tabCfg.key === "canvas"
-                                                                ? { title: t("admin.mediaTab.colNodes"), dataIndex: "nodeCount", width: 90 }
-                                                                : { title: t("admin.mediaTab.colModel"), dataIndex: "model", width: 170, ellipsis: true },
-                                                            { title: t("admin.mediaTab.colLinkedMedia"), dataIndex: "mediaCount", width: 95, render: (v: number) => t("admin.mediaTab.linkedMediaCount", { count: v ?? 0 }) },
+                                                                ? { title: t("admin.mediaTab.colNodes"), dataIndex: "nodeCount", width: 85 }
+                                                                : { title: t("admin.mediaTab.colModel"), dataIndex: "model", width: 160, ellipsis: true },
+                                                            { title: t("admin.mediaTab.colLinkedMedia"), dataIndex: "mediaCount", width: 90, render: (v: number) => t("admin.mediaTab.linkedMediaCount", { count: v ?? 0 }) },
                                                             {
                                                                 title: t("admin.mediaTab.colDataSize"),
                                                                 key: "mediaBytes",
-                                                                width: 150,
+                                                                width: 140,
                                                                 render: (_, rec) => <WorkspaceSizeCell mediaBytes={rec.mediaBytes} dataBytes={rec.dataBytes} />,
                                                             },
-                                                            { title: t("admin.mediaTab.colUpdatedAt"), dataIndex: "updatedAt", width: 170, render: (v: string) => new Date(v).toLocaleString(locale) },
+                                                            { title: t("admin.mediaTab.colUpdatedAt"), dataIndex: "updatedAt", width: 165, render: (v: string) => new Date(v).toLocaleString(locale) },
                                                             {
                                                                 title: t("admin.channelsTab.colActions"),
                                                                 key: "actions",
@@ -3015,6 +3181,7 @@ export default function AdminPage() {
                                                         <Alert type="warning" showIcon title={t("admin.settingsTab.storageExpiry.truncatedAlert")} />
                                                     ) : null}
                                                     <Table<StorageExpirySweepItem>
+                                                        size="small"
                                                         className={ADMIN_TABLE_CLASS}
                                                         rowKey={(row) => `${row.userId}-${row.action}`}
                                                         dataSource={storageExpiryResult.items}
@@ -3024,87 +3191,80 @@ export default function AdminPage() {
                                                         columns={[
                                                             {
                                                                 title: t("admin.settingsTab.storageExpiry.colUser"),
-                                                                width: 180,
-                                                                render: (_, row) => (
-                                                                    <div>
-                                                                        <div className="font-medium">{row.displayName || row.username}</div>
-                                                                        <Typography.Text type="secondary" className="text-xs">
-                                                                            @{row.username}
-                                                                        </Typography.Text>
-                                                                    </div>
-                                                                ),
+                                                                width: 120,
+                                                                render: (_, row) => <span className="font-medium">{row.displayName || row.username}</span>,
+                                                            },
+                                                            {
+                                                                title: t("admin.settingsTab.storageExpiry.colUsername"),
+                                                                dataIndex: "username",
+                                                                width: 110,
+                                                                render: (username: string) => <Typography.Text type="secondary">@{username}</Typography.Text>,
                                                             },
                                                             {
                                                                 title: t("admin.settingsTab.storageExpiry.colEmail"),
-                                                                width: 190,
+                                                                width: 180,
                                                                 render: (_, row) => row.email || <Typography.Text type="secondary">{t("admin.settingsTab.storageExpiry.unboundEmail")}</Typography.Text>,
                                                             },
                                                             {
                                                                 title: t("admin.settingsTab.storageExpiry.colAction"),
                                                                 width: 120,
                                                                 render: (_, row) => {
-                                                                    if (row.action === "pre_expiry_warn") return <Tag color="gold">{t("admin.settingsTab.storageExpiry.actionPreWarn")}</Tag>;
-                                                                    if (row.action === "expired_notice") return <Tag color="orange">{t("admin.settingsTab.storageExpiry.actionExpiredNotice")}</Tag>;
+                                                                    if (row.action === "pre_expiry_warn") return <Tag color="gold" style={{ marginInlineEnd: 0 }}>{t("admin.settingsTab.storageExpiry.actionPreWarn")}</Tag>;
+                                                                    if (row.action === "expired_notice") return <Tag color="orange" style={{ marginInlineEnd: 0 }}>{t("admin.settingsTab.storageExpiry.actionExpiredNotice")}</Tag>;
                                                                     if (row.action === "over_quota_cleaned") {
-                                                                        return <Tag color="volcano">{storageExpiryResult.dryRun ? t("admin.settingsTab.storageExpiry.actionOverQuotaPending") : t("admin.settingsTab.storageExpiry.actionOverQuotaDone")}</Tag>;
+                                                                        return <Tag color="volcano" style={{ marginInlineEnd: 0 }}>{storageExpiryResult.dryRun ? t("admin.settingsTab.storageExpiry.actionOverQuotaPending") : t("admin.settingsTab.storageExpiry.actionOverQuotaDone")}</Tag>;
                                                                     }
-                                                                    return <Tag color="red">{storageExpiryResult.dryRun ? t("admin.settingsTab.storageExpiry.actionExpiredPending") : t("admin.settingsTab.storageExpiry.actionExpiredDone")}</Tag>;
+                                                                    return <Tag color="red" style={{ marginInlineEnd: 0 }}>{storageExpiryResult.dryRun ? t("admin.settingsTab.storageExpiry.actionExpiredPending") : t("admin.settingsTab.storageExpiry.actionExpiredDone")}</Tag>;
                                                                 },
                                                             },
                                                             {
-                                                                title: t("admin.settingsTab.storageExpiry.colExpiryGrace"),
-                                                                width: 210,
+                                                                title: t("admin.settingsTab.storageExpiry.colExpiresAt"),
+                                                                width: 150,
                                                                 render: (_, row) =>
                                                                     row.expiresAt ? (
-                                                                        <div className="text-xs leading-5">
-                                                                            <div>{t("admin.settingsTab.storageExpiry.expiresLine", { time: dayjs(row.expiresAt).format("YYYY-MM-DD HH:mm") })}</div>
-                                                                            {row.graceEndsAt ? (
-                                                                                <Typography.Text type="secondary">
-                                                                                    {t("admin.settingsTab.storageExpiry.graceLine", { time: dayjs(row.graceEndsAt).format("YYYY-MM-DD HH:mm") })}
-                                                                                </Typography.Text>
-                                                                            ) : null}
-                                                                        </div>
+                                                                        dayjs(row.expiresAt).format("YYYY-MM-DD HH:mm")
                                                                     ) : (
-                                                                        <Typography.Text type="secondary" className="text-xs">
-                                                                            {t("admin.settingsTab.storageExpiry.permanentOverQuota")}
-                                                                        </Typography.Text>
+                                                                        <Typography.Text type="secondary">{t("admin.settingsTab.storageExpiry.permanentOverQuota")}</Typography.Text>
                                                                     ),
                                                             },
                                                             {
-                                                                title: t("admin.settingsTab.storageExpiry.colUsedQuota"),
-                                                                width: 160,
-                                                                render: (_, row) => (
-                                                                    <div className="text-xs leading-5">
-                                                                        <div>{t("admin.settingsTab.storageExpiry.usedLine", { size: formatBytes(row.usedBytes) })}</div>
-                                                                        <Typography.Text type="secondary">{t("admin.settingsTab.storageExpiry.quotaLine", { size: formatBytes(row.quotaBytes) })}</Typography.Text>
-                                                                    </div>
-                                                                ),
+                                                                title: t("admin.settingsTab.storageExpiry.colGraceEndsAt"),
+                                                                width: 150,
+                                                                render: (_, row) => (row.graceEndsAt ? dayjs(row.graceEndsAt).format("YYYY-MM-DD HH:mm") : "—"),
                                                             },
                                                             {
-                                                                title: t("admin.settingsTab.storageExpiry.colCleanup"),
-                                                                width: 190,
+                                                                title: t("admin.settingsTab.storageExpiry.colUsedBytes"),
+                                                                width: 100,
+                                                                render: (_, row) => formatBytes(row.usedBytes),
+                                                            },
+                                                            {
+                                                                title: t("admin.settingsTab.storageExpiry.colQuotaBytes"),
+                                                                width: 100,
+                                                                render: (_, row) => formatBytes(row.quotaBytes),
+                                                            },
+                                                            {
+                                                                title: t("admin.settingsTab.storageExpiry.colCleanupMedia"),
+                                                                width: 150,
                                                                 render: (_, row) =>
-                                                                    row.action === "cleaned" || row.action === "over_quota_cleaned" ? (
-                                                                        <div className="text-xs leading-5">
-                                                                            <div>
-                                                                                {t("admin.settingsTab.storageExpiry.cleanupMedia", {
-                                                                                    count: row.deletedMediaCount,
-                                                                                    size: formatBytes(row.freedBytes),
-                                                                                })}
-                                                                            </div>
-                                                                            {row.deletedCanvasCount || row.deletedWorkbenchCount || row.deletedAssetCount ? (
-                                                                                <Typography.Text type="secondary">
-                                                                                    {t("admin.settingsTab.storageExpiry.cleanupWorkspace", {
-                                                                                        canvas: row.deletedCanvasCount,
-                                                                                        workbench: row.deletedWorkbenchCount,
-                                                                                        assets: row.deletedAssetCount,
-                                                                                    })}
-                                                                                </Typography.Text>
-                                                                            ) : null}
-                                                                        </div>
-                                                                    ) : (
-                                                                        <Typography.Text type="secondary">-</Typography.Text>
-                                                                    ),
+                                                                    row.action === "cleaned" || row.action === "over_quota_cleaned"
+                                                                        ? t("admin.settingsTab.storageExpiry.cleanupMedia", {
+                                                                              count: row.deletedMediaCount,
+                                                                              size: formatBytes(row.freedBytes),
+                                                                          })
+                                                                        : "—",
+                                                            },
+                                                            {
+                                                                title: t("admin.settingsTab.storageExpiry.colCleanupWorkspace"),
+                                                                width: 170,
+                                                                render: (_, row) =>
+                                                                    (row.action === "cleaned" || row.action === "over_quota_cleaned") &&
+                                                                    (row.deletedCanvasCount || row.deletedWorkbenchCount || row.deletedAssetCount)
+                                                                        ? t("admin.settingsTab.storageExpiry.cleanupWorkspace", {
+                                                                              canvas: row.deletedCanvasCount,
+                                                                              workbench: row.deletedWorkbenchCount,
+                                                                              assets: row.deletedAssetCount,
+                                                                          })
+                                                                        : "—",
                                                             },
                                                             {
                                                                 title: t("admin.settingsTab.storageExpiry.colEmailStatus"),
@@ -3250,6 +3410,7 @@ export default function AdminPage() {
                                             >
                                                 <Table<AnnouncementItem>
                                                     rowKey="id"
+                                                    size="small"
                                                     className={ADMIN_TABLE_CLASS}
                                                     scroll={ADMIN_TABLE_SCROLL}
                                                     loading={announcementsLoading}
@@ -3257,29 +3418,29 @@ export default function AdminPage() {
                                                     pagination={{ defaultPageSize: 10, showSizeChanger: true, pageSizeOptions: [10, 20, 30, 50, 100], showTotal: (count) => t("common.totalItems", { count }) }}
                                                     columns={[
                                                         {
-                                                            title: t("admin.settingsTab.announcements.colContent"),
-                                                            key: "title",
-                                                            width: 320,
-                                                            render: (_, record) => (
-                                                                <div className="flex max-w-[300px] flex-col gap-1">
-                                                                    <div className="flex items-center gap-1.5">
-                                                                        {record.isPinned ? (
-                                                                            <Tag color="gold" style={{ marginInlineEnd: 0 }}>
-                                                                                {t("admin.settingsTab.announcements.pinnedTag")}
-                                                                            </Tag>
-                                                                        ) : null}
-                                                                        <span className="truncate font-medium">{record.title}</span>
-                                                                    </div>
-                                                                    <Typography.Text type="secondary" ellipsis={{ tooltip: record.content }} className="text-xs">
-                                                                        {record.content}
-                                                                    </Typography.Text>
-                                                                </div>
+                                                            title: t("admin.settingsTab.announcements.colTitle"),
+                                                            dataIndex: "title",
+                                                            width: 180,
+                                                            render: (title: string) => (
+                                                                <Typography.Text ellipsis={{ tooltip: title }} className="block max-w-[165px] font-medium">
+                                                                    {title}
+                                                                </Typography.Text>
+                                                            ),
+                                                        },
+                                                        {
+                                                            title: t("admin.settingsTab.announcements.colBody"),
+                                                            dataIndex: "content",
+                                                            width: 240,
+                                                            render: (content: string) => (
+                                                                <Typography.Text type="secondary" ellipsis={{ tooltip: content }} className="block max-w-[225px] text-xs">
+                                                                    {content}
+                                                                </Typography.Text>
                                                             ),
                                                         },
                                                         {
                                                             title: t("admin.settingsTab.announcements.colStatus"),
                                                             dataIndex: "level",
-                                                            width: 120,
+                                                            width: 115,
                                                             render: (level: AnnouncementLevel, record) => (
                                                                 <Select
                                                                     size="small"
@@ -3293,7 +3454,7 @@ export default function AdminPage() {
                                                         {
                                                             title: t("admin.settingsTab.announcements.colPin"),
                                                             dataIndex: "isPinned",
-                                                            width: 80,
+                                                            width: 72,
                                                             render: (checked: boolean, record) => (
                                                                 <Switch
                                                                     size="small"
@@ -3305,7 +3466,7 @@ export default function AdminPage() {
                                                         {
                                                             title: t("admin.settingsTab.announcements.colPublished"),
                                                             dataIndex: "isPublished",
-                                                            width: 90,
+                                                            width: 82,
                                                             render: (checked: boolean, record) => (
                                                                 <Switch
                                                                     size="small"
@@ -3861,6 +4022,13 @@ export default function AdminPage() {
                                 { label: t("admin.modals.redeem.kindStorage"), value: "storage" },
                             ]}
                         />
+                    </Form.Item>
+                    <Form.Item
+                        name="name"
+                        label={t("admin.modals.redeem.nameLabel")}
+                        rules={[{ required: true, whitespace: true, message: t("admin.modals.redeem.nameReq") }]}
+                    >
+                        <Input placeholder={t("admin.modals.redeem.namePlaceholder")} maxLength={80} />
                     </Form.Item>
                     <Row gutter={12}>
                         <Col xs={24} sm={12}>

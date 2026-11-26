@@ -1817,6 +1817,40 @@ function LedgerDetailModal({
     );
 }
 
+/** 展示积分变动标签（单列独立展示，保持行高紧凑）。 */
+function LedgerDeltaTag({ record, t }: { record: CreditLedgerItem; t: TFunction }) {
+    const delta = record.delta;
+    const isFailed = record.meta?.taskStatus === "failed" || record.meta?.taskStatus === "failed_refunded";
+    const refundedCredits = typeof record.meta?.refundedCredits === "number" && record.meta.refundedCredits > 0 ? record.meta.refundedCredits : 0;
+    if (isFailed) {
+        const charged = typeof record.meta?.chargedCredits === "number" ? record.meta.chargedCredits : refundedCredits;
+        const tip = refundedCredits > 0 ? t("userPanels.wallet.failedRefundTip", { charged, refunded: refundedCredits }) : t("userPanels.wallet.failedNoChargeTip");
+        return (
+            <Tooltip title={tip}>
+                <Tag color="orange" style={{ marginInlineEnd: 0 }}>0</Tag>
+            </Tooltip>
+        );
+    }
+    if (refundedCredits > 0) {
+        const charged =
+            typeof record.meta?.chargedCredits === "number"
+                ? record.meta.chargedCredits
+                : Math.round((Math.abs(Math.min(0, delta)) + refundedCredits) * 10000) / 10000;
+        return (
+            <Tooltip title={t("userPanels.wallet.partialRefundTip", { charged, refunded: refundedCredits, net: Math.abs(delta) })}>
+                <Tag color={delta === 0 ? "orange" : "volcano"} style={{ marginInlineEnd: 0 }}>
+                    {delta === 0 ? "0" : delta}
+                </Tag>
+            </Tooltip>
+        );
+    }
+    return (
+        <Tag color={delta >= 0 ? "green" : "volcano"} style={{ marginInlineEnd: 0 }}>
+            {delta >= 0 ? `+${delta}` : delta}
+        </Tag>
+    );
+}
+
 export function MyWalletPanel({ compact = false, onOpenLogs }: { compact?: boolean; onOpenLogs?: () => void }) {
     const { t, i18n } = useTranslation();
     const locale = i18n.resolvedLanguage || undefined;
@@ -2050,48 +2084,8 @@ export function MyWalletPanel({ compact = false, onOpenLogs }: { compact?: boole
                         {
                             title: t("userPanels.wallet.colDelta"),
                             dataIndex: "delta",
-                            width: 115,
-                            render: (delta: number, record: CreditLedgerItem) => {
-                                const isFailed =
-                                    record.meta?.taskStatus === "failed" || record.meta?.taskStatus === "failed_refunded";
-                                const refundedCredits =
-                                    typeof record.meta?.refundedCredits === "number" && record.meta.refundedCredits > 0
-                                        ? record.meta.refundedCredits
-                                        : 0;
-                                if (isFailed) {
-                                    const charged =
-                                        typeof record.meta?.chargedCredits === "number"
-                                            ? record.meta.chargedCredits
-                                            : refundedCredits;
-                                    const tip =
-                                        refundedCredits > 0
-                                            ? t("userPanels.wallet.failedRefundTip", { charged, refunded: refundedCredits })
-                                            : t("userPanels.wallet.failedNoChargeTip");
-                                    return (
-                                        <Tooltip title={tip}>
-                                            <Tag color="orange">0</Tag>
-                                        </Tooltip>
-                                    );
-                                }
-                                if (refundedCredits > 0) {
-                                    const charged =
-                                        typeof record.meta?.chargedCredits === "number"
-                                            ? record.meta.chargedCredits
-                                            : Math.round((Math.abs(Math.min(0, delta)) + refundedCredits) * 10000) / 10000;
-                                    return (
-                                        <Tooltip
-                                            title={t("userPanels.wallet.partialRefundTip", {
-                                                charged,
-                                                refunded: refundedCredits,
-                                                net: Math.abs(delta),
-                                            })}
-                                        >
-                                            <Tag color={delta === 0 ? "orange" : "volcano"}>{delta === 0 ? "0" : delta}</Tag>
-                                        </Tooltip>
-                                    );
-                                }
-                                return <Tag color={delta >= 0 ? "green" : "volcano"}>{delta >= 0 ? `+${delta}` : delta}</Tag>;
-                            },
+                            width: 110,
+                            render: (_: unknown, record: CreditLedgerItem) => <LedgerDeltaTag record={record} t={t} />,
                         },
                         {
                             title: t("userPanels.wallet.colBalanceAfter"),
@@ -2445,16 +2439,11 @@ export function UsageLogsPanel({ defaultScope = "self" }: { defaultScope?: "all"
                                   {
                                       title: t("userPanels.usageLogs.colUser"),
                                       key: "user",
-                                      width: 140,
+                                      width: 135,
                                       render: (_: unknown, record: CreditLedgerItem) => (
-                                          <div className="max-w-[130px] min-w-0">
-                                              <div className="truncate font-medium">{record.displayName || record.username || record.userId}</div>
-                                              {record.username ? (
-                                                  <Typography.Text type="secondary" ellipsis className="block text-xs">
-                                                      @{record.username}
-                                                  </Typography.Text>
-                                              ) : null}
-                                          </div>
+                                          <Typography.Text ellipsis={{ tooltip: record.username ? `@${record.username}` : record.userId }} className="block max-w-[120px] font-medium">
+                                              {record.displayName || record.username || record.userId}
+                                          </Typography.Text>
                                       ),
                                   },
                               ]
@@ -2580,48 +2569,8 @@ export function UsageLogsPanel({ defaultScope = "self" }: { defaultScope?: "all"
                         {
                             title: t("userPanels.wallet.colDelta"),
                             dataIndex: "delta",
-                            width: 115,
-                            render: (delta: number, record: CreditLedgerItem) => {
-                                const isFailed =
-                                    record.meta?.taskStatus === "failed" || record.meta?.taskStatus === "failed_refunded";
-                                const refundedCredits =
-                                    typeof record.meta?.refundedCredits === "number" && record.meta.refundedCredits > 0
-                                        ? record.meta.refundedCredits
-                                        : 0;
-                                if (isFailed) {
-                                    const charged =
-                                        typeof record.meta?.chargedCredits === "number"
-                                            ? record.meta.chargedCredits
-                                            : refundedCredits;
-                                    const tip =
-                                        refundedCredits > 0
-                                            ? t("userPanels.wallet.failedRefundTip", { charged, refunded: refundedCredits })
-                                            : t("userPanels.wallet.failedNoChargeTip");
-                                    return (
-                                        <Tooltip title={tip}>
-                                            <Tag color="orange">0</Tag>
-                                        </Tooltip>
-                                    );
-                                }
-                                if (refundedCredits > 0) {
-                                    const charged =
-                                        typeof record.meta?.chargedCredits === "number"
-                                            ? record.meta.chargedCredits
-                                            : Math.round((Math.abs(Math.min(0, delta)) + refundedCredits) * 10000) / 10000;
-                                    return (
-                                        <Tooltip
-                                            title={t("userPanels.wallet.partialRefundTip", {
-                                                charged,
-                                                refunded: refundedCredits,
-                                                net: Math.abs(delta),
-                                            })}
-                                        >
-                                            <Tag color={delta === 0 ? "orange" : "volcano"}>{delta === 0 ? "0" : delta}</Tag>
-                                        </Tooltip>
-                                    );
-                                }
-                                return <Tag color={delta >= 0 ? "green" : "volcano"}>{delta >= 0 ? `+${delta}` : delta}</Tag>;
-                            },
+                            width: 110,
+                            render: (_: unknown, record: CreditLedgerItem) => <LedgerDeltaTag record={record} t={t} />,
                         },
                         {
                             title: t("userPanels.wallet.colBalanceAfter"),
@@ -3222,6 +3171,7 @@ export function MyMediaPanel() {
                                     </div>
                                     <Table<MediaItem>
                                         rowKey="id"
+                                        size="small"
                                         className={ADMIN_TABLE_CLASS}
                                         scroll={ADMIN_TABLE_SCROLL}
                                         loading={loading}
@@ -3250,13 +3200,13 @@ export function MyMediaPanel() {
                                             {
                                                 title: t("userPanels.myMedia.colPreview"),
                                                 key: "preview",
-                                                width: 88,
+                                                width: 72,
                                                 render: (_, record) => {
                                                     const thumb = record.thumbnailUrl || previewUrlFor(record.id) || "";
                                                     return thumb ? (
-                                                        <img src={thumb} alt={record.mimeType} className="size-10 shrink-0 rounded object-cover" />
+                                                        <img src={thumb} alt={record.mimeType} className="size-8 shrink-0 rounded object-cover" />
                                                     ) : (
-                                                        <div className="flex size-10 shrink-0 items-center justify-center rounded bg-black/5 text-stone-400 dark:bg-white/10">
+                                                        <div className="flex size-8 shrink-0 items-center justify-center rounded bg-black/5 text-stone-400 dark:bg-white/10">
                                                             {record.kind === "video" ? <Video className="size-4" /> : record.kind === "audio" ? <AudioLines className="size-4" /> : record.kind === "image" ? <ImageIcon className="size-4" /> : <FileIcon className="size-4" />}
                                                         </div>
                                                     );
@@ -3270,15 +3220,10 @@ export function MyMediaPanel() {
                                             },
                                             {
                                                 title: t("userPanels.myMedia.colKind"),
-                                                dataIndex: "kind",
-                                                width: 175,
-                                                render: (v: string, record: MediaItem) => (
-                                                    <div className="flex items-center gap-1.5">
-                                                        <Tag style={{ marginInlineEnd: 0 }}>{getKindLabel(v, t)}</Tag>
-                                                        <Typography.Text type="secondary" className="truncate font-mono text-xs" title={record.mimeType}>
-                                                            {record.mimeType}
-                                                        </Typography.Text>
-                                                    </div>
+                                                dataIndex: "mimeType",
+                                                width: 130,
+                                                render: (mimeType: string, record: MediaItem) => (
+                                                    <Tag style={{ marginInlineEnd: 0 }}>{mimeType || getKindLabel(record.kind, t)}</Tag>
                                                 ),
                                             },
                                             {
@@ -3334,6 +3279,7 @@ export function MyMediaPanel() {
                             children: (
                                 <Table
                                     rowKey="id"
+                                    size="small"
                                     className={ADMIN_TABLE_CLASS}
                                     scroll={ADMIN_TABLE_SCROLL}
                                     loading={workspaceLoading}
@@ -3343,7 +3289,7 @@ export function MyMediaPanel() {
                                         { title: t("userPanels.myMedia.colCanvasTitle"), dataIndex: "title", width: 240, ellipsis: true },
                                         { title: t("userPanels.myMedia.colNodes"), key: "nodes", width: 85, render: (_, rec) => (Array.isArray(rec.nodes) ? rec.nodes.length : 0) },
                                         { title: t("userPanels.myMedia.colMediaCount"), dataIndex: "mediaCount", width: 95, render: (v?: number) => t("userPanels.myMedia.mediaCountVal", { count: v ?? 0 }) },
-                                        { title: t("userPanels.myMedia.colDataSize"), key: "size", width: 150, render: (_, rec) => <WorkspaceSizeCell mediaBytes={rec.mediaBytes} dataBytes={rec.dataBytes} /> },
+                                        { title: t("userPanels.myMedia.colDataSize"), key: "size", width: 145, render: (_, rec) => <WorkspaceSizeCell mediaBytes={rec.mediaBytes} dataBytes={rec.dataBytes} /> },
                                         { title: t("userPanels.myMedia.colLastSync"), dataIndex: "updatedAt", width: 170, render: (v: string) => new Date(v).toLocaleString(locale) },
                                         {
                                             title: t("userPanels.wallet.colActions"),
@@ -3380,6 +3326,7 @@ export function MyMediaPanel() {
                             children: (
                                 <Table
                                     rowKey="id"
+                                    size="small"
                                     className={ADMIN_TABLE_CLASS}
                                     scroll={ADMIN_TABLE_SCROLL}
                                     loading={workspaceLoading}
@@ -3389,20 +3336,20 @@ export function MyMediaPanel() {
                                         {
                                             title: t("userPanels.myMedia.colPromptTitle"),
                                             key: "prompt",
-                                            width: 300,
+                                            width: 280,
                                             render: (_, rec) => (
-                                                <div className="max-w-[280px] truncate" title={rec.prompt || rec.title}>
+                                                <div className="max-w-[265px] truncate" title={rec.prompt || rec.title}>
                                                     {rec.prompt || rec.title || t("userPanels.myMedia.untitledRecord")}
                                                 </div>
                                             ),
                                         },
-                                        { title: t("userPanels.usageLogs.colModel"), dataIndex: "model", width: 180, ellipsis: true },
+                                        { title: t("userPanels.usageLogs.colModel"), dataIndex: "model", width: 170, ellipsis: true },
                                         {
                                             title: t("userPanels.myMedia.colStatus"),
                                             dataIndex: "status",
                                             width: 85,
                                             render: (st: string) => (
-                                                <Tag color={st === "success" ? "green" : st === "failed" ? "red" : "processing"}>
+                                                <Tag color={st === "success" ? "green" : st === "failed" ? "red" : "processing"} style={{ marginInlineEnd: 0 }}>
                                                     {st === "success"
                                                         ? t("userPanels.myMedia.statusSuccess")
                                                         : st === "failed"
@@ -3412,7 +3359,7 @@ export function MyMediaPanel() {
                                             ),
                                         },
                                         { title: t("userPanels.myMedia.colMediaCount"), dataIndex: "mediaCount", width: 95, render: (v?: number) => t("userPanels.myMedia.mediaCountVal", { count: v ?? 0 }) },
-                                        { title: t("userPanels.myMedia.colDataSize"), key: "size", width: 150, render: (_, rec) => <WorkspaceSizeCell mediaBytes={rec.mediaBytes} dataBytes={rec.dataBytes} /> },
+                                        { title: t("userPanels.myMedia.colDataSize"), key: "size", width: 145, render: (_, rec) => <WorkspaceSizeCell mediaBytes={rec.mediaBytes} dataBytes={rec.dataBytes} /> },
                                         { title: t("userPanels.wallet.colTime"), dataIndex: "createdAt", width: 170, render: (v?: number) => (v ? new Date(v).toLocaleString(locale) : "—") },
                                         {
                                             title: t("userPanels.wallet.colActions"),

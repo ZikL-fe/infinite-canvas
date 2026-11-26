@@ -557,6 +557,18 @@
     max-width: 100%;
 }
 
+.admin-shell .ant-table-wrapper .ant-table.ant-table-small .ant-table-thead > tr > th,
+.admin-shell .ant-table-wrapper .ant-table.ant-table-small .ant-table-tbody > tr > td {
+    padding: 6px 10px;
+    line-height: 1.35;
+}
+
+.admin-shell .ant-table-wrapper .ant-table.ant-table-small .ant-tag {
+    font-size: 11px;
+    line-height: 18px;
+    padding-inline: 6px;
+}
+
 .admin-shell .ant-statistic-content {
     font-size: clamp(18px, 2.2vw, 24px);
     overflow-wrap: anywhere;

@@ -372,6 +372,7 @@ export const userStorageGrants = pgTable(
 export const redeemCodes = pgTable('redeem_codes', {
   id: text('id').primaryKey(),
   code: text('code').notNull().unique(),
+  name: text('name').notNull().default(''),
   kind: text('kind').$type<RedeemCodeKind>().notNull().default('credits'),
   credits: doublePrecision('credits').notNull().default(0),
   storageQuotaBytes: bigint('storage_quota_bytes', { mode: 'number' })

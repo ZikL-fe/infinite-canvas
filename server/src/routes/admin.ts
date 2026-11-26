@@ -1,7 +1,7 @@
 /** 管理员后台接口：系统概览、公告发布、用户管控、兑换码、渠道模型、对象存储、WebDAV 与全站使用日志。 */
-import { randomBytes } from "node:crypto";
+import { randomInt } from "node:crypto";
 import { zValidator } from "@hono/zod-validator";
-import { and, asc, count, desc, eq, ilike, inArray, isNull, ne, notInArray, or, sql, type SQL } from "drizzle-orm";
+import { and, asc, count, desc, eq, gt, gte, ilike, inArray, isNotNull, isNull, lt, lte, ne, notInArray, or, sql, type SQL } from "drizzle-orm";
 import { Hono } from "hono";
 import { nanoid } from "nanoid";
 import { z } from "zod";
@@ -122,6 +122,7 @@ const adjustCreditsSchema = z
 
 const createRedeemCodesSchema = z
   .object({
+    name: z.string().trim().min(1, "请输入兑换码名称").max(80),
     kind: z.enum(["credits", "storage"]).default("credits"),
     count: z.number().int().min(1).max(100).default(1),
     credits: z.number().nonnegative().optional().default(0),
@@ -162,13 +163,19 @@ const batchDeleteRedeemCodesSchema = z.object({
   ids: z.array(z.string().min(1)).min(1, "请选择要删除的兑换码").max(200),
 });
 
+const REDEEM_CODE_ALPHABET = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ";
+const REDEEM_CODE_GROUPS = 4;
+const REDEEM_CODE_GROUP_LENGTH = 5;
+
 function generateRedeemCodeString(prefix: string) {
   const cleanPrefix = prefix
     .trim()
     .toUpperCase()
     .replace(/[^A-Z0-9_-]/g, "");
-  const raw = randomBytes(6).toString("hex").toUpperCase();
-  const body = `${raw.slice(0, 4)}-${raw.slice(4, 8)}-${raw.slice(8, 12)}`;
+  const groups = Array.from({ length: REDEEM_CODE_GROUPS }, () =>
+    Array.from({ length: REDEEM_CODE_GROUP_LENGTH }, () => REDEEM_CODE_ALPHABET[randomInt(REDEEM_CODE_ALPHABET.length)]).join(""),
+  );
+  const body = groups.join("-");
   return cleanPrefix ? `${cleanPrefix}-${body}` : body;
 }
 
@@ -423,7 +430,12 @@ adminRoutes.get("/users", async (c) => {
 
   const filters: SQL[] = [];
   if (q) {
-    const searchCond = or(ilike(users.username, `%${q}%`), ilike(users.displayName, `%${q}%`), ilike(users.email, `%${q}%`));
+    const searchCond = or(
+      ilike(users.id, `%${q}%`),
+      ilike(users.username, `%${q}%`),
+      ilike(users.displayName, `%${q}%`),
+      ilike(users.email, `%${q}%`),
+    );
     if (searchCond) filters.push(searchCond);
   }
   if (role === "admin" || role === "user") filters.push(eq(users.role, role));
@@ -801,6 +813,7 @@ adminRoutes.patch("/storage-grants/:grantId", zValidator("json", updateStorageGr
 adminRoutes.get("/redeem-codes", async (c) => {
   const q = c.req.query("q")?.trim() || "";
   const status = c.req.query("status")?.trim() || "";
+  const used = c.req.query("used")?.trim() || "";
   const kind = c.req.query("kind")?.trim() || "";
   const page = Math.max(1, Number(c.req.query("page") || 1));
   const pageSize = Math.min(100, Math.max(1, Number(c.req.query("pageSize") || 20)));
@@ -808,12 +821,43 @@ adminRoutes.get("/redeem-codes", async (c) => {
 
   const filters: SQL[] = [];
   if (q) {
-    const cond = or(ilike(redeemCodes.code, `%${q}%`), ilike(redeemCodes.note, `%${q}%`));
+    const cond = or(ilike(redeemCodes.name, `%${q}%`), ilike(redeemCodes.code, `%${q}%`), ilike(redeemCodes.note, `%${q}%`));
     if (cond) filters.push(cond);
   }
-  if (status === "active" || status === "disabled") {
-    filters.push(eq(redeemCodes.status, status));
+
+  const isUsedExpr = or(gt(redeemCodes.usedCount, 0), gte(redeemCodes.usedCount, redeemCodes.maxUses))!;
+  const isUnusedExpr = and(eq(redeemCodes.usedCount, 0), lt(redeemCodes.usedCount, redeemCodes.maxUses))!;
+  const now = new Date();
+
+  if (used === "used") {
+    filters.push(isUsedExpr);
+  } else if (used === "unused") {
+    filters.push(isUnusedExpr);
   }
+
+  // 与表格展示的状态标签优先级保持一致：已使用 > 已停用 > 已过期 > 可用
+  if (status === "available" || status === "active") {
+    const availableCond = and(
+      isUnusedExpr,
+      eq(redeemCodes.status, "active"),
+      or(isNull(redeemCodes.expiresAt), gt(redeemCodes.expiresAt, now)),
+    );
+    if (availableCond) filters.push(availableCond);
+  } else if (status === "disabled") {
+    const disabledCond = and(isUnusedExpr, eq(redeemCodes.status, "disabled"));
+    if (disabledCond) filters.push(disabledCond);
+  } else if (status === "expired") {
+    const expiredCond = and(
+      isUnusedExpr,
+      eq(redeemCodes.status, "active"),
+      isNotNull(redeemCodes.expiresAt),
+      lte(redeemCodes.expiresAt, now),
+    );
+    if (expiredCond) filters.push(expiredCond);
+  } else if (status === "used") {
+    filters.push(isUsedExpr);
+  }
+
   if (kind === "credits" || kind === "storage") {
     filters.push(eq(redeemCodes.kind, kind));
   }
@@ -901,6 +945,7 @@ adminRoutes.post("/redeem-codes", zValidator("json", createRedeemCodesSchema), a
     const values = Array.from({ length: needed }, (_, idx) => ({
       id: nanoid(),
       code: attempt === 0 && idx === 0 && custom ? custom : generateRedeemCodeString(prefix),
+      name: body.name,
       kind: body.kind,
       credits,
       storageQuotaBytes,
