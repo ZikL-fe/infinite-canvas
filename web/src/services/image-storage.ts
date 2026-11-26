@@ -6,7 +6,7 @@ import { withLocalProxy } from "@/stores/use-config-store";
 import { createImageThumbnail } from "@/lib/image-thumbnail";
 import {
     clearCloudMediaUrlCache,
-    deleteCloudMedia,
+    evictCloudMediaUrlCache,
     fetchCloudMediaBlob,
     fetchCloudThumbnailBlob,
     getCachedCloudThumbnailUrl,
@@ -345,15 +345,20 @@ export async function imageToDataUrl(image: { url?: string; dataUrl?: string; st
     return blobToDataUrl(await fetchImageBlob(url, options));
 }
 
-export async function deleteStoredImages(keys: Iterable<string>) {
-    await deleteCloudMedia(keys);
+/** 仅清理本地 IndexedDB 与对象 URL 缓存（云端媒体清理由服务端按跨模块引用安全回收）。 */
+export async function purgeLocalStoredImages(keys: Iterable<string>) {
+    const uniqueKeys = Array.from(new Set(keys)).filter(Boolean);
+    if (!uniqueKeys.length) return;
+    evictCloudMediaUrlCache(uniqueKeys);
     await Promise.all(
-        Array.from(new Set(keys)).map(async (key) => {
+        uniqueKeys.map(async (key) => {
+            pendingPreviewKeys.delete(key);
+            failedPreviewKeys.delete(key);
             const url = objectUrls.get(key);
             if (url) URL.revokeObjectURL(url);
             objectUrls.delete(key);
             await deleteImagePreview(key);
-            await store.removeItem(key);
+            await store.removeItem(key).catch(() => undefined);
         }),
     );
 }
@@ -376,7 +381,7 @@ export async function cleanupUnusedImages(usedData: unknown) {
     await previewStore.iterate((_value, key) => {
         if (!usedKeys.has(key)) orphanPreviews.push(key);
     });
-    await Promise.all([deleteStoredImages(unused), ...orphanPreviews.map(deleteImagePreview)]);
+    await Promise.all([purgeLocalStoredImages(unused), ...orphanPreviews.map(deleteImagePreview)]);
 }
 
 export function collectImageStorageKeys(value: unknown, keys = new Set<string>()) {

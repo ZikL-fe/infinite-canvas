@@ -84,6 +84,7 @@ export function AnalyticsDashboardPanel({ scope }: { scope: "all" | "self" }) {
                         ? await adminApi.getDashboard(targetRange, force)
                         : await accountApi.getDashboard(targetRange, force);
                 setData(res);
+                if (force) message.success(t("common.refreshed"));
             } catch (error) {
                 message.error(error instanceof Error ? error.message : t("dashboard.loadFailed"));
             } finally {

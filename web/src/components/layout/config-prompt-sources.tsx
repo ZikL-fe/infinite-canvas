@@ -43,6 +43,7 @@ export function ConfigPromptSources() {
     const handleSave = (source: PromptSource) => {
         saveSource(source);
         void invalidatePrompts();
+        message.success(t("common.saved"));
     };
 
     const handleDelete = (source: PromptSource) => {
@@ -55,6 +56,7 @@ export function ConfigPromptSources() {
             onOk: async () => {
                 removeSource(source.id);
                 await invalidatePrompts();
+                message.success(t("common.deleted"));
             },
         });
     };

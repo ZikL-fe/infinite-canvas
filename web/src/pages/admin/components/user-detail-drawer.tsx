@@ -76,12 +76,13 @@ export function UserDetailDrawer({
     const [passwordForm] = Form.useForm<ResetPasswordForm>();
 
     const loadDetail = useCallback(
-        async (targetId = userId) => {
+        async (targetId = userId, notifySuccess = false) => {
             if (!targetId) return;
             setLoading(true);
             try {
                 const res = await adminApi.getUserDetail(targetId, 7);
                 setDetail(res);
+                if (notifySuccess) message.success(t("common.refreshed"));
             } catch (error) {
                 message.error(error instanceof Error ? error.message : t("userDetail.loadFailed"));
             } finally {
@@ -194,7 +195,7 @@ export function UserDetailDrawer({
             onClose={onClose}
             destroyOnHidden
             extra={
-                <Button size="small" icon={<RefreshCw className="size-3.5" />} loading={loading} onClick={() => void loadDetail()}>
+                <Button size="small" icon={<RefreshCw className="size-3.5" />} loading={loading} onClick={() => void loadDetail(userId, true)}>
                     {t("common.refresh")}
                 </Button>
             }

@@ -188,6 +188,7 @@ export default function AssetsPage() {
             }
             const ext = asset.data.mimeType?.split("/")[1]?.split("+")[0] || (asset.kind === "video" ? "mp4" : "png");
             saveAs(blob, `${asset.title || "asset"}.${ext}`);
+            message.success(t("common.downloaded"));
         } catch {
             message.error(t("assets.downloadFailed"));
         } finally {
@@ -206,6 +207,7 @@ export default function AssetsPage() {
         const hide = message.loading(t("assets.exportingPackage"), 0);
         try {
             await exportAssets(validAssets, t("assets.packageName"));
+            message.success(t("common.exported"));
         } catch {
             message.error(t("assets.exportFailed"));
         } finally {

@@ -8,7 +8,7 @@ import { z } from "zod";
 import { canvasProjects, creditLedger, db, mediaObjects, userAssets, userStorageGrants, users, workbenchLogs, type MediaKind } from "../db/index.ts";
 import { env } from "../env.ts";
 import { buildThumbnailObjectKey, checkStorageQuotaBlock } from "../lib/ai-media-persist.ts";
-import { collectUserMediaReferences, type MediaSourceModule } from "../lib/media-cleanup.ts";
+import { collectUserMediaReferences, purgeMediaReferencesForUsers, type MediaSourceModule } from "../lib/media-cleanup.ts";
 import { claimRedeemCodeInTx } from "../lib/redeem.ts";
 import {
   createMediaReadUrl,
@@ -952,14 +952,18 @@ async function deleteMediaRowsWithQuota(
       .where(and(inArray(mediaObjects.id, deletedRows.map((row) => row.id)), eq(mediaObjects.status, "active")))
       .returning({ id: mediaObjects.id, userId: mediaObjects.userId, bytes: mediaObjects.bytes });
 
-    if (!updated.length) return { deletedCount: 0, freedBytesTotal: 0 };
+    if (!updated.length) return { deletedCount: 0, freedBytesTotal: 0, deletedIdsByUser: new Map<string, string[]>() };
 
     const bytesByUser = new Map<string, number>();
+    const deletedIdsByUser = new Map<string, string[]>();
     let freedBytesTotal = 0;
     for (const row of updated) {
       const bytes = Math.max(0, Number(row.bytes || 0));
       freedBytesTotal += bytes;
       if (bytes > 0) bytesByUser.set(row.userId, (bytesByUser.get(row.userId) ?? 0) + bytes);
+      const list = deletedIdsByUser.get(row.userId);
+      if (list) list.push(row.id);
+      else deletedIdsByUser.set(row.userId, [row.id]);
     }
 
     for (const [ownerId, freed] of bytesByUser) {
@@ -972,10 +976,16 @@ async function deleteMediaRowsWithQuota(
         .where(eq(users.id, ownerId));
     }
 
-    return { deletedCount: updated.length, freedBytesTotal };
+    return { deletedCount: updated.length, freedBytesTotal, deletedIdsByUser };
   });
 
-  return { ...dbResult, failedCount, firstError };
+  if (dbResult.deletedIdsByUser.size > 0) {
+    await purgeMediaReferencesForUsers(dbResult.deletedIdsByUser).catch((err) => {
+      console.warn("[storage] 级联清理媒体关联业务引用失败:", err);
+    });
+  }
+
+  return { deletedCount: dbResult.deletedCount, freedBytesTotal: dbResult.freedBytesTotal, failedCount, firstError };
 }
 
 storageRoutes.post("/batch-delete", zValidator("json", batchDeleteMediaSchema), async (c) => {

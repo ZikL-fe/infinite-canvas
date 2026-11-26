@@ -1,6 +1,6 @@
 import type { CSSProperties } from "react";
 import { useState } from "react";
-import { Dropdown, Modal, Popover, Progress, Tooltip, type MenuProps, theme as antdTheme } from "antd";
+import { App, Dropdown, Modal, Popover, Progress, Tooltip, type MenuProps, theme as antdTheme } from "antd";
 import { AlertTriangle, Coins, HardDrive, Keyboard, LogIn, LogOut, Puzzle, Shield, User } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
@@ -52,6 +52,7 @@ function PopoverAlertStrip({ level, text }: { level: Exclude<AlertSeverity, "non
 
 export function UserStatusActions({ variant = "default", onOpenShortcuts, onOpenPlugins }: UserStatusActionsProps) {
     const { i18n, t } = useTranslation();
+    const { message } = App.useApp();
     const { token } = antdTheme.useToken();
     const navigate = useNavigate();
     const theme = useThemeStore((state) => state.theme);
@@ -119,7 +120,12 @@ export function UserStatusActions({ variant = "default", onOpenShortcuts, onOpen
                   onClick: () => {
                       void flushPendingCanvasSyncs()
                           .catch(() => undefined)
-                          .finally(() => authApi.logout().finally(() => clearSession()));
+                          .finally(() =>
+                              authApi.logout().finally(() => {
+                                  clearSession();
+                                  message.success(t("topNav.loggedOut"));
+                              }),
+                          );
                   },
               },
           ]

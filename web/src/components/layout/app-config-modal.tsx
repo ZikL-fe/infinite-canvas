@@ -92,7 +92,13 @@ export function AppConfigPanel({ showDoneButton = false, initialTab = "preferenc
                     <Button icon={<Upload className="size-4" />} onClick={() => configInputRef.current?.click()}>
                         {t("config.import")}
                     </Button>
-                    <Button icon={<Download className="size-4" />} onClick={exportAppConfig}>
+                    <Button
+                        icon={<Download className="size-4" />}
+                        onClick={() => {
+                            exportAppConfig();
+                            message.success(t("common.exported"));
+                        }}
+                    >
                         {t("config.export")}
                     </Button>
                     <input ref={configInputRef} type="file" accept="application/json,.json" className="hidden" onChange={(event) => event.target.files?.[0] && void loadConfigFile(event.target.files[0])} />

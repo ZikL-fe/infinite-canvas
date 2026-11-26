@@ -134,6 +134,17 @@ export function stopProjectGenerationsByRunningId(projectId: string, runningId: 
     return affectedNodeIds;
 }
 
+export function stopProjectGenerationsByNodeIds(projectId: string, nodeIds: Set<string>) {
+    if (!nodeIds.size) return;
+    activeRequests.forEach((request, key) => {
+        if (request.projectId !== projectId) return;
+        if (!nodeIds.has(request.targetNodeId) && !nodeIds.has(request.originNodeId)) return;
+        request.controller.abort();
+        activeRequests.delete(key);
+    });
+    nodeIds.forEach((nodeId) => activeVideoPolls.delete(keyFor(projectId, nodeId)));
+}
+
 export function isVideoPollActive(projectId: string, nodeId: string) {
     return activeVideoPolls.has(keyFor(projectId, nodeId));
 }

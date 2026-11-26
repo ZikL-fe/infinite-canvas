@@ -86,6 +86,7 @@ import {
     registerCanvasConnectionListener,
     registerCanvasNodeListener,
     startProjectGenerationRequest,
+    stopProjectGenerationsByNodeIds,
     stopProjectGenerationsByRunningId,
 } from "@/lib/canvas/canvas-generation-runtime";
 import { getNodeDefinition, isBuiltinNodeType as isBuiltinType, useNodeRegistryVersion } from "@/lib/canvas/node-registry";
@@ -1016,6 +1017,7 @@ function InfiniteCanvasPage() {
         (ids: Set<string>) => {
             if (!ids.size) return;
             const allIds = new Set(ids);
+            stopProjectGenerationsByNodeIds(projectId, allIds);
             setNodes((prev) => {
                 const next = prev.filter((node) => !allIds.has(node.id));
                 return next.map((node) => {
@@ -1344,11 +1346,12 @@ function InfiniteCanvasPage() {
     const deleteCurrentProject = useCallback(async () => {
         try {
             await deleteCanvasProjectsWithCloud([projectId]);
+            message.success(t("common.deleted"));
             navigate("/canvas");
         } catch (error) {
             message.error(error instanceof Error ? error.message : t("canvas.projectPage.deleteFailed"));
         }
-    }, [message, navigate, projectId]);
+    }, [message, navigate, projectId, t]);
 
     const exportCurrentProject = useCallback(async () => {
         const project = useCanvasStore.getState().projects.find((item) => item.id === projectId);
@@ -3136,17 +3139,44 @@ function InfiniteCanvasPage() {
         [commitNodes, completeVideoNodeTask, effectiveConfig, finishGenerationRequest, isAiConfigReady, message, openConfigDialog, pollVideoNodeTask, startGenerationRequest, t],
     );
 
-    const deleteBatchImage = useCallback((nodeId: string, imageId: string) => {
-        const node = nodesRef.current.find((item) => item.id === nodeId);
-        if ((node?.metadata?.images?.length || 0) <= 2) setExpandedBatchNodeIds((current) => new Set([...current].filter((id) => id !== nodeId)));
-        setNodes((prev) =>
-            prev.map((item) => {
+    const deleteBatchImage = useCallback(
+        (nodeId: string, imageId: string) => {
+            const node = nodesRef.current.find((item) => item.id === nodeId);
+            if ((node?.metadata?.images?.length || 0) <= 2) setExpandedBatchNodeIds((current) => new Set([...current].filter((id) => id !== nodeId)));
+            const updateBatchNode = (item: CanvasNodeData) => {
                 if (item.id !== nodeId) return item;
+                const removed = item.metadata?.images?.find((image) => image.id === imageId);
                 const images = item.metadata?.images?.filter((image) => image.id !== imageId) || [];
-                return { ...item, metadata: { ...item.metadata, images, count: images.length, primaryImageId: item.metadata?.primaryImageId === imageId ? images[0]?.id : item.metadata?.primaryImageId } };
-            }),
-        );
-    }, []);
+                const removingPrimary =
+                    item.metadata?.primaryImageId === imageId ||
+                    (!item.metadata?.primaryImageId && item.metadata?.images?.[0]?.id === imageId) ||
+                    Boolean(removed?.storageKey && item.metadata?.storageKey === removed.storageKey);
+                const nextPrimary = removingPrimary ? images[0] : undefined;
+                return {
+                    ...item,
+                    metadata: {
+                        ...item.metadata,
+                        images,
+                        count: images.length,
+                        primaryImageId: removingPrimary ? nextPrimary?.id : item.metadata?.primaryImageId,
+                        ...(removingPrimary
+                            ? {
+                                  content: nextPrimary?.content || "",
+                                  storageKey: nextPrimary?.storageKey,
+                                  naturalWidth: nextPrimary?.naturalWidth,
+                                  naturalHeight: nextPrimary?.naturalHeight,
+                                  bytes: nextPrimary?.bytes,
+                                  mimeType: nextPrimary?.mimeType,
+                              }
+                            : {}),
+                    },
+                };
+            };
+            setNodes((prev) => prev.map(updateBatchNode));
+            cleanupCanvasFiles({ projectId, nodes: nodesRef.current.map(updateBatchNode), chatSessions });
+        },
+        [chatSessions, cleanupCanvasFiles, projectId],
+    );
 
     const retryBatchImage = useCallback((node: CanvasNodeData, imageId: string) => void handleRetryNode(node, imageId), [handleRetryNode]);
 

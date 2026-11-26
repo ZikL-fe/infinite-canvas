@@ -219,6 +219,17 @@ export function clearCloudMediaUrlCache() {
     missingCloudThumbKeys.clear();
 }
 
+/** 清理指定媒体 key 的云端 URL 与缺失状态缓存。 */
+export function evictCloudMediaUrlCache(keys: Iterable<string>) {
+    for (const key of keys) {
+        if (!key) continue;
+        urlCache.delete(key);
+        thumbnailUrlCache.delete(key);
+        missingCloudMediaKeys.delete(key);
+        missingCloudThumbKeys.delete(key);
+    }
+}
+
 /** 批量预取云端媒体原图与缩略图签名地址并写入会话缓存，避免冷启动逐条请求。 */
 export async function prefetchCloudMediaUrls(keys: Iterable<string>): Promise<void> {
     if (!isCloudAuthenticated()) return;

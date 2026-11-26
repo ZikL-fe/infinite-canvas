@@ -24,6 +24,7 @@ export function PromptSourceContentModal({ source, onClose }: { source: PromptSo
             setLoading(true);
             try {
                 setItems(force ? await refreshSourceItems(source.id) : await fetchSourcePrompts(source.id));
+                if (force) message.success(t("common.refreshed"));
             } catch (error) {
                 message.error(error instanceof Error ? error.message : t("config.promptSources.content.loadFailed"));
             } finally {

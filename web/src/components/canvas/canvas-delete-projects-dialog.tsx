@@ -18,6 +18,7 @@ export function CanvasDeleteProjectsDialog() {
         setDeleting(true);
         try {
             await deleteCanvasProjectsWithCloud(ids);
+            message.success(ids.length > 1 ? t("common.deletedCount", { count: ids.length }) : t("common.deleted"));
             removeSelectedIds(ids);
             setDeleteIds([]);
         } catch (error) {

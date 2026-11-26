@@ -19,10 +19,11 @@ import {
     resolveCreditAlert,
     resolveStorageAlert,
 } from "@/lib/quota-alerts";
-import { previewUrlFor } from "@/services/image-storage";
+import { previewUrlFor, purgeLocalStoredImages } from "@/services/image-storage";
 import { ADMIN_TABLE_CLASS, ADMIN_TABLE_SCROLL, TableRowActions } from "@/pages/admin/components/table-row-actions";
 import { notifyCloudWorkspaceChanged, WORKSPACE_CHANGED_EVENT } from "@/services/cloud-media";
-import { deleteCanvasProjectsWithCloud } from "@/services/cloud-sync";
+import { deleteCanvasProjectsWithCloud, syncCloudWorkspace } from "@/services/cloud-sync";
+import { purgeLocalStoredMedia } from "@/services/file-storage";
 import { deleteWorkbenchLogsWithCloud } from "@/services/workbench-sync";
 import { useAssetStore } from "@/stores/use-asset-store";
 import { useCanvasStore } from "@/stores/canvas/use-canvas-store";
@@ -652,17 +653,21 @@ export function ProfileSecurityPanel() {
         }
     }, [alertForm, message, profileForm, setUser, t]);
 
-    const loadSessions = useCallback(async () => {
-        setSessionsLoading(true);
-        try {
-            const res = await accountApi.listSessions();
-            setSessions(res.items);
-        } catch {
-            // ignore
-        } finally {
-            setSessionsLoading(false);
-        }
-    }, []);
+    const loadSessions = useCallback(
+        async (notifySuccess = false) => {
+            setSessionsLoading(true);
+            try {
+                const res = await accountApi.listSessions();
+                setSessions(res.items);
+                if (notifySuccess) message.success(t("common.refreshed"));
+            } catch (error) {
+                if (notifySuccess) message.error(error instanceof Error ? error.message : t("userPanels.profile.opFailed"));
+            } finally {
+                setSessionsLoading(false);
+            }
+        },
+        [message, t],
+    );
 
     useEffect(() => {
         void loadProfile();
@@ -1170,7 +1175,7 @@ export function ProfileSecurityPanel() {
                                 {t("userPanels.profile.revokeOthers")}
                             </Button>
                         </Popconfirm>
-                        <Button size="small" icon={<RefreshCw className="size-3.5" />} loading={sessionsLoading} onClick={() => void loadSessions()}>
+                        <Button size="small" icon={<RefreshCw className="size-3.5" />} loading={sessionsLoading} onClick={() => void loadSessions(true)}>
                             {t("common.refresh")}
                         </Button>
                     </Space>
@@ -1323,6 +1328,7 @@ function LedgerDetailModal({
         setDownloadingId(media.id);
         try {
             await storageApi.downloadFile(media);
+            message.success(t("common.downloaded"));
         } catch (error) {
             message.error(error instanceof Error ? error.message : t("userPanels.ledgerDetail.downloadFailed"));
         } finally {
@@ -1813,7 +1819,7 @@ export function MyWalletPanel({ compact = false, onOpenLogs }: { compact?: boole
     const [detailItem, setDetailItem] = useState<CreditLedgerItem | null>(null);
 
     const loadLedger = useCallback(
-        async (targetPage = page, nextReason = reasonFilter, nextRange = dateRange, nextPageSize = pageSize) => {
+        async (targetPage = page, nextReason = reasonFilter, nextRange = dateRange, nextPageSize = pageSize, notifySuccess = false) => {
             setLoading(true);
             try {
                 const startDate = nextRange?.[0] ? nextRange[0].startOf("day").toISOString() : undefined;
@@ -1832,6 +1838,7 @@ export function MyWalletPanel({ compact = false, onOpenLogs }: { compact?: boole
                 setSummary(res.summary);
                 const latestUser = useUserStore.getState().user;
                 if (latestUser) setUser({ ...latestUser, creditBalance: res.balance });
+                if (notifySuccess) message.success(t("common.refreshed"));
             } catch (error) {
                 message.error(error instanceof Error ? error.message : t("userPanels.wallet.loadFailed"));
             } finally {
@@ -1924,7 +1931,7 @@ export function MyWalletPanel({ compact = false, onOpenLogs }: { compact?: boole
                 size={compact ? "small" : "default"}
                 title={t("userPanels.wallet.cardTitle", { count: summary.recordCount })}
                 extra={
-                    <Button size="small" icon={<RefreshCw className="size-3.5" />} loading={loading} onClick={() => void loadLedger()}>
+                    <Button size="small" icon={<RefreshCw className="size-3.5" />} loading={loading} onClick={() => void loadLedger(page, reasonFilter, dateRange, pageSize, true)}>
                         {t("common.refresh")}
                     </Button>
                 }
@@ -2132,6 +2139,7 @@ export function UsageLogsPanel({ defaultScope = "self" }: { defaultScope?: "all"
             nextLogId = logIdFilter,
             nextRange = dateRange,
             nextPageSize = pageSize,
+            notifySuccess = false,
         ) => {
             setLoading(true);
             try {
@@ -2170,6 +2178,7 @@ export function UsageLogsPanel({ defaultScope = "self" }: { defaultScope?: "all"
                     setTotal(res.total);
                     setSummary(res.summary);
                 }
+                if (notifySuccess) message.success(t("common.refreshed"));
             } catch (error) {
                 message.error(error instanceof Error ? error.message : t("userPanels.usageLogs.loadFailed"));
             } finally {
@@ -2215,7 +2224,12 @@ export function UsageLogsPanel({ defaultScope = "self" }: { defaultScope?: "all"
                                 ]}
                             />
                         ) : null}
-                        <Button size="small" icon={<RefreshCw className="size-3.5" />} loading={loading} onClick={() => void loadLogs()}>
+                        <Button
+                            size="small"
+                            icon={<RefreshCw className="size-3.5" />}
+                            loading={loading}
+                            onClick={() => void loadLogs(page, scope, reasonFilter, statusFilter, modelFilter, userQueryFilter, logIdFilter, dateRange, pageSize, true)}
+                        >
                             {t("common.refresh")}
                         </Button>
                     </Space>
@@ -2663,39 +2677,43 @@ export function MyMediaPanel() {
     const [batchDeleting, setBatchDeleting] = useState(false);
     const { downloading: batchDownloading, downloadZip } = useBatchZipDownload();
 
-    const loadData = useCallback(async () => {
-        setLoading(true);
-        try {
-            const [listRes, profileRes] = await Promise.all([
-                storageApi.list({ page, pageSize, q, kind, module: moduleFilter, includeStats: true }),
-                accountApi.getProfile(),
-            ]);
-            setItems(listRes.items);
-            setTotal(listRes.total ?? listRes.items.length);
-            const loadedIdSet = new Set(listRes.items.map((item) => item.id));
-            setSelectedMediaIds((prev) => prev.filter((id) => loadedIdSet.has(id)));
-            if (listRes.workspaceStats) setWorkspaceStats(listRes.workspaceStats);
-            setUsedBytes(profileRes.user.storageUsedBytes);
-            setQuotaBytes(profileRes.user.storageQuotaBytes ?? 0);
-            setQuotaExpiresAt(profileRes.user.storageQuotaExpiresAt ?? null);
-            setStorageWarningDays(profileRes.user.storageWarningDays ?? 0);
-            setStorageExpiringAt(profileRes.user.storageExpiringAt ?? null);
-            setStorageExpiringBytes(profileRes.user.storageExpiringBytes ?? 0);
-            setStorageRemainingAfterExpiryBytes(profileRes.user.storageRemainingAfterExpiryBytes ?? null);
-            setStorageExpiringWillExceed(Boolean(profileRes.user.storageExpiringWillExceed));
-            setStoragePermanentBytes(profileRes.user.storagePermanentBytes ?? 0);
-            setStorageTimedBytes(profileRes.user.storageTimedBytes ?? 0);
-            setStorageTimedExpiresAt(profileRes.user.storageTimedExpiresAt ?? null);
-            setBaseQuotaBytes(profileRes.storageQuotaDetail?.baseQuotaBytes ?? 0);
-            setBaseQuotaExpiresAt(profileRes.storageQuotaDetail?.baseExpiresAt ?? null);
-            setStorageGrants(profileRes.storageQuotaDetail?.grants ?? []);
-            setUser(profileRes.user);
-        } catch (error) {
-            message.error(error instanceof Error ? error.message : t("userPanels.myMedia.loadFailed"));
-        } finally {
-            setLoading(false);
-        }
-    }, [kind, message, moduleFilter, page, pageSize, q, setUser, t]);
+    const loadData = useCallback(
+        async (notifySuccess = false) => {
+            setLoading(true);
+            try {
+                const [listRes, profileRes] = await Promise.all([
+                    storageApi.list({ page, pageSize, q, kind, module: moduleFilter, includeStats: true }),
+                    accountApi.getProfile(),
+                ]);
+                setItems(listRes.items);
+                setTotal(listRes.total ?? listRes.items.length);
+                const loadedIdSet = new Set(listRes.items.map((item) => item.id));
+                setSelectedMediaIds((prev) => prev.filter((id) => loadedIdSet.has(id)));
+                if (listRes.workspaceStats) setWorkspaceStats(listRes.workspaceStats);
+                setUsedBytes(profileRes.user.storageUsedBytes);
+                setQuotaBytes(profileRes.user.storageQuotaBytes ?? 0);
+                setQuotaExpiresAt(profileRes.user.storageQuotaExpiresAt ?? null);
+                setStorageWarningDays(profileRes.user.storageWarningDays ?? 0);
+                setStorageExpiringAt(profileRes.user.storageExpiringAt ?? null);
+                setStorageExpiringBytes(profileRes.user.storageExpiringBytes ?? 0);
+                setStorageRemainingAfterExpiryBytes(profileRes.user.storageRemainingAfterExpiryBytes ?? null);
+                setStorageExpiringWillExceed(Boolean(profileRes.user.storageExpiringWillExceed));
+                setStoragePermanentBytes(profileRes.user.storagePermanentBytes ?? 0);
+                setStorageTimedBytes(profileRes.user.storageTimedBytes ?? 0);
+                setStorageTimedExpiresAt(profileRes.user.storageTimedExpiresAt ?? null);
+                setBaseQuotaBytes(profileRes.storageQuotaDetail?.baseQuotaBytes ?? 0);
+                setBaseQuotaExpiresAt(profileRes.storageQuotaDetail?.baseExpiresAt ?? null);
+                setStorageGrants(profileRes.storageQuotaDetail?.grants ?? []);
+                setUser(profileRes.user);
+                if (notifySuccess) message.success(t("common.refreshed"));
+            } catch (error) {
+                message.error(error instanceof Error ? error.message : t("userPanels.myMedia.loadFailed"));
+            } finally {
+                setLoading(false);
+            }
+        },
+        [kind, message, moduleFilter, page, pageSize, q, setUser, t],
+    );
 
     const loadWorkspaceTab = useCallback(
         async (tab: "canvas" | "image_workbench" | "video_workbench") => {
@@ -2750,7 +2768,9 @@ export function MyMediaPanel() {
         setDeletingMediaId(mediaId);
         try {
             await storageApi.remove(mediaId);
-            notifyCloudWorkspaceChanged("media", { sync: false });
+            await Promise.all([purgeLocalStoredImages([mediaId]), purgeLocalStoredMedia([mediaId])]);
+            notifyCloudWorkspaceChanged("all");
+            void syncCloudWorkspace();
             message.success(t("userPanels.myMedia.deletedMedia"));
             if (items.length <= 1 && page > 1) {
                 setPage((prev) => Math.max(1, prev - 1));
@@ -2795,7 +2815,11 @@ export function MyMediaPanel() {
         setBatchDeleting(true);
         try {
             const res = await storageApi.batchRemove(selectedMediaIds);
-            notifyCloudWorkspaceChanged("media", { sync: false });
+            if (res.deletedCount > 0) {
+                await Promise.all([purgeLocalStoredImages(selectedMediaIds), purgeLocalStoredMedia(selectedMediaIds)]);
+                notifyCloudWorkspaceChanged("all");
+                void syncCloudWorkspace();
+            }
             if (res.failedCount && res.failedCount > 0) {
                 message.warning(
                     `${t("userPanels.myMedia.batchDeletedMedia", { count: res.deletedCount })}（另有 ${res.failedCount} 个文件对象存储删除失败${res.firstError ? `：${res.firstError}` : ""}）`,
@@ -2820,6 +2844,7 @@ export function MyMediaPanel() {
         setDownloadingId(record.id);
         try {
             await storageApi.downloadFile(record);
+            message.success(t("common.downloaded"));
         } catch (error) {
             message.error(error instanceof Error ? error.message : t("userPanels.ledgerDetail.downloadFailed"));
         } finally {
@@ -3139,7 +3164,7 @@ export function MyMediaPanel() {
                                                     </Popconfirm>
                                                 </>
                                             ) : null}
-                                            <Button icon={<RefreshCw className="size-4" />} loading={loading} onClick={() => void loadData()}>
+                                            <Button icon={<RefreshCw className="size-4" />} loading={loading} onClick={() => void loadData(true)}>
                                                 {t("common.refresh")}
                                             </Button>
                                         </Space>

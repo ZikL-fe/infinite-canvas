@@ -582,6 +582,7 @@ export default function ImagePage() {
             }
             setSelectedLogIds([]);
             setDeleteConfirmOpen(false);
+            message.success(t("common.deletedCount", { count: deletingIds.length }));
         } catch (error) {
             message.error(error instanceof Error ? error.message : t("common.deleteFailed"));
         } finally {

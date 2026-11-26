@@ -69,17 +69,20 @@ async function hydrateAsset(asset: Asset): Promise<Asset> {
     return asset;
 }
 
-async function pushProjectToCloud(project: CanvasProject) {
+async function pushProjectToCloud(project: CanvasProject, options?: { keepalive?: boolean }) {
     if (!isCloudAuthenticated() || deletedProjectIds.has(project.id)) return;
-    const ok = await ensureCloudMediaUploaded(project);
-    if (!ok || deletedProjectIds.has(project.id)) return;
+    if (!options?.keepalive) {
+        const ok = await ensureCloudMediaUploaded(project);
+        if (!ok || deletedProjectIds.has(project.id)) return;
+    }
     if (!useCanvasStore.getState().projects.some((item) => item.id === project.id)) return;
-    const res = await canvasApi.saveProject(project.id, stripBlobUrls(project) as unknown as Record<string, unknown>);
+    const res = await canvasApi.saveProject(project.id, stripBlobUrls(project) as unknown as Record<string, unknown>, options);
     if (res?.deletedMediaCount && res.deletedMediaCount > 0) {
         void authApi
             .me()
             .then((meRes) => useUserStore.getState().setUser(meRes.user))
             .catch(() => undefined);
+        useAssetStore.getState().cleanupImages();
         notifyCloudWorkspaceChanged("media", { sync: false });
     }
 }
@@ -94,6 +97,7 @@ async function pushAssetToCloud(asset: Asset) {
             .me()
             .then((meRes) => useUserStore.getState().setUser(meRes.user))
             .catch(() => undefined);
+        useAssetStore.getState().cleanupImages();
         notifyCloudWorkspaceChanged("media", { sync: false });
     }
 }
@@ -424,8 +428,8 @@ function scheduleProjectSync(project: CanvasProject) {
     projectSaveTimers.set(project.id, timer);
 }
 
-/** 立即冲刷待推送的画布变更（用于退出登录前避免 800ms 防抖丢失最新节点）。 */
-export async function flushPendingCanvasSyncs() {
+/** 立即冲刷待推送的画布变更（用于退出登录或页面卸载前避免 800ms 防抖丢失最新节点/删除清理）。 */
+export async function flushPendingCanvasSyncs(options?: { keepalive?: boolean }) {
     for (const timer of projectSaveTimers.values()) {
         clearTimeout(timer);
     }
@@ -436,12 +440,18 @@ export async function flushPendingCanvasSyncs() {
     }
     const items = Array.from(pendingProjectsToSync.values());
     pendingProjectsToSync.clear();
-    await Promise.allSettled(items.map((project) => pushProjectToCloud(project)));
+    await Promise.allSettled(items.map((project) => pushProjectToCloud(project, options)));
 }
 
 export function initCloudSyncListeners() {
     if (listenersInitialized) return;
     listenersInitialized = true;
+
+    if (typeof window !== "undefined") {
+        window.addEventListener("pagehide", () => {
+            void flushPendingCanvasSyncs({ keepalive: true });
+        });
+    }
 
     initWorkspaceBroadcastChannel((scope, sync) => {
         window.dispatchEvent(new CustomEvent(WORKSPACE_CHANGED_EVENT, { detail: { scope, sync } }));

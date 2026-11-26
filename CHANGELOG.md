@@ -2,6 +2,10 @@
 
 ## Unreleased
 
++ [优化] 补全全站删除及手动网络操作成功/失败提示：在删除画布项目/当前画布、生图与视频工作台记录、提示词来源、节点插件，以及导出配置/画布/资产、单条文件下载、退出登录、提示词来源编辑保存与各模块手动「刷新」操作后统一展示 `message.success` 结果反馈，并为后台工作区数据删除补齐异常报错提示。
+
++ [修复] 补齐跨模块删除联动一致性：在成果页、我的云端媒体或管理后台删除云端媒体时服务端级联清理资产、工作台记录及画布中对应失效引用并刷新本地/跨标签同步，修复画布批量节点删图遗留外层 `storageKey`、删节点未中止在途生成及退出/关闭前 800ms 防抖同步漏删云端媒体的问题，并避免成果视频存入资产重复上传占用配额。
+
 + [优化] 为 `workbench_logs`、`canvas_projects`、`media_objects`、`user_assets`、`credit_ledger`、`user_sessions` 与 `ai_billing_tasks` 补齐 `user_id` 复合索引以避免百万行级全表扫描，并为画布（`GET /api/canvas/projects`）与工作台（`GET /api/workbench/logs`）接入基于 `updatedSince` 服务端游标的增量同步，非首次同步仅拉取变更记录。
 
 + [修复] 修复切换对象存储桶（如迁移至 Cloudflare R2）后旧桶缺失文件导致 `/api/storage/download/:mediaId` 返回 500 并在前端缩略图/媒体预取链路被反复重试轮询的问题：服务端对 `NoSuchKey` 返回明确的 `404`，前端在确认 404/缺失后不再降级重复打 `/download` 并记入会话级缺失缓存以终止无效重试。

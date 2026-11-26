@@ -15,6 +15,7 @@ import {
   collectUserMediaReferences,
   extractStorageKeys,
   loadUserMediaByteMap,
+  purgeMediaReferencesForUsers,
   summarizeWorkspaceMedia,
   type MediaSourceModule,
 } from "../lib/media-cleanup.ts";
@@ -1767,6 +1768,8 @@ adminRoutes.delete("/media/:id", async (c) => {
         .where(eq(users.id, media.userId));
     }
   });
+
+  await purgeMediaReferencesForUsers(new Map([[media.userId, [media.id]]]));
 
   return c.json({ ok: true });
 });

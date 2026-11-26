@@ -898,10 +898,10 @@ export const canvasApi = {
             syncedAt?: string;
         }>(`/canvas/projects${suffix}`);
     },
-    saveProject: (id: string, payload: Record<string, unknown>) =>
+    saveProject: (id: string, payload: Record<string, unknown>, options?: { keepalive?: boolean }) =>
         requestServer<{ project: Record<string, unknown> | null; skippedDeleted?: boolean; deletedMediaCount?: number }>(
             `/canvas/projects/${encodeURIComponent(id)}`,
-            { method: "PUT", body: JSON.stringify(payload) },
+            { method: "PUT", body: JSON.stringify(payload), ...(options?.keepalive ? { keepalive: true } : {}) },
         ),
     deleteProjects: (ids: string[]) =>
         requestServer<{ ok: boolean; deletedMediaCount?: number }>("/canvas/projects/batch-delete", { method: "POST", body: JSON.stringify({ ids }) }),

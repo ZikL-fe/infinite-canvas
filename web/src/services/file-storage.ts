@@ -6,7 +6,7 @@ import { storageApi } from "@/services/api/server";
 import { withLocalProxy } from "@/stores/use-config-store";
 import {
     clearCloudMediaUrlCache,
-    deleteCloudMedia,
+    evictCloudMediaUrlCache,
     fetchCloudMediaBlob,
     inferCloudMediaKind,
     isCloudAuthenticated,
@@ -89,14 +89,17 @@ export async function setMediaBlob(storageKey: string, blob: Blob) {
     return url;
 }
 
-export async function deleteStoredMedia(keys: Iterable<string>) {
-    await deleteCloudMedia(keys);
+/** 仅清理本地 IndexedDB 与对象 URL 缓存（云端媒体清理由服务端按跨模块引用安全回收）。 */
+export async function purgeLocalStoredMedia(keys: Iterable<string>) {
+    const uniqueKeys = Array.from(new Set(keys)).filter(Boolean);
+    if (!uniqueKeys.length) return;
+    evictCloudMediaUrlCache(uniqueKeys);
     await Promise.all(
-        Array.from(new Set(keys)).map(async (key) => {
+        uniqueKeys.map(async (key) => {
             const url = objectUrls.get(key);
             if (url) URL.revokeObjectURL(url);
             objectUrls.delete(key);
-            await store.removeItem(key);
+            await store.removeItem(key).catch(() => undefined);
         }),
     );
 }
@@ -116,7 +119,7 @@ export async function cleanupUnusedMedia(usedData: unknown) {
         if (!usedKeys.has(key)) unused.push(key);
     });
     if (unused.length) {
-        await deleteStoredMedia(unused);
+        await purgeLocalStoredMedia(unused);
     }
 }
 

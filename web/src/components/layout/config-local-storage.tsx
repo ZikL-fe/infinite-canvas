@@ -1,4 +1,4 @@
-import { Alert, Button, Progress, Spin } from "antd";
+import { Alert, App, Button, Progress, Spin } from "antd";
 import type { TFunction } from "i18next";
 import { Database, HardDrive, Layers3, RefreshCw } from "lucide-react";
 import { useCallback, useEffect, useState, type ReactNode } from "react";
@@ -18,22 +18,29 @@ const storeLabelKeys: Record<string, string> = {
 };
 
 export function ConfigLocalStorage({ active }: { active: boolean }) {
+    const { message } = App.useApp();
     const { t } = useTranslation();
     const [usage, setUsage] = useState<LocalStorageUsage | null>(null);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState("");
 
-    const refresh = useCallback(async () => {
-        setLoading(true);
-        setError("");
-        try {
-            setUsage(await readLocalStorageUsage());
-        } catch (reason) {
-            setError(reason instanceof Error ? reason.message : t("config.localStorage.readFailed"));
-        } finally {
-            setLoading(false);
-        }
-    }, [t]);
+    const refresh = useCallback(
+        async (notifySuccess = false) => {
+            setLoading(true);
+            setError("");
+            try {
+                setUsage(await readLocalStorageUsage());
+                if (notifySuccess) message.success(t("common.refreshed"));
+            } catch (reason) {
+                const msg = reason instanceof Error ? reason.message : t("config.localStorage.readFailed");
+                setError(msg);
+                if (notifySuccess) message.error(msg);
+            } finally {
+                setLoading(false);
+            }
+        },
+        [message, t],
+    );
 
     useEffect(() => {
         if (active && !usage) void refresh();
@@ -53,7 +60,7 @@ export function ConfigLocalStorage({ active }: { active: boolean }) {
                         </div>
                         <div className="mt-1 text-xs text-stone-500">{t("config.localStorage.description")}</div>
                     </div>
-                    <Button icon={<RefreshCw className="size-4" />} loading={loading} onClick={() => void refresh()}>
+                    <Button icon={<RefreshCw className="size-4" />} loading={loading} onClick={() => void refresh(true)}>
                         {t("config.localStorage.refresh")}
                     </Button>
                 </div>

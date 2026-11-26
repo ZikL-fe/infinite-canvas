@@ -126,6 +126,209 @@ export async function cleanupOrphanedUserMedia(userId: string, candidateIds: Ite
   return deletedRows.length;
 }
 
+function filterPayloadRefs(list: unknown, deletedSet: Set<string>) {
+  if (!Array.isArray(list)) return { next: list, changed: false };
+  const next = list.filter((item) => {
+    if (!item || typeof item !== "object") return true;
+    const key = (item as { storageKey?: unknown }).storageKey;
+    return !(typeof key === "string" && deletedSet.has(key));
+  });
+  return { next, changed: next.length !== list.length };
+}
+
+/** 在物理删除媒体文件后，同步清理引用了这些 mediaId 的资产、工作台记录与画布节点引用，避免产生死链与 404 轮询。 */
+export async function purgeMediaReferencesForUsers(deletedIdsByUser: Map<string, string[]>) {
+  const now = new Date();
+  for (const [userId, rawIds] of deletedIdsByUser) {
+    const deletedSet = new Set(rawIds.filter((id) => id.includes(":")));
+    if (!deletedSet.size) continue;
+
+    const [assets, logs, projects] = await Promise.all([
+      db.query.userAssets.findMany({
+        where: and(eq(userAssets.userId, userId), isNull(userAssets.deletedAt)),
+        columns: { id: true, mediaId: true, data: true },
+      }),
+      db.query.workbenchLogs.findMany({
+        where: and(eq(workbenchLogs.userId, userId), isNull(workbenchLogs.deletedAt)),
+        columns: { id: true, kind: true, payload: true },
+      }),
+      db.query.canvasProjects.findMany({
+        where: and(eq(canvasProjects.userId, userId), isNull(canvasProjects.deletedAt)),
+        columns: { id: true, version: true, nodes: true, connections: true, chatSessions: true },
+      }),
+    ]);
+
+    const assetIdsToDelete: string[] = [];
+    for (const asset of assets) {
+      if (asset.mediaId && deletedSet.has(asset.mediaId)) {
+        assetIdsToDelete.push(asset.id);
+        continue;
+      }
+      const keys = extractStorageKeys(asset.data);
+      if (Array.from(keys).some((k) => deletedSet.has(k))) {
+        assetIdsToDelete.push(asset.id);
+      }
+    }
+    if (assetIdsToDelete.length) {
+      await db
+        .update(userAssets)
+        .set({ deletedAt: now, updatedAt: now })
+        .where(and(eq(userAssets.userId, userId), inArray(userAssets.id, assetIdsToDelete)));
+    }
+
+    const logIdsToDelete: string[] = [];
+    for (const log of logs) {
+      const keys = extractStorageKeys(log.payload);
+      if (!Array.from(keys).some((k) => deletedSet.has(k))) continue;
+
+      const payload = { ...(log.payload || {}) } as Record<string, unknown>;
+      const prevImages = Array.isArray(payload.images) ? payload.images : [];
+      const { next: nextImages, changed: imagesChanged } = filterPayloadRefs(payload.images, deletedSet);
+      const { next: nextRefs, changed: refsChanged } = filterPayloadRefs(payload.references, deletedSet);
+
+      const prevVideo = payload.video && typeof payload.video === "object" ? (payload.video as { storageKey?: unknown }) : null;
+      const videoDeleted = Boolean(prevVideo && typeof prevVideo.storageKey === "string" && deletedSet.has(prevVideo.storageKey));
+
+      if (log.kind === "image" && prevImages.length > 0 && Array.isArray(nextImages) && nextImages.length === 0) {
+        logIdsToDelete.push(log.id);
+        continue;
+      }
+      if (log.kind === "video" && prevVideo && videoDeleted) {
+        logIdsToDelete.push(log.id);
+        continue;
+      }
+      if (!imagesChanged && !refsChanged && !videoDeleted) continue;
+
+      if (imagesChanged && Array.isArray(nextImages)) {
+        payload.images = nextImages;
+        payload.successCount = nextImages.length;
+      }
+      if (refsChanged) payload.references = nextRefs;
+      if (videoDeleted) delete payload.video;
+
+      await db
+        .update(workbenchLogs)
+        .set({ payload, updatedAt: now })
+        .where(and(eq(workbenchLogs.id, log.id), eq(workbenchLogs.userId, userId)));
+    }
+    if (logIdsToDelete.length) {
+      await db
+        .update(workbenchLogs)
+        .set({ deletedAt: now, updatedAt: now })
+        .where(and(eq(workbenchLogs.userId, userId), inArray(workbenchLogs.id, logIdsToDelete)));
+    }
+
+    for (const project of projects) {
+      const keys = extractStorageKeys([project.nodes, project.chatSessions]);
+      if (!Array.from(keys).some((k) => deletedSet.has(k))) continue;
+
+      let projectChanged = false;
+      const removedNodeIds = new Set<string>();
+      const nextNodes: unknown[] = [];
+
+      for (const rawNode of project.nodes) {
+        if (!rawNode || typeof rawNode !== "object") {
+          nextNodes.push(rawNode);
+          continue;
+        }
+        const node = rawNode as Record<string, unknown>;
+        const nodeId = typeof node.id === "string" ? node.id : "";
+        const metadata = node.metadata && typeof node.metadata === "object" ? ({ ...(node.metadata as Record<string, unknown>) }) : null;
+        if (!metadata) {
+          nextNodes.push(rawNode);
+          continue;
+        }
+
+        if (Array.isArray(metadata.images) && metadata.images.length > 0) {
+          const remaining = metadata.images.filter((img) => {
+            if (!img || typeof img !== "object") return true;
+            const key = (img as { storageKey?: unknown }).storageKey;
+            return !(typeof key === "string" && deletedSet.has(key));
+          });
+          if (remaining.length === 0) {
+            if (nodeId) removedNodeIds.add(nodeId);
+            projectChanged = true;
+            continue;
+          }
+          if (remaining.length !== metadata.images.length) {
+            projectChanged = true;
+            const primary =
+              (remaining.find((img) => (img as { id?: unknown }).id === metadata.primaryImageId) as Record<string, unknown> | undefined) ||
+              (remaining[0] as Record<string, unknown>);
+            metadata.images = remaining;
+            metadata.count = remaining.length;
+            metadata.primaryImageId = primary?.id;
+            metadata.storageKey = primary?.storageKey;
+            metadata.content = primary?.content || "";
+            metadata.naturalWidth = primary?.naturalWidth;
+            metadata.naturalHeight = primary?.naturalHeight;
+            metadata.bytes = primary?.bytes;
+            metadata.mimeType = primary?.mimeType;
+            nextNodes.push({ ...node, metadata });
+            continue;
+          }
+        }
+
+        if (typeof metadata.storageKey === "string" && deletedSet.has(metadata.storageKey)) {
+          if (nodeId) removedNodeIds.add(nodeId);
+          projectChanged = true;
+          continue;
+        }
+
+        if (Array.isArray(metadata.references)) {
+          const nextNodeRefs = metadata.references.filter((ref) => !(typeof ref === "string" && deletedSet.has(ref)));
+          if (nextNodeRefs.length !== metadata.references.length) {
+            metadata.references = nextNodeRefs;
+            projectChanged = true;
+          }
+        }
+
+        nextNodes.push({ ...node, metadata });
+      }
+
+      const nextConnections = removedNodeIds.size
+        ? project.connections.filter((rawConn) => {
+            if (!rawConn || typeof rawConn !== "object") return true;
+            const conn = rawConn as { fromNodeId?: unknown; toNodeId?: unknown };
+            return !(
+              (typeof conn.fromNodeId === "string" && removedNodeIds.has(conn.fromNodeId)) ||
+              (typeof conn.toNodeId === "string" && removedNodeIds.has(conn.toNodeId))
+            );
+          })
+        : project.connections;
+
+      let sessionsChanged = false;
+      const nextSessions = project.chatSessions.map((rawSession) => {
+        if (!rawSession || typeof rawSession !== "object") return rawSession;
+        const session = rawSession as { messages?: unknown[] };
+        if (!Array.isArray(session.messages)) return rawSession;
+        const nextMessages = session.messages.map((rawMsg) => {
+          if (!rawMsg || typeof rawMsg !== "object") return rawMsg;
+          const msg = rawMsg as { references?: unknown };
+          const { next, changed } = filterPayloadRefs(msg.references, deletedSet);
+          if (!changed) return rawMsg;
+          sessionsChanged = true;
+          return { ...msg, references: next };
+        });
+        return sessionsChanged ? { ...session, messages: nextMessages } : rawSession;
+      });
+
+      if (projectChanged || sessionsChanged) {
+        await db
+          .update(canvasProjects)
+          .set({
+            nodes: nextNodes,
+            connections: nextConnections,
+            chatSessions: nextSessions,
+            version: project.version + 1,
+            updatedAt: now,
+          })
+          .where(and(eq(canvasProjects.id, project.id), eq(canvasProjects.userId, userId)));
+      }
+    }
+  }
+}
+
 /** 加载指定用户的活跃云端媒体字节映射（键为 `${userId}:${mediaId}`）。 */
 export async function loadUserMediaByteMap(userIds: string[]) {
   const uniqueIds = Array.from(new Set(userIds.filter(Boolean)));

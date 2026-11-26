@@ -11,8 +11,9 @@ import { createImageThumbnail, createVideoThumbnail } from "@/lib/image-thumbnai
 import { formatBytes, formatStoragePair } from "@/lib/image-utils";
 import { authApi, mediaDownloadFilename, storageApi, type MediaItem } from "@/services/api/server";
 import { notifyCloudWorkspaceChanged, WORKSPACE_CHANGED_EVENT } from "@/services/cloud-media";
-import { uploadMediaFile } from "@/services/file-storage";
-import { getImagePreviewRevision, previewUrlFor, subscribeImagePreviews, uploadImage } from "@/services/image-storage";
+import { syncCloudWorkspace } from "@/services/cloud-sync";
+import { purgeLocalStoredMedia, uploadMediaFile } from "@/services/file-storage";
+import { getImagePreviewRevision, previewUrlFor, purgeLocalStoredImages, subscribeImagePreviews, uploadImage } from "@/services/image-storage";
 import { useAssetStore } from "@/stores/use-asset-store";
 import { useUserStore } from "@/stores/use-user-store";
 
@@ -43,27 +44,31 @@ export default function ResultsPage() {
     const [selectedIds, setSelectedIds] = useState<string[]>([]);
     const { downloading: batchDownloading, downloadZip } = useBatchZipDownload();
 
-    const loadResults = useCallback(async () => {
-        if (!accessToken) return;
-        setLoading(true);
-        try {
-            const res = await storageApi.list({
-                sourceType: "ai_generated",
-                kind: kind || undefined,
-                q: keyword.trim() || undefined,
-                page,
-                pageSize,
-            });
-            setItems(res.items);
-            setTotal(res.total ?? res.items.length);
-            const loadedIds = new Set(res.items.map((entry) => entry.id));
-            setSelectedIds((prev) => prev.filter((id) => loadedIds.has(id)));
-        } catch (error) {
-            message.error(error instanceof Error ? error.message : t("results.loadFailed"));
-        } finally {
-            setLoading(false);
-        }
-    }, [accessToken, keyword, kind, message, page, pageSize, t]);
+    const loadResults = useCallback(
+        async (notifySuccess = false) => {
+            if (!accessToken) return;
+            setLoading(true);
+            try {
+                const res = await storageApi.list({
+                    sourceType: "ai_generated",
+                    kind: kind || undefined,
+                    q: keyword.trim() || undefined,
+                    page,
+                    pageSize,
+                });
+                setItems(res.items);
+                setTotal(res.total ?? res.items.length);
+                const loadedIds = new Set(res.items.map((entry) => entry.id));
+                setSelectedIds((prev) => prev.filter((id) => loadedIds.has(id)));
+                if (notifySuccess) message.success(t("common.refreshed"));
+            } catch (error) {
+                message.error(error instanceof Error ? error.message : t("results.loadFailed"));
+            } finally {
+                setLoading(false);
+            }
+        },
+        [accessToken, keyword, kind, message, page, pageSize, t],
+    );
 
     useEffect(() => {
         void loadResults();
@@ -134,6 +139,7 @@ export default function ResultsPage() {
         try {
             const ext = item.mimeType?.split("/")[1]?.split("+")[0] || (item.kind === "video" ? "mp4" : item.kind === "audio" ? "mp3" : "png");
             await storageApi.downloadFile(item, `result-${item.id.replace(/:/g, "_")}.${ext}`);
+            message.success(t("common.downloaded"));
         } catch (error) {
             message.error(error instanceof Error ? error.message : t("assets.downloadFailed"));
         } finally {
@@ -185,7 +191,7 @@ export default function ResultsPage() {
                     metadata: { source: "results", prompt: promptText, model: modelText },
                 });
             } else if (item.kind === "video") {
-                const stored = await uploadMediaFile(url, "video", { sourceType: "ai_generated" });
+                const stored = await uploadMediaFile(url, "video", { existingStorageKey: item.id, sourceType: "ai_generated" });
                 addAsset({
                     kind: "video",
                     title,
@@ -194,7 +200,7 @@ export default function ResultsPage() {
                     source: t("results.sourceName"),
                     data: {
                         url: stored.url,
-                        storageKey: stored.storageKey,
+                        storageKey: item.id,
                         width: item.width || stored.width || 0,
                         height: item.height || stored.height || 0,
                         bytes: item.bytes || stored.bytes,
@@ -218,11 +224,13 @@ export default function ResultsPage() {
         setDeletingId(mediaId);
         try {
             await storageApi.remove(mediaId);
+            await Promise.all([purgeLocalStoredImages([mediaId]), purgeLocalStoredMedia([mediaId])]);
             void authApi
                 .me()
                 .then((res) => useUserStore.getState().setUser(res.user))
                 .catch(() => undefined);
-            notifyCloudWorkspaceChanged("media", { sync: false });
+            notifyCloudWorkspaceChanged("all");
+            void syncCloudWorkspace();
             message.success(t("results.deletedFreed"));
             void loadResults();
         } catch (error) {
@@ -355,7 +363,7 @@ export default function ResultsPage() {
                                     {t("common.batchDownloadCount", { count: selectedIds.length })}
                                 </Button>
                             ) : null}
-                            <Button size="small" icon={<RefreshCw className="size-3.5" />} loading={loading} onClick={() => void loadResults()}>
+                            <Button size="small" icon={<RefreshCw className="size-3.5" />} loading={loading} onClick={() => void loadResults(true)}>
                                 {t("common.refresh")}
                             </Button>
                         </Space>

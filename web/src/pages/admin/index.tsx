@@ -366,7 +366,7 @@ export default function AdminPage() {
     }, [message, storageForm, t]);
 
     const loadMedia = useCallback(
-        async (page = mediaPage, q = mediaQuery, kind = mediaKindFilter, mod = mediaModuleFilter, pageSize = mediaPageSize) => {
+        async (page = mediaPage, q = mediaQuery, kind = mediaKindFilter, mod = mediaModuleFilter, pageSize = mediaPageSize, notifySuccess = false) => {
             setMediaLoading(true);
             try {
                 const res = await adminApi.listMedia({ page, pageSize, q, kind, module: mod });
@@ -374,6 +374,7 @@ export default function AdminPage() {
                 setMediaTotal(res.total);
                 setMediaFilteredBytes(typeof res.filteredBytes === "number" ? res.filteredBytes : null);
                 if (res.workspaceStats) setMediaWorkspaceStats(res.workspaceStats);
+                if (notifySuccess) message.success(t("common.refreshed"));
             } catch (error) {
                 message.error(error instanceof Error ? error.message : t("admin.messages.loadMediaFailed"));
             } finally {
@@ -384,13 +385,14 @@ export default function AdminPage() {
     );
 
     const loadWorkspaceData = useCallback(
-        async (kind = mediaSubTab, page = workspaceDataPage, q = workspaceDataQuery, pageSize = workspaceDataPageSize) => {
+        async (kind = mediaSubTab, page = workspaceDataPage, q = workspaceDataQuery, pageSize = workspaceDataPageSize, notifySuccess = false) => {
             if (kind === "media") return;
             setWorkspaceDataLoading(true);
             try {
                 const res = await adminApi.listWorkspaceData({ kind, page, pageSize, q });
                 setWorkspaceDataItems(res.items);
                 setWorkspaceDataTotal(res.total);
+                if (notifySuccess) message.success(t("common.refreshed"));
             } catch (error) {
                 message.error(error instanceof Error ? error.message : t("admin.messages.loadWorkspaceFailed"));
             } finally {
@@ -2263,7 +2265,11 @@ export default function AdminPage() {
                                                         setMediaQuery(value.trim());
                                                     }}
                                                 />
-                                                <Button icon={<RefreshCw className="size-4" />} loading={mediaLoading} onClick={() => void loadMedia()}>
+                                                <Button
+                                                    icon={<RefreshCw className="size-4" />}
+                                                    loading={mediaLoading}
+                                                    onClick={() => void loadMedia(mediaPage, mediaQuery, mediaKindFilter, mediaModuleFilter, mediaPageSize, true)}
+                                                >
                                                     {t("common.refresh")}
                                                 </Button>
                                             </Space>
@@ -2278,7 +2284,11 @@ export default function AdminPage() {
                                                         setWorkspaceDataQuery(value.trim());
                                                     }}
                                                 />
-                                                <Button icon={<RefreshCw className="size-4" />} loading={workspaceDataLoading} onClick={() => void loadWorkspaceData()}>
+                                                <Button
+                                                    icon={<RefreshCw className="size-4" />}
+                                                    loading={workspaceDataLoading}
+                                                    onClick={() => void loadWorkspaceData(mediaSubTab, workspaceDataPage, workspaceDataQuery, workspaceDataPageSize, true)}
+                                                >
                                                     {t("common.refresh")}
                                                 </Button>
                                             </Space>
@@ -2469,20 +2479,25 @@ export default function AdminPage() {
                                                                                 danger: true,
                                                                                 confirm: t("admin.mediaTab.confirmDeleteWorkspace"),
                                                                                 onClick: () =>
-                                                                                    void adminApi.deleteWorkspaceData(rec.kind, rec.id).then(() => {
-                                                                                        message.success(t("admin.messages.workspaceDeleted"));
-                                                                                        const scope =
-                                                                                            rec.kind === "canvas"
-                                                                                                ? "canvas"
-                                                                                                : rec.kind === "image_workbench"
-                                                                                                  ? "image"
-                                                                                                  : "video";
-                                                                                        notifyCloudWorkspaceChanged(scope, { sync: true });
-                                                                                        void syncCloudWorkspace();
-                                                                                        void loadWorkspaceData();
-                                                                                        void loadMedia();
-                                                                                        void loadOverview(overviewDays);
-                                                                                    }),
+                                                                                    void adminApi
+                                                                                        .deleteWorkspaceData(rec.kind, rec.id)
+                                                                                        .then(() => {
+                                                                                            message.success(t("admin.messages.workspaceDeleted"));
+                                                                                            const scope =
+                                                                                                rec.kind === "canvas"
+                                                                                                    ? "canvas"
+                                                                                                    : rec.kind === "image_workbench"
+                                                                                                      ? "image"
+                                                                                                      : "video";
+                                                                                            notifyCloudWorkspaceChanged(scope, { sync: true });
+                                                                                            void syncCloudWorkspace();
+                                                                                            void loadWorkspaceData();
+                                                                                            void loadMedia();
+                                                                                            void loadOverview(overviewDays);
+                                                                                        })
+                                                                                        .catch((error) => {
+                                                                                            message.error(error instanceof Error ? error.message : t("common.deleteFailed"));
+                                                                                        }),
                                                                             },
                                                                         ]}
                                                                     />

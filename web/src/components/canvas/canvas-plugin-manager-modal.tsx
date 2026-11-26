@@ -26,17 +26,23 @@ export function CanvasPluginManagerModal({ open, onClose }: { open: boolean; onC
     const localPlugins = useMemo(() => plugins.filter((item) => item.local), [plugins]);
     const thirdPartyPlugins = useMemo(() => plugins.filter((item) => !item.local && !item.official), [plugins]);
 
-    const loadOfficial = useCallback(async () => {
-        setLoadingOfficial(true);
-        setOfficialError(null);
-        try {
-            setOfficial(await fetchOfficialPlugins());
-        } catch (error) {
-            setOfficialError(error instanceof Error ? error.message : String(error));
-        } finally {
-            setLoadingOfficial(false);
-        }
-    }, []);
+    const loadOfficial = useCallback(
+        async (notifySuccess = false) => {
+            setLoadingOfficial(true);
+            setOfficialError(null);
+            try {
+                setOfficial(await fetchOfficialPlugins());
+                if (notifySuccess) message.success(t("common.refreshed"));
+            } catch (error) {
+                const msg = error instanceof Error ? error.message : String(error);
+                setOfficialError(msg);
+                if (notifySuccess) message.error(msg);
+            } finally {
+                setLoadingOfficial(false);
+            }
+        },
+        [message, t],
+    );
 
     // Fetch the official registry when opening the panel, but only if it has not been loaded yet.
     useEffect(() => {
@@ -97,7 +103,15 @@ export function CanvasPluginManagerModal({ open, onClose }: { open: boolean; onC
                         title={t(upgradable ? "canvas.plugins.upgradeAvailable" : "canvas.plugins.updateFromSource")}
                         onClick={() => runOnPlugin(record, async () => void (await updatePlugin(record)), t("canvas.plugins.updated"))}
                     />
-                    <Popconfirm title={t("canvas.plugins.uninstallTitle")} okText={t("canvas.plugins.uninstall")} cancelText={t("canvas.editors.cancel")} onConfirm={() => uninstallPlugin(record.id)}>
+                    <Popconfirm
+                        title={t("canvas.plugins.uninstallTitle")}
+                        okText={t("canvas.plugins.uninstall")}
+                        cancelText={t("canvas.editors.cancel")}
+                        onConfirm={() => {
+                            uninstallPlugin(record.id);
+                            message.success(t("canvas.plugins.uninstalled"));
+                        }}
+                    >
                         <Button type="text" size="small" danger icon={<Trash2 className="size-4" />} title={t("canvas.plugins.uninstall")} />
                     </Popconfirm>
                 </>
@@ -153,7 +167,7 @@ export function CanvasPluginManagerModal({ open, onClose }: { open: boolean; onC
                 <div className="text-xs" style={{ color: theme.node.muted }}>
                     {t("canvas.plugins.officialDescription")}
                 </div>
-                <Button type="text" size="small" icon={<RefreshCw className={`size-4 ${loadingOfficial ? "animate-spin" : ""}`} />} onClick={loadOfficial} disabled={loadingOfficial}>
+                <Button type="text" size="small" icon={<RefreshCw className={`size-4 ${loadingOfficial ? "animate-spin" : ""}`} />} onClick={() => void loadOfficial(true)} disabled={loadingOfficial}>
                     {t("canvas.plugins.refresh")}
                 </Button>
             </div>

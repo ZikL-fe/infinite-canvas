@@ -36,6 +36,9 @@ export default function CanvasPage() {
         const hide = message.loading(t("canvas.exportingSelected"), 0);
         try {
             await exportCanvasProjects(projects.filter((project) => selectedIds.includes(project.id)), `${t("canvas.title")}-${selectedIds.length}`);
+            message.success(t("common.exported"));
+        } catch {
+            message.error(t("canvas.sidePanel.exportFailed"));
         } finally {
             hide();
             setExporting(false);
