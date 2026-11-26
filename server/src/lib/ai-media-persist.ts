@@ -18,13 +18,52 @@ export function runMediaPersistTask<T>(fn: () => Promise<T>): Promise<T> {
   return mediaPersistLimiter.run(fn);
 }
 
+function isPrivateOrLocalHost(hostname: string): boolean {
+  const host = hostname.trim().toLowerCase().replace(/^\[|\]$/g, "");
+  if (!host) return true;
+  if (host === "localhost" || host.endsWith(".localhost") || host.endsWith(".local") || host.endsWith(".internal")) {
+    return true;
+  }
+  const normalizedIpv4 = host.startsWith("::ffff:") ? host.slice(7) : host;
+  const ipv4Match = normalizedIpv4.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+  if (ipv4Match) {
+    const [a, b] = [Number(ipv4Match[1]), Number(ipv4Match[2])];
+    if (a === 0 || a === 10 || a === 127) return true;
+    if (a === 169 && b === 254) return true;
+    if (a === 172 && b >= 16 && b <= 31) return true;
+    if (a === 192 && b === 168) return true;
+    if (a === 100 && b >= 64 && b <= 127) return true;
+    return false;
+  }
+  if (host === "::" || host === "::1" || host.startsWith("fe80:") || host.startsWith("fc") || host.startsWith("fd")) {
+    return true;
+  }
+  return false;
+}
+
+/** 校验远端拉取 URL 协议与目标主机，拦截内网/回环/元数据地址以防 SSRF。 */
+export function assertSafeExternalUrl(rawUrl: string): URL {
+  const parsed = new URL(rawUrl);
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new Error("仅支持 http/https 资源链接");
+  }
+  if (isPrivateOrLocalHost(parsed.hostname)) {
+    throw new Error("禁止拉取内网或本地地址资源");
+  }
+  return parsed;
+}
+
 /** 带超时与最大体积保护拉取远端媒体 Buffer（超限或超时返回 null，不影响上游原始响应返回前端）。 */
 export async function fetchMediaBufferWithLimits(
   url: string,
-  init?: RequestInit,
+  init?: RequestInit & { allowPrivateNetwork?: boolean },
 ): Promise<{ buffer: Buffer; mimeType: string } | null> {
+  const { allowPrivateNetwork = false, ...fetchInit } = init || {};
+  if (!allowPrivateNetwork) {
+    assertSafeExternalUrl(url);
+  }
   const res = await fetch(url, {
-    ...init,
+    ...fetchInit,
     signal: AbortSignal.timeout(env.MEDIA_FETCH_TIMEOUT_MS),
   });
   if (!res.ok) return null;
@@ -44,6 +83,7 @@ export async function fetchMediaBufferWithLimits(
   return { buffer, mimeType };
 }
 
+/** 校验用户云端存储配额是否已过期或超出上限（包含本次待写入的增量字节数）。 */
 export function checkStorageQuotaBlock(
   usedBytes: number,
   quotaBytes: number,
@@ -70,7 +110,8 @@ export function checkStorageQuotaBlock(
   return { blocked: false };
 }
 
-function inferExtension(filename: string | undefined, mimeType: string) {
+/** 优先从文件名后缀、其次从 MIME 类型推导对象存储文件扩展名（含点号）。 */
+export function inferExtension(filename: string | undefined, mimeType: string) {
   const fromName = filename?.split(".").pop()?.toLowerCase().replace(/[^a-z0-9]/g, "");
   if (fromName && fromName.length <= 10) return `.${fromName}`;
   const map: Record<string, string> = {
@@ -89,13 +130,15 @@ function inferExtension(filename: string | undefined, mimeType: string) {
   return map[mimeType.toLowerCase()] || "";
 }
 
-function buildObjectKey(userId: string, kind: MediaKind, ext: string) {
+/** 按用户与年月分片生成对象存储原文件 Key。 */
+export function buildObjectKey(userId: string, kind: MediaKind, ext: string) {
   const now = new Date();
   const yyyy = now.getUTCFullYear();
   const mm = String(now.getUTCMonth() + 1).padStart(2, "0");
   return `users/${userId}/${yyyy}/${mm}/${kind}/${nanoid()}${ext}`;
 }
 
+/** 生成云端媒体对应的 WebP 缩略图对象存储 Key。 */
 export function buildThumbnailObjectKey(userId: string, mediaId: string) {
   const safeId = mediaId.replace(/[^a-zA-Z0-9_-]/g, "_");
   return `users/${userId}/thumbs/${safeId}.webp`;
@@ -152,6 +195,7 @@ function readWebpDimensions(buffer: Buffer): { width: number; height: number } |
   return null;
 }
 
+/** 解析 PNG / JPEG / WebP 二进制头部读取图片原始宽高（失败返回 null）。 */
 export function inferImageDimensions(buffer: Buffer, mimeType: string) {
   if (mimeType.includes("png")) return readPngDimensions(buffer);
   if (mimeType.includes("jpeg") || mimeType.includes("jpg")) return readJpegDimensions(buffer);

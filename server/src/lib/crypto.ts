@@ -54,3 +54,23 @@ export function maskSecret(value: string) {
   if (value.length <= 8) return "****";
   return `${value.slice(0, 4)}****${value.slice(-4)}`;
 }
+
+const SECRET_PREFIX = "enc:v1:";
+
+/** 加密单个敏感字符串（带版本前缀，便于平滑识别已加密与历史明文值）。 */
+export function encryptSecretValue(value: string): string {
+  if (!value) return "";
+  if (value.startsWith(SECRET_PREFIX)) return value;
+  return `${SECRET_PREFIX}${encryptJson({ v: value })}`;
+}
+
+/** 解密单个敏感字符串；若为未加密的历史明文则原样返回。 */
+export function decryptSecretValue(value: string | null | undefined): string {
+  if (!value) return "";
+  if (!value.startsWith(SECRET_PREFIX)) return value;
+  try {
+    return decryptJson<{ v?: string }>(value.slice(SECRET_PREFIX.length)).v || "";
+  } catch {
+    return "";
+  }
+}

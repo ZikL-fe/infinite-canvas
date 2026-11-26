@@ -1,19 +1,60 @@
 /** 生图/视频工作台生成历史云端同步与级联删除工具。 */
+import localforage from "localforage";
 import type LocalForage from "localforage";
 
 import { authApi, workbenchApi } from "@/services/api/server";
 import { isCloudAuthenticated, notifyCloudWorkspaceChanged } from "@/services/cloud-media";
 import { ensureCloudMediaUploaded, stripBlobUrls } from "@/services/cloud-media-sync";
+import {
+    clearDirty,
+    ensureSyncMetaHydrated,
+    hasTombstone,
+    isDirty,
+    markDirty,
+    markTombstone,
+    unmarkTombstone,
+    type SyncDomain,
+} from "@/services/sync-tombstone";
 import { useUserStore } from "@/stores/use-user-store";
 
-const deletedWorkbenchLogIds = new Set<string>();
+export const imageWorkbenchLogStore = localforage.createInstance({ name: "infinite-canvas", storeName: "image_generation_logs" });
+export const videoWorkbenchLogStore = localforage.createInstance({ name: "infinite-canvas", storeName: "video_generation_logs" });
+
 const WORKBENCH_CURSOR_PREFIX = "infinite-canvas:workbench_sync_cursor:";
 const syncInFlightByKind = new Map<"image" | "video", Promise<void>>();
 const syncQueuedByKind = new Map<"image" | "video", Promise<void>>();
 
-/** 检查工作台记录是否已在当前会话中删除，避免在途同步或后台回填误写回。 */
+function domainOf(kind: "image" | "video"): SyncDomain {
+    return kind === "video" ? "workbench_video" : "workbench_image";
+}
+
+/** 检查工作台记录是否已在当前会话或持久化墓碑中删除，避免在途同步或后台回填误写回。 */
 export function isWorkbenchLogDeleted(id: string) {
-    return deletedWorkbenchLogIds.has(id);
+    return hasTombstone("workbench_image", id) || hasTombstone("workbench_video", id);
+}
+
+/** 清理会话级已删工作台 ID 集合（退出登录或切换账号时由 clearAllSyncMeta 统一清理）。 */
+export function clearDeletedWorkbenchLogIds() {
+    // 持久化墓碑已由 clearAllSyncMeta 统一清理，保留空实现兼容调用方
+}
+
+/** 落盘前清理工作台日志中的临时预览 URL / dataUrl，与页面 serializeLog 保持一致口径。 */
+export function sanitizeWorkbenchLogForStorage<T extends Record<string, unknown>>(log: T): T {
+    const clean = stripBlobUrls(log) as Record<string, unknown>;
+    if (Array.isArray(clean.images)) {
+        clean.images = clean.images.map((item) =>
+            item && typeof item === "object" ? { ...(item as Record<string, unknown>), dataUrl: "" } : item,
+        );
+    }
+    if (Array.isArray(clean.references)) {
+        clean.references = clean.references.map((item) =>
+            item && typeof item === "object" ? { ...(item as Record<string, unknown>), dataUrl: "" } : item,
+        );
+    }
+    if (clean.video && typeof clean.video === "object") {
+        clean.video = { ...(clean.video as Record<string, unknown>), url: "" };
+    }
+    return clean as T;
 }
 
 function cursorStorageKey(kind: "image" | "video") {
@@ -56,13 +97,19 @@ function buildWorkbenchPayload<T extends BaseWorkbenchLog>(kind: "image" | "vide
 
 /** 将单条工作台生成记录推送到云端（仅在真正生成写入记录时才把暂存参考图上传到对象存储）。 */
 export async function pushWorkbenchLogToCloud<T extends BaseWorkbenchLog>(kind: "image" | "video", log: T) {
-    if (!isCloudAuthenticated() || deletedWorkbenchLogIds.has(log.id)) return;
+    const domain = domainOf(kind);
+    await ensureSyncMetaHydrated();
+    if (!isCloudAuthenticated() || hasTombstone(domain, log.id)) return;
+    markDirty(domain, log.id);
     await ensureCloudMediaUploaded(log).catch(() => false);
-    if (!isCloudAuthenticated() || deletedWorkbenchLogIds.has(log.id)) return;
+    if (!isCloudAuthenticated() || hasTombstone(domain, log.id)) return;
     const res = await workbenchApi.saveLog(log.id, buildWorkbenchPayload(kind, log)).catch((err) => {
         console.warn("[workbench-sync] 同步工作台记录失败:", err);
         return null;
     });
+    if (res) {
+        clearDirty(domain, log.id);
+    }
     if (res?.deletedMediaCount && res.deletedMediaCount > 0) {
         void authApi
             .me()
@@ -72,17 +119,14 @@ export async function pushWorkbenchLogToCloud<T extends BaseWorkbenchLog>(kind: 
     }
 }
 
-function logIsoTimestamp(log?: BaseWorkbenchLog) {
-    if (!log) return "";
-    return log.updatedAt || (log.createdAt ? new Date(log.createdAt).toISOString() : "");
-}
-
 async function runWorkbenchLogSync<T extends BaseWorkbenchLog>(
     kind: "image" | "video",
     localStore: LocalForage,
     serialize: (log: T) => T,
 ) {
     if (!isCloudAuthenticated()) return;
+    await ensureSyncMetaHydrated();
+    const domain = domainOf(kind);
 
     const localItems: T[] = [];
     await localStore.iterate((value) => {
@@ -94,17 +138,20 @@ async function runWorkbenchLogSync<T extends BaseWorkbenchLog>(
     const remote = await workbenchApi.listLogs(kind, false, since).catch(() => null);
     if (!remote) return;
 
-    const deletedMap = new Map(remote.deletedIds.map((d) => [d.id, d.deletedAt]));
+    const deletedSet = new Set(remote.deletedIds.map((d) => d.id));
     const localMap = new Map(localItems.map((item) => [item.id, item]));
     const remoteMap = new Map(remote.logs.map((item) => [String(item.id), item as unknown as T]));
     const toPush: T[] = [];
     const candidateIds = new Set<string>([...remoteMap.keys()]);
     if (remote.incremental && since) {
-        for (const id of deletedMap.keys()) {
+        for (const id of deletedSet) {
             if (localMap.has(id)) candidateIds.add(id);
         }
-        for (const [id, local] of localMap) {
-            if (logIsoTimestamp(local) >= since) candidateIds.add(id);
+        // 增量同步仅补推本地明确标脏且未删除的记录，彻底摆脱浏览器与服务端时钟偏差
+        for (const id of localMap.keys()) {
+            if (hasTombstone(domain, id) || isDirty(domain, id)) {
+                candidateIds.add(id);
+            }
         }
     } else {
         for (const id of localMap.keys()) {
@@ -114,44 +161,44 @@ async function runWorkbenchLogSync<T extends BaseWorkbenchLog>(
 
     for (const id of candidateIds) {
         const local = localMap.get(id);
-        if (deletedWorkbenchLogIds.has(id)) {
+        if (hasTombstone(domain, id)) {
             if (local) await localStore.removeItem(id).catch(() => undefined);
             continue;
         }
         const remoteItem = remoteMap.get(id);
-        const deletedAt = deletedMap.get(id);
-        const latestIso = [logIsoTimestamp(local), logIsoTimestamp(remoteItem)].sort().pop() || "";
-
-        if (deletedAt && deletedAt >= latestIso) {
+        if (deletedSet.has(id)) {
             if (local) await localStore.removeItem(id).catch(() => undefined);
+            clearDirty(domain, id);
             continue;
         }
 
         if (local && !remoteItem) {
-            if (deletedWorkbenchLogIds.has(id)) continue;
+            if (hasTombstone(domain, id)) continue;
             const serialized = serialize(local);
             await localStore.setItem(id, serialized).catch(() => undefined);
-            if (!deletedWorkbenchLogIds.has(id)) toPush.push(serialized);
+            if (!hasTombstone(domain, id)) toPush.push(serialized);
         } else if (remoteItem) {
             const preferLocal =
                 local &&
+                isDirty(domain, id) &&
                 ((local.status !== "pending" && remoteItem.status === "pending") ||
-                    ((local.updatedAt || "") > (remoteItem.updatedAt || "")));
+                    (local.updatedAt || "") > (remoteItem.updatedAt || ""));
             if (preferLocal && local) {
-                if (deletedWorkbenchLogIds.has(id)) continue;
+                if (hasTombstone(domain, id)) continue;
                 const serialized = serialize(local);
                 await localStore.setItem(id, serialized).catch(() => undefined);
-                if (!deletedWorkbenchLogIds.has(id)) toPush.push(serialized);
+                if (!hasTombstone(domain, id)) toPush.push(serialized);
             } else if (!local || local.updatedAt !== remoteItem.updatedAt || local.status !== remoteItem.status) {
-                if (deletedWorkbenchLogIds.has(id)) continue;
+                if (hasTombstone(domain, id)) continue;
                 const serialized = serialize(remoteItem);
                 await localStore.setItem(id, serialized).catch(() => undefined);
+                clearDirty(domain, id);
             }
         }
     }
 
     for (const item of toPush) {
-        if (!deletedWorkbenchLogIds.has(item.id)) {
+        if (!hasTombstone(domain, item.id)) {
             await pushWorkbenchLogToCloud(kind, item);
         }
     }
@@ -215,13 +262,14 @@ export async function deleteWorkbenchLogsWithCloud(
     kind?: "image" | "video",
 ) {
     if (!ids.length) return;
-    ids.forEach((id) => deletedWorkbenchLogIds.add(id));
+    const domains: SyncDomain[] = kind ? [domainOf(kind)] : ["workbench_image", "workbench_video"];
+    domains.forEach((d) => markTombstone(d, ids));
     const authenticated = isCloudAuthenticated();
     if (authenticated) {
         try {
             await workbenchApi.deleteLogs(ids, kind);
         } catch (error) {
-            ids.forEach((id) => deletedWorkbenchLogIds.delete(id));
+            domains.forEach((d) => unmarkTombstone(d, ids));
             throw error;
         }
     }

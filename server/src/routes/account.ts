@@ -10,9 +10,10 @@ import { getWalletBalance, queryConsumptionMetrics } from "../lib/billing.ts";
 import { hashPassword, sha256Hex, verifyPassword } from "../lib/crypto.ts";
 import { issueEmailVerificationCode, verifyAndConsumeEmailCode } from "../lib/email-verification.ts";
 import { isMailConfigReady } from "../lib/mail.ts";
+import { mediaTotalBytesSql } from "../lib/media-cleanup.ts";
 import { getAuthPolicy, getPlatformMailConfig, getPlatformWebdavConfig, resolveEffectiveUserWebdav } from "../lib/settings.ts";
 import { getUserQuotaAlertMeta, getUserStorageQuotaSummary, serializeStorageGrant } from "../lib/storage-quota.ts";
-import { requireAuth, type AppEnv } from "../middleware/auth.ts";
+import { requireAuthWithQuota, type AppEnv } from "../middleware/auth.ts";
 
 const updateProfileSchema = z.object({
   displayName: z.string().trim().min(1, "显示名称不能为空").max(48, "显示名称最多 48 个字符").optional(),
@@ -51,7 +52,7 @@ const revokeOthersSchema = z.object({
 
 export const accountRoutes = new Hono<AppEnv>();
 
-accountRoutes.use("*", requireAuth);
+accountRoutes.use("*", requireAuthWithQuota);
 
 accountRoutes.get("/overview", async (c) => {
   const authUser = c.get("user");
@@ -121,7 +122,7 @@ accountRoutes.get("/profile", async (c) => {
       .select({
         kind: mediaObjects.kind,
         count: count(),
-        bytes: sql<number>`COALESCE(SUM(${mediaObjects.bytes}), 0)::bigint`,
+        bytes: sql<number>`COALESCE(SUM(${mediaTotalBytesSql}), 0)::bigint`,
       })
       .from(mediaObjects)
       .where(and(eq(mediaObjects.userId, authUser.id), eq(mediaObjects.status, "active")))

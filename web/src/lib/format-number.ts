@@ -6,6 +6,7 @@ export function formatExactCredits(value: number | null | undefined, maxFraction
     return num.toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: maxFractionDigits });
 }
 
+/** 将积分数量按 K / M / B 紧凑格式化展示（保留 4 位以内有效小数）。 */
 export function formatCompactCredits(value: number | null | undefined, compactDecimals = 2): string {
     const num = Number(value ?? 0);
     if (!Number.isFinite(num) || num === 0) return "0";
@@ -16,6 +17,7 @@ export function formatCompactCredits(value: number | null | undefined, compactDe
     return Number(num.toFixed(4)).toString();
 }
 
+/** 将整型调用次数或统计计数按 K / M / B 紧凑格式化展示。 */
 export function formatCompactCount(value: number | null | undefined, compactDecimals = 2): string {
     const num = Number(value ?? 0);
     if (!Number.isFinite(num) || num === 0) return "0";

@@ -6,6 +6,7 @@ import { z } from "zod";
 
 import { canvasProjects, db } from "../db/index.ts";
 import { cleanupOrphanedUserMedia, extractStorageKeys, loadUserMediaByteMap, summarizeWorkspaceMedia } from "../lib/media-cleanup.ts";
+import { parseSinceParam, resolveServerUpdatedAt } from "../lib/sync-cursor.ts";
 import { requireAuth, type AppEnv } from "../middleware/auth.ts";
 
 const upsertProjectSchema = z.object({
@@ -34,20 +35,6 @@ const batchDeleteSchema = z.object({
 export const canvasRoutes = new Hono<AppEnv>();
 
 canvasRoutes.use("*", requireAuth);
-
-function parseSinceParam(raw?: string) {
-  if (!raw?.trim()) return null;
-  const parsed = new Date(raw.trim());
-  return Number.isNaN(parsed.getTime()) ? null : parsed;
-}
-
-function resolveMonotonicUpdatedAt(raw?: string) {
-  const serverNow = new Date();
-  if (!raw) return serverNow;
-  const parsed = new Date(raw);
-  if (Number.isNaN(parsed.getTime())) return serverNow;
-  return parsed.getTime() >= serverNow.getTime() ? parsed : serverNow;
-}
 
 canvasRoutes.get("/projects", async (c) => {
   const user = c.get("user");
@@ -108,7 +95,7 @@ canvasRoutes.put("/projects/:id", zValidator("json", upsertProjectSchema), async
   }
 
   const createdAt = body.createdAt ? new Date(body.createdAt) : new Date();
-  const updatedAt = resolveMonotonicUpdatedAt(body.updatedAt);
+  const updatedAt = resolveServerUpdatedAt();
 
   if (!existing) {
     const [created] = await db

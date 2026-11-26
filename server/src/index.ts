@@ -71,7 +71,7 @@ void import("./lib/analytics.ts")
 
 app.onError((error, c) => {
   console.error("[server] unhandled error:", error);
-  return c.json({ error: error.message || "服务器内部错误" }, 500);
+  return c.json({ error: "服务器内部错误" }, 500);
 });
 
 const webDistDir = process.env.WEB_DIST_DIR?.trim() ? resolve(process.env.WEB_DIST_DIR.trim()) : "";

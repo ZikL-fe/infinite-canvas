@@ -20,6 +20,7 @@ type LockedRedeemCodeRow = {
   expires_at: Date | string | null;
 };
 
+/** 在事务内对兑换码加行锁（FOR UPDATE）校验类型、状态、有效期与单次使用限制并写入核销记录。 */
 export async function claimRedeemCodeInTx(
   tx: DbTransaction,
   params: {

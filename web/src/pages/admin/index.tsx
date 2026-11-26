@@ -13,7 +13,9 @@ import { ChannelEditorDrawer } from "@/components/layout/channel-editor-drawer";
 import { VersionReleaseModal } from "@/components/layout/version-release-modal";
 import { formatCompactCredits, formatExactCredits } from "@/lib/format-number";
 import { getMediaThumbBytes } from "@/lib/image-utils";
+import { formatBytes } from "@/pages/admin/admin-utils";
 import { AnalyticsDashboardPanel } from "@/pages/admin/components/analytics-dashboard-panel";
+import { MediaPreviewModal } from "@/pages/admin/components/media-preview-modal";
 import { ADMIN_TABLE_CLASS, ADMIN_TABLE_SCROLL, TableRowActions } from "@/pages/admin/components/table-row-actions";
 import { UserDetailDrawer } from "@/pages/admin/components/user-detail-drawer";
 import { AnnouncementsCard, ConsumptionTrendCard, getMediaModuleOptions, MediaModuleTags, MyMediaPanel, MyWalletPanel, ProfileSecurityPanel, UsageLogsPanel, UserOverviewPanel, WorkspaceSizeCell } from "@/pages/admin/user-panels";
@@ -44,14 +46,6 @@ import { syncCloudWorkspace, syncRuntimeSettings } from "@/services/cloud-sync";
 import { createModelChannel, type ModelChannel } from "@/stores/use-config-store";
 import { useNotificationStore } from "@/stores/use-notification-store";
 import { useUserStore } from "@/stores/use-user-store";
-
-function formatBytes(bytes: number) {
-    if (!bytes) return "0 B";
-    const units = ["B", "KB", "MB", "GB", "TB"];
-    const idx = Math.min(units.length - 1, Math.floor(Math.log(bytes) / Math.log(1024)));
-    const val = bytes / Math.pow(1024, idx);
-    return `${val >= 100 || idx === 0 ? val.toFixed(0) : val.toFixed(2)} ${units[idx]}`;
-}
 
 function getProviderLabel(provider: S3Provider, t: TFunction) {
     return t(`admin.providers.${provider}`);
@@ -265,7 +259,6 @@ export default function AdminPage() {
     const [mediaLoading, setMediaLoading] = useState(false);
     const [uploadingTest, setUploadingTest] = useState(false);
     const [previewMediaItem, setPreviewMediaItem] = useState<MediaItem | null>(null);
-    const [downloadingPreviewMedia, setDownloadingPreviewMedia] = useState(false);
     const [deletingMediaId, setDeletingMediaId] = useState<string | null>(null);
 
     const [allowRegister, setAllowRegister] = useState(true);
@@ -508,16 +501,19 @@ export default function AdminPage() {
     }, [message, noticeForm, t]);
 
     useEffect(() => {
-        if (!isAdmin) return;
+        if (!isAdmin || (activeTab !== "overview" && activeTab !== "media" && activeTab !== "storage")) return;
         void loadOverview(overviewDays);
-    }, [isAdmin, loadOverview, overviewDays]);
+    }, [activeTab, isAdmin, loadOverview, overviewDays]);
 
     useEffect(() => {
-        if (!isAdmin) return;
+        if (!isAdmin || activeTab !== "channels") return;
         void loadChannels();
+    }, [activeTab, isAdmin, loadChannels]);
+
+    useEffect(() => {
+        if (!isAdmin || activeTab !== "storage") return;
         void loadStorageSettings();
-        void loadAuthAndWebdavSettings();
-    }, [isAdmin, loadAuthAndWebdavSettings, loadChannels, loadStorageSettings]);
+    }, [activeTab, isAdmin, loadStorageSettings]);
 
     useEffect(() => {
         if (!isAdmin || activeTab !== "users") return;
@@ -1338,7 +1334,7 @@ export default function AdminPage() {
                     {t("admin.nav.userOverview")}
                 </span>
             ),
-            children: <UserOverviewPanel onOpenWallet={() => switchTab("wallet")} onOpenMedia={() => switchTab("my-media")} />,
+            render: () => <UserOverviewPanel onOpenWallet={() => switchTab("wallet")} onOpenMedia={() => switchTab("my-media")} />,
         },
         {
             key: "user-dashboard",
@@ -1348,7 +1344,7 @@ export default function AdminPage() {
                     {t("admin.nav.dashboard")}
                 </span>
             ),
-            children: <AnalyticsDashboardPanel scope="self" />,
+            render: () => <AnalyticsDashboardPanel scope="self" />,
         },
         ...(!isAdmin
             ? [
@@ -1360,7 +1356,7 @@ export default function AdminPage() {
                               {t("admin.nav.usageLogs")}
                           </span>
                       ),
-                      children: <UsageLogsPanel defaultScope="self" />,
+                      render: () => <UsageLogsPanel defaultScope="self" />,
                   },
               ]
             : []),
@@ -1372,7 +1368,7 @@ export default function AdminPage() {
                     {t("admin.nav.wallet")}
                 </span>
             ),
-            children: <MyWalletPanel />,
+            render: () => <MyWalletPanel />,
         },
         {
             key: "profile",
@@ -1382,7 +1378,7 @@ export default function AdminPage() {
                     {t("admin.nav.profile")}
                 </span>
             ),
-            children: <ProfileSecurityPanel />,
+            render: () => <ProfileSecurityPanel />,
         },
         {
             key: "my-media",
@@ -1392,7 +1388,7 @@ export default function AdminPage() {
                     {t("admin.nav.myMedia")}
                 </span>
             ),
-            children: <MyMediaPanel />,
+            render: () => <MyMediaPanel />,
         },
         {
             key: "config",
@@ -1403,7 +1399,7 @@ export default function AdminPage() {
                 </span>
             ),
             pageTitle: t("config.title"),
-            children: <AppConfigPanel />,
+            render: () => <AppConfigPanel />,
         },
     ];
 
@@ -1416,7 +1412,7 @@ export default function AdminPage() {
                                     {t("admin.overviewTab.tabLabel")}
                                 </span>
                             ),
-                            children: (
+                            render: () => (
                                 <div className="flex flex-col gap-5">
                                     <Row gutter={[16, 16]}>
                                         <Col xs={24} sm={12} xl={6}>
@@ -1599,7 +1595,7 @@ export default function AdminPage() {
                                     {t("admin.nav.dashboard")}
                                 </span>
                             ),
-                            children: <AnalyticsDashboardPanel scope="all" />,
+                            render: () => <AnalyticsDashboardPanel scope="all" />,
                         },
                         {
                             key: "usage-logs",
@@ -1609,7 +1605,7 @@ export default function AdminPage() {
                                     {t("admin.nav.usageLogs")}
                                 </span>
                             ),
-                            children: <UsageLogsPanel defaultScope={isAdminRoute ? "all" : "self"} />,
+                            render: () => <UsageLogsPanel defaultScope={isAdminRoute ? "all" : "self"} />,
                         },
                         {
                             key: "channels",
@@ -1619,7 +1615,7 @@ export default function AdminPage() {
                                     {t("admin.channelsTab.tabLabel")}
                                 </span>
                             ),
-                            children: (
+                            render: () => (
                                 <Card
                                     title={t("admin.channelsTab.cardTitle")}
                                     loading={channelsLoading}
@@ -1733,7 +1729,7 @@ export default function AdminPage() {
                                     {t("admin.usersTab.tabLabel")}
                                 </span>
                             ),
-                            children: (
+                            render: () => (
                                 <Card
                                     title={t("admin.usersTab.cardTitle")}
                                     extra={
@@ -2022,7 +2018,7 @@ export default function AdminPage() {
                                     {t("admin.redeemTab.tabLabel")}
                                 </span>
                             ),
-                            children: (
+                            render: () => (
                                 <div className="flex flex-col gap-4">
                                     {generatedCodes.length ? (
                                         <Alert
@@ -2371,7 +2367,7 @@ export default function AdminPage() {
                                     {t("admin.mediaTab.tabLabel")}
                                 </span>
                             ),
-                            children: (
+                            render: () => (
                                 <Card
                                     title={
                                         mediaSubTab !== "media"
@@ -2704,7 +2700,7 @@ export default function AdminPage() {
                                     {t("admin.storageTab.tabLabel")}
                                 </span>
                             ),
-                            children: (
+                            render: () => (
                                 <div className="flex flex-col gap-5">
                                     <Spin spinning={storageLoading}>
                                         <Card
@@ -2822,7 +2818,7 @@ export default function AdminPage() {
                                         </span>
                                     ),
                                     pageTitle: t("admin.settingsTab.auth.pageTitle"),
-                                    children: (
+                                    render: () => (
                                         <Spin spinning={settingsLoading}>
                                             <Card title={t("admin.settingsTab.auth.cardTitle")}>
                                             <div className="flex flex-col gap-4">
@@ -2869,7 +2865,7 @@ export default function AdminPage() {
                                         </span>
                                     ),
                                     pageTitle: t("admin.settingsTab.mail.pageTitle"),
-                                    children: (
+                                    render: () => (
                                         <Spin spinning={settingsLoading}>
                                             <Card
                                             title={
@@ -2988,7 +2984,7 @@ export default function AdminPage() {
                                         </span>
                                     ),
                                     pageTitle: t("admin.settingsTab.webdav.pageTitle"),
-                                    children: (
+                                    render: () => (
                                         <Spin spinning={settingsLoading}>
                                             <Card title={t("admin.settingsTab.webdav.cardTitle")}>
                                             <Form
@@ -3054,7 +3050,7 @@ export default function AdminPage() {
                                         </span>
                                     ),
                                     pageTitle: t("admin.settingsTab.storageExpiry.pageTitle"),
-                                    children: (
+                                    render: () => (
                                         <Spin spinning={settingsLoading}>
                                             <Card
                                             title={
@@ -3355,7 +3351,7 @@ export default function AdminPage() {
                                         </span>
                                     ),
                                     pageTitle: t("admin.settingsTab.announcements.pageTitle"),
-                                    children: (
+                                    render: () => (
                                         <div className="flex flex-col gap-5">
                                             <Card
                                                 title={t("admin.settingsTab.announcements.globalCardTitle")}
@@ -3520,7 +3516,7 @@ export default function AdminPage() {
                                         </span>
                                     ),
                                     pageTitle: t("admin.settingsTab.analytics.pageTitle"),
-                                    children: (
+                                    render: () => (
                                         <Spin spinning={settingsLoading}>
                                             <Card title={t("admin.settingsTab.analytics.cardTitle")}>
                                             <Alert
@@ -3612,14 +3608,15 @@ export default function AdminPage() {
         key: string;
         label: ReactNode;
         pageTitle?: string;
-        children: ReactNode | NavTabItem[];
+        render?: () => ReactNode;
+        children?: NavTabItem[];
     };
 
-    const flattenTabItems = (items: NavTabItem[]): Array<{ key: string; label: ReactNode; pageTitle?: string; children: ReactNode }> =>
+    const flattenTabItems = (items: NavTabItem[]): Array<{ key: string; label: ReactNode; pageTitle?: string; render?: () => ReactNode }> =>
         items.flatMap((item) =>
             Array.isArray(item.children)
                 ? flattenTabItems(item.children)
-                : [{ key: item.key, label: item.label, pageTitle: item.pageTitle, children: item.children }],
+                : [{ key: item.key, label: item.label, pageTitle: item.pageTitle, render: item.render }],
         );
 
     const allSections = flattenTabItems(
@@ -3735,7 +3732,7 @@ export default function AdminPage() {
                         </div>
                     </div>
 
-                    <div className="w-full min-w-0">{activeSection?.children}</div>
+                    <div className="w-full min-w-0">{activeSection?.render?.()}</div>
                 </main>
             </div>
 
@@ -4103,62 +4100,13 @@ export default function AdminPage() {
             <UserDetailDrawer
                 userId={detailUserId}
                 refreshKey={detailRefreshKey}
-                currentUserId={user.id}
                 onClose={() => setDetailUserId(null)}
                 onOpenCredits={(target) => openAdjustCredits(target)}
                 onOpenQuota={(target) => openConfigStorageQuota(target)}
                 onUpdateUser={handleUpdateUser}
             />
 
-            <Modal
-                open={Boolean(previewMediaItem)}
-                title={t("userPanels.myMedia.previewModalTitle")}
-                onCancel={() => setPreviewMediaItem(null)}
-                footer={
-                    <Space wrap>
-                        {previewMediaItem ? (
-                            <Button
-                                icon={<Download className="size-4" />}
-                                loading={downloadingPreviewMedia}
-                                onClick={() => {
-                                    setDownloadingPreviewMedia(true);
-                                    void storageApi
-                                        .downloadFile(previewMediaItem)
-                                        .catch((error) => {
-                                            message.error(error instanceof Error ? error.message : t("userPanels.ledgerDetail.downloadFailed"));
-                                        })
-                                        .finally(() => setDownloadingPreviewMedia(false));
-                                }}
-                            >
-                                {t("common.downloadOriginal")}
-                            </Button>
-                        ) : null}
-                        <Button type="primary" onClick={() => setPreviewMediaItem(null)}>
-                            {t("common.close")}
-                        </Button>
-                    </Space>
-                }
-                width={780}
-                destroyOnHidden
-            >
-                {previewMediaItem?.url ? (
-                    previewMediaItem.kind === "image" ? (
-                        <div className="flex justify-center rounded-lg bg-black/5 p-2 dark:bg-white/5">
-                            <Image src={previewMediaItem.url} alt={previewMediaItem.objectKey} className="max-h-[70vh] object-contain" />
-                        </div>
-                    ) : previewMediaItem.kind === "video" ? (
-                        <video src={previewMediaItem.url} controls autoPlay className="max-h-[70vh] w-full rounded-lg bg-black" />
-                    ) : previewMediaItem.kind === "audio" ? (
-                        <div className="flex justify-center py-6">
-                            <audio src={previewMediaItem.url} controls autoPlay className="w-full max-w-md" />
-                        </div>
-                    ) : (
-                        <a href={previewMediaItem.url} target="_blank" rel="noreferrer">
-                            {t("common.openFileLink")}
-                        </a>
-                    )
-                ) : null}
-            </Modal>
+            <MediaPreviewModal media={previewMediaItem} onClose={() => setPreviewMediaItem(null)} />
 
             <Modal
                 open={announcementModalOpen}

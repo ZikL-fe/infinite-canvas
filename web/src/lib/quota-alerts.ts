@@ -142,6 +142,7 @@ export function formatStorageQuotaCaption(
     return t("topNav.storagePermanent");
 }
 
+/** 生成积分耗尽或低余额预警的国际化标题、详情与顶部徽章短文案。 */
 export function formatCreditAlertCopy(t: TFunction, state: CreditAlertState): { title: string; description: string; short: string } | null {
     if (state.level === "none") return null;
     const balance = formatExactCredits(state.balance);
@@ -160,6 +161,7 @@ export function formatCreditAlertCopy(t: TFunction, state: CreditAlertState): { 
     };
 }
 
+/** 生成云端存储已到期、即将到期（含部分资源包缩容场景）或已满预警的国际化文案。 */
 export function formatStorageAlertCopy(
     t: TFunction,
     state: StorageAlertState,
@@ -212,6 +214,7 @@ export function formatStorageAlertCopy(
     return null;
 }
 
+/** 合并两个告警等级，返回更高的严重级别（error > warning > none）。 */
 export function maxAlertSeverity(a: AlertSeverity, b: AlertSeverity): AlertSeverity {
     if (a === "error" || b === "error") return "error";
     if (a === "warning" || b === "warning") return "warning";

@@ -18,6 +18,7 @@ export function roundCredits(value: number) {
   return Math.round(value * 10000) / 10000;
 }
 
+/** 判断模型计费配置是否存在任一非零单价（全为 0 视作免费模型，仍记调用日志但不扣费）。 */
 export function hasNonZeroPricing(pricing?: ModelPricing) {
   if (!pricing) return false;
   if (pricing.mode === "token") {
@@ -43,6 +44,7 @@ export function hasNonZeroPricing(pricing?: ModelPricing) {
   return false;
 }
 
+/** 按未缓存输入、缓存命中输入与输出 Token 用量计算文本模型积分消耗。 */
 export function calculateTextCredits(
   pricing: TextModelPricing,
   usage: { inputTokens: number; cachedInputTokens: number; outputTokens: number },
@@ -58,6 +60,7 @@ export function calculateTextCredits(
   );
 }
 
+/** 从显式分辨率档位或像素尺寸字符串推导生图计费档位（1k / 2k / 4k）。 */
 export function inferResolutionTier(resolutionTier?: string, sizeStr?: string): "1k" | "2k" | "4k" | undefined {
   const tier = resolutionTier?.trim().toLowerCase();
   // Gemini 的 512 档位统一按 1k 档计费，避免落空回退 default
@@ -75,6 +78,7 @@ export function inferResolutionTier(resolutionTier?: string, sizeStr?: string): 
   return undefined;
 }
 
+/** 按生成张数与分辨率档位计算生图模型预扣积分。 */
 export function calculateImageCredits(
   pricing: ImageModelPricing,
   count: number,
@@ -90,6 +94,7 @@ export function calculateImageCredits(
   return roundCredits(unitPrice * qty);
 }
 
+/** 按按秒或按次模式（含可选参考视频附加费）计算视频模型预扣积分。 */
 export function calculateVideoCredits(
   pricing: VideoModelPricing,
   params: { seconds: number; hasReferenceVideo: boolean; referenceVideoSeconds?: number },
@@ -107,10 +112,12 @@ export function calculateVideoCredits(
   return roundCredits(base + extra);
 }
 
+/** 按实际音频时长（秒）计算语音模型积分消耗。 */
 export function calculateAudioCredits(pricing: AudioModelPricing, durationSeconds: number) {
   return roundCredits((pricing.perSecond ?? 0) * Math.max(0, durationSeconds));
 }
 
+/** 查询用户当前积分余额；首次访问时自动幂等初始化 0 余额钱包。 */
 export async function getWalletBalance(userId: string): Promise<number> {
   const existing = await db.query.creditWallets.findFirst({ where: eq(creditWallets.userId, userId) });
   if (existing) return roundCredits(existing.balance);
@@ -168,6 +175,7 @@ export async function adjustWalletCreditsInTx(tx: DbTransaction, params: AdjustC
   return { ok: true as const, balance: nextBalance, ledgerId };
 }
 
+/** 在独立事务内变更用户积分并写入账本，变动非 0 时异步触发低余额邮件预警检查。 */
 export async function adjustWalletCredits(params: AdjustCreditsParams) {
   const result = await db.transaction((tx) => adjustWalletCreditsInTx(tx, params));
   if (result.ok && params.delta !== 0) {
@@ -218,6 +226,7 @@ export async function patchLedgerMeta(ledgerId: string, patch: Record<string, un
     .where(eq(creditLedger.id, ledgerId));
 }
 
+/** 按上游视频任务 ID（meta.taskId）原子合并更新对应账本条目的元数据。 */
 export async function patchLedgerMetaByTaskId(userId: string, taskId: string, patch: Record<string, unknown>) {
   if (!userId || !taskId) return;
   await db
@@ -287,13 +296,6 @@ export async function refundLedgerCharge(params: {
       sql`SELECT balance FROM credit_wallets WHERE user_id = ${params.userId} FOR UPDATE`,
     );
     const current = roundCredits(Number((rows[0] as { balance?: number } | undefined)?.balance ?? 0));
-    const nextBalance = roundCredits(current + amount);
-
-    await tx
-      .update(creditWallets)
-      .set({ balance: nextBalance, updatedAt: new Date() })
-      .where(eq(creditWallets.userId, params.userId));
-
     const lookupKey = params.taskId?.trim() || params.refId?.trim() || "";
     const existing = params.ledgerId
       ? await tx.query.creditLedger.findFirst({ where: eq(creditLedger.id, params.ledgerId) })
@@ -318,8 +320,20 @@ export async function refundLedgerCharge(params: {
         typeof prevMeta.refundedCredits === "number" && Number.isFinite(prevMeta.refundedCredits)
           ? roundCredits(prevMeta.refundedCredits)
           : 0;
-      const nextRefunded = roundCredits(prevRefunded + amount);
-      const nextDelta = params.markFailed ? 0 : roundCredits(existing.delta + amount);
+      const remainingRefundable = Math.max(0, roundCredits(prevCharged - prevRefunded));
+      const actualRefund = Math.min(amount, remainingRefundable);
+      if (actualRefund <= 0) {
+        return { balance: current, ledgerId: existing.id };
+      }
+
+      const nextBalance = roundCredits(current + actualRefund);
+      await tx
+        .update(creditWallets)
+        .set({ balance: nextBalance, updatedAt: new Date() })
+        .where(eq(creditWallets.userId, params.userId));
+
+      const nextRefunded = roundCredits(prevRefunded + actualRefund);
+      const nextDelta = params.markFailed ? 0 : roundCredits(existing.delta + actualRefund);
       const mergedMeta: Record<string, unknown> = {
         ...prevMeta,
         ...(params.metaPatch ?? {}),
@@ -341,6 +355,12 @@ export async function refundLedgerCharge(params: {
 
       return { balance: nextBalance, ledgerId: existing.id };
     }
+
+    const nextBalance = roundCredits(current + amount);
+    await tx
+      .update(creditWallets)
+      .set({ balance: nextBalance, updatedAt: new Date() })
+      .where(eq(creditWallets.userId, params.userId));
 
     const fallbackId = nanoid();
     await tx.insert(creditLedger).values({

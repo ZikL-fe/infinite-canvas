@@ -18,6 +18,7 @@ function hashEmailCode(purpose: EmailCodePurpose, email: string, code: string) {
   return sha256Hex(`${purpose}:${email.trim().toLowerCase()}:${code.trim()}`);
 }
 
+/** 生成并发送 6 位邮箱验证码（含 60 秒防刷冷却，成功后作废同邮箱同用途旧验证码）。 */
 export async function issueEmailVerificationCode(params: {
   email: string;
   purpose: EmailCodePurpose;
@@ -82,6 +83,7 @@ export async function issueEmailVerificationCode(params: {
   return { ok: true as const, cooldownSeconds: EMAIL_CODE_RESEND_COOLDOWN_SECONDS, expiresInMinutes: EMAIL_CODE_TTL_MINUTES };
 }
 
+/** 校验并一次性消费邮箱验证码（超过最大试错次数或过期自动失效）。 */
 export async function verifyAndConsumeEmailCode(params: {
   email: string;
   purpose: EmailCodePurpose;

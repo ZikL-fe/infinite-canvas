@@ -1,3 +1,4 @@
+/** 本地图片 IndexedDB 存储、内存缩略图预览缓存与云端图片按需上传/回源服务。 */
 import localforage from "localforage";
 
 import { nanoid } from "nanoid";

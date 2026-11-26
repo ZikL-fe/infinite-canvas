@@ -1,7 +1,6 @@
 import { ArrowLeft, ArrowRight, BookOpen, CheckSquare, ClipboardPaste, Download, FolderPlus, History, LoaderCircle, Plus, RotateCcw, SlidersHorizontal, Sparkles, Trash2, Upload, VideoIcon } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type DragEvent } from "react";
 import { App, Button, Checkbox, Drawer, Empty, Input, Modal, Pagination, Spin, Tag, Typography } from "antd";
-import localforage from "localforage";
 import { nanoid } from "nanoid";
 import { saveAs } from "file-saver";
 import { useTranslation } from "react-i18next";
@@ -11,15 +10,17 @@ import { CloudQuotaTag } from "@/components/layout/cloud-quota-tag";
 import { ModelPicker } from "@/components/model-picker";
 import { PromptSelectDialog } from "@/components/prompts/prompt-select-dialog";
 import { VideoSettingsPanel, normalizeVideoResolutionValue, normalizeVideoSizeValue, videoModeLabel, videoSizeLabel } from "@/components/video-settings-panel";
+import { isPageUnloading } from "@/lib/canvas/canvas-generation-runtime";
 import { canvasThemes } from "@/lib/canvas-theme";
 import { clampVideoSeconds } from "@/lib/media-size";
 import { formatBytes, formatDuration } from "@/lib/image-utils";
+import { storageApi } from "@/services/api/server";
 import { prefetchUncachedMediaUrls, resolveMediaUrl } from "@/services/file-storage";
-import { deleteWorkbenchLogsWithCloud, isWorkbenchLogDeleted, pushWorkbenchLogToCloud, syncWorkbenchLogsWithCloud } from "@/services/workbench-sync";
+import { deleteWorkbenchLogsWithCloud, isWorkbenchLogDeleted, pushWorkbenchLogToCloud, syncWorkbenchLogsWithCloud, videoWorkbenchLogStore } from "@/services/workbench-sync";
 import { resolveImageUrl, resolvePickedImage, getImagePreviewRevision, prefetchUncachedImageUrls, previewUrlFor, subscribeImagePreviews, uploadImage } from "@/services/image-storage";
 import { createVideoGenerationTask, pollVideoGenerationTask, storeGeneratedVideo, type VideoGenerationTask } from "@/services/api/video";
 import { ensureRuntimeConfigForGeneration } from "@/services/cloud-sync";
-import { WORKSPACE_CHANGED_EVENT, type WorkspaceChangeScope } from "@/services/cloud-media";
+import { isCloudAuthenticated, WORKSPACE_CHANGED_EVENT, type WorkspaceChangeScope } from "@/services/cloud-media";
 import { useAssetStore } from "@/stores/use-asset-store";
 import { useWorkbenchAgentStore } from "@/stores/use-workbench-agent-store";
 import { boolConfig, modelOptionLabel, useConfigStore, useEffectiveConfig, type AiConfig } from "@/stores/use-config-store";
@@ -59,6 +60,7 @@ type GenerationLog = {
     resolution: string;
     seconds: string;
     status: "pending" | "success" | "failed";
+    clientTaskId?: string;
     task?: VideoGenerationTask;
     video?: GeneratedVideo;
     error?: string;
@@ -69,7 +71,7 @@ type GenerationLogConfig = Pick<AiConfig, "model" | "videoModel" | "size" | "vqu
 type UpdateAiConfig = <K extends keyof AiConfig>(key: K, value: AiConfig[K]) => void;
 
 const LOG_STORE_KEY = "infinite-canvas:video_generation_logs";
-const logStore = localforage.createInstance({ name: "infinite-canvas", storeName: "video_generation_logs" });
+const logStore = videoWorkbenchLogStore;
 
 export default function VideoPage() {
     const { message } = App.useApp();
@@ -267,16 +269,28 @@ export default function VideoPage() {
         const batchStartedAt = performance.now();
         const clientTaskId = nanoid();
         setStartedAt(batchStartedAt);
+        const pendingLog = buildLog({
+            prompt: snapshot.text,
+            model,
+            config: snapshot.config,
+            references: snapshot.references,
+            durationMs: 0,
+            status: "pending",
+            clientTaskId,
+        });
+        await saveLog(pendingLog, false);
         try {
             const task = await createVideoGenerationTask(snapshot.config, snapshot.text, snapshot.references, { clientTaskId });
-            const log = buildLog({ prompt: snapshot.text, model, config: snapshot.config, references: snapshot.references, durationMs: 0, status: "pending", task });
-            await saveLog(log, false);
-            void pollGenerationLog(log, snapshot.config, agentTaskId);
+            if (isPageUnloading()) return;
+            const logWithTask: GenerationLog = { ...pendingLog, task };
+            await saveLog(logWithTask, false);
+            void pollGenerationLog(logWithTask, snapshot.config, agentTaskId);
         } catch (error) {
+            if (isPageUnloading()) return;
             const errorMessage = error instanceof Error ? error.message : t("workbench.generationFailed");
             setResults([{ id: nanoid(), status: "failed", error: errorMessage }]);
             if (agentTaskId) updateAgentTask(agentTaskId, { status: "failed", successCount: 0, failCount: 1, error: errorMessage });
-            await saveLog(buildLog({ prompt: snapshot.text, model, config: snapshot.config, references: snapshot.references, durationMs: performance.now() - batchStartedAt, status: "failed", error: errorMessage }));
+            await saveLog({ ...pendingLog, durationMs: performance.now() - batchStartedAt, status: "failed", error: errorMessage });
             message.error(errorMessage);
             setRunning(false);
         }
@@ -409,9 +423,64 @@ export default function VideoPage() {
     };
 
     const resumePendingLogs = (items: GenerationLog[]) => {
-        for (const log of items) {
-            if (log.status === "pending" && log.task) void pollGenerationLog(log);
+        const pendingItems = items.filter((log) => log.status === "pending");
+        if (!pendingItems.length) return;
+        const missingTaskLogs = pendingItems.filter((log) => !log.task && log.clientTaskId);
+        for (const log of pendingItems) {
+            if (log.task) void pollGenerationLog(log);
         }
+        if (!missingTaskLogs.length || !isCloudAuthenticated()) return;
+        const taskIds = missingTaskLogs.map((log) => log.clientTaskId!).filter(Boolean);
+        void storageApi
+            .getByTasks(taskIds)
+            .then(async (res) => {
+                for (const log of missingTaskLogs) {
+                    const tid = log.clientTaskId;
+                    if (!tid || isWorkbenchLogDeleted(log.id)) continue;
+                    const mediaList = res.itemsByTask[tid] || [];
+                    const completedMedia = mediaList.find((item) => item.kind === "video") || mediaList[0];
+                    if (completedMedia) {
+                        const url = await resolveMediaUrl(completedMedia.id, completedMedia.url || "");
+                        const nextVideo: GeneratedVideo = {
+                            id: nanoid(),
+                            url,
+                            storageKey: completedMedia.id,
+                            durationMs:
+                                typeof res.durationByTask?.[tid] === "number" && res.durationByTask[tid] > 0
+                                    ? res.durationByTask[tid]
+                                    : completedMedia.durationMs || 0,
+                            width: completedMedia.width || 1280,
+                            height: completedMedia.height || 720,
+                            bytes: completedMedia.bytes || 0,
+                            mimeType: completedMedia.mimeType || "video/mp4",
+                        };
+                        await saveLog({ ...log, status: "success", durationMs: nextVideo.durationMs, video: nextVideo, error: undefined });
+                        continue;
+                    }
+                    const serverError = res.errorByTask?.[tid];
+                    if (serverError) {
+                        await saveLog({
+                            ...log,
+                            status: "failed",
+                            durationMs: res.durationByTask?.[tid] || 0,
+                            error: serverError,
+                        });
+                        continue;
+                    }
+                    const recovered = res.videoTaskByClientTask?.[tid];
+                    if (recovered?.taskId) {
+                        const nextTask: VideoGenerationTask = {
+                            id: recovered.taskId,
+                            provider: recovered.provider === "gemini" ? "gemini" : "openai",
+                            model: recovered.model || log.model,
+                        };
+                        const updatedLog: GenerationLog = { ...log, task: nextTask };
+                        await saveLog(updatedLog, false);
+                        void pollGenerationLog(updatedLog);
+                    }
+                }
+            })
+            .catch(() => undefined);
     };
 
     const pollGenerationLog = async (log: GenerationLog, configOverride?: AiConfig, agentTaskId?: string) => {
@@ -462,7 +531,7 @@ export default function VideoPage() {
                 await delay(2500);
             }
         } catch (error) {
-            if (isWorkbenchLogDeleted(log.id)) return;
+            if (isWorkbenchLogDeleted(log.id) || isPageUnloading()) return;
             const errorMessage = error instanceof Error ? error.message : t("workbench.generationFailed");
             setResults([{ id: log.id, status: "failed", error: errorMessage }]);
             if (agentTaskId) updateAgentTask(agentTaskId, { status: "failed", successCount: 0, failCount: 1, error: errorMessage });
@@ -917,7 +986,7 @@ function normalizeLogConfig(log: Partial<GenerationLog>): GenerationLogConfig {
     };
 }
 
-function buildLog({ prompt, model, config, references, durationMs, status, task, video, error }: { prompt: string; model: string; config: AiConfig; references: ReferenceImage[]; durationMs: number; status: GenerationLog["status"]; task?: VideoGenerationTask; video?: GeneratedVideo; error?: string }): GenerationLog {
+function buildLog({ prompt, model, config, references, durationMs, status, clientTaskId, task, video, error }: { prompt: string; model: string; config: AiConfig; references: ReferenceImage[]; durationMs: number; status: GenerationLog["status"]; clientTaskId?: string; task?: VideoGenerationTask; video?: GeneratedVideo; error?: string }): GenerationLog {
     const logConfig = {
         model: config.model,
         videoModel: config.videoModel,
@@ -942,6 +1011,7 @@ function buildLog({ prompt, model, config, references, durationMs, status, task,
         resolution: logConfig.vquality,
         seconds: logConfig.videoSeconds,
         status,
+        ...(clientTaskId ? { clientTaskId } : {}),
         task,
         video,
         error,

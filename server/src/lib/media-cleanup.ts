@@ -88,6 +88,113 @@ export async function collectUserMediaReferences(userIds: string[]) {
   return { moduleMap, activeKeySet };
 }
 
+export type MediaDeletableRow = {
+  id: string;
+  userId: string;
+  objectKey: string;
+  bytes: number;
+  status: string;
+  meta: Record<string, unknown> | null;
+};
+
+/** 统一的媒体删除服务：先严格删除对象存储原文件与缩略图，再事务内原子标记 deleted 并扣减用户配额，可选级联清理业务引用。 */
+export async function deleteMediaRowsWithQuota(
+  rows: MediaDeletableRow[],
+  options?: { purgeReferences?: boolean },
+) {
+  const activeRows = rows.filter((row) => row.status === "active");
+  const pendingIds = rows.filter((row) => row.status === "pending").map((row) => row.id);
+  if (pendingIds.length > 0) {
+    await db
+      .update(mediaObjects)
+      .set({ status: "deleted" })
+      .where(and(inArray(mediaObjects.id, pendingIds), eq(mediaObjects.status, "pending")));
+  }
+  if (!activeRows.length) {
+    return { deletedCount: pendingIds.length, freedBytesTotal: 0, failedCount: 0, firstError: "" };
+  }
+
+  const config = await getS3StorageConfig();
+  if (!config) {
+    return {
+      deletedCount: 0,
+      freedBytesTotal: 0,
+      failedCount: activeRows.length,
+      firstError: "管理员尚未配置对象存储，无法从存储桶删除文件",
+    };
+  }
+
+  const deletedRows: MediaDeletableRow[] = [];
+  let failedCount = 0;
+  let firstError = "";
+
+  await Promise.all(
+    activeRows.map(async (media) => {
+      try {
+        await deleteS3ObjectStrict(config, media.objectKey);
+        const thumbKey = typeof media.meta?.thumbObjectKey === "string" ? media.meta.thumbObjectKey : "";
+        if (thumbKey) {
+          await deleteS3ObjectStrict(config, thumbKey).catch(() => undefined);
+        }
+        deletedRows.push(media);
+      } catch (error) {
+        failedCount += 1;
+        if (!firstError) {
+          firstError = error instanceof Error ? error.message : "对象存储删除失败";
+        }
+      }
+    }),
+  );
+
+  if (!deletedRows.length) {
+    return { deletedCount: 0, freedBytesTotal: 0, failedCount, firstError };
+  }
+
+  const dbResult = await db.transaction(async (tx) => {
+    const updated = await tx
+      .update(mediaObjects)
+      .set({ status: "deleted" })
+      .where(and(inArray(mediaObjects.id, deletedRows.map((row) => row.id)), eq(mediaObjects.status, "active")))
+      .returning({ id: mediaObjects.id, userId: mediaObjects.userId, bytes: mediaObjects.bytes, meta: mediaObjects.meta });
+
+    if (!updated.length) {
+      return { deletedCount: 0, freedBytesTotal: 0, deletedIdsByUser: new Map<string, string[]>() };
+    }
+
+    const bytesByUser = new Map<string, number>();
+    const deletedIdsByUser = new Map<string, string[]>();
+    let freedBytesTotal = 0;
+    for (const row of updated) {
+      const bytes = getMediaTotalBytes(row.bytes, row.meta);
+      freedBytesTotal += bytes;
+      if (bytes > 0) bytesByUser.set(row.userId, (bytesByUser.get(row.userId) ?? 0) + bytes);
+      const list = deletedIdsByUser.get(row.userId);
+      if (list) list.push(row.id);
+      else deletedIdsByUser.set(row.userId, [row.id]);
+    }
+
+    for (const [ownerId, freed] of bytesByUser) {
+      await tx
+        .update(users)
+        .set({
+          storageUsedBytes: sql`GREATEST(0, ${users.storageUsedBytes} - ${freed})`,
+          updatedAt: new Date(),
+        })
+        .where(eq(users.id, ownerId));
+    }
+
+    return { deletedCount: updated.length, freedBytesTotal, deletedIdsByUser };
+  });
+
+  if (options?.purgeReferences !== false && dbResult.deletedIdsByUser.size > 0) {
+    await purgeMediaReferencesForUsers(dbResult.deletedIdsByUser).catch((err) => {
+      console.warn("[media-cleanup] 级联清理媒体关联业务引用失败:", err);
+    });
+  }
+
+  return { deletedCount: dbResult.deletedCount, freedBytesTotal: dbResult.freedBytesTotal, failedCount, firstError };
+}
+
 /** 清理已不再被任何活跃画布、工作台记录或资产引用的云端媒体文件并释放用户配额。 */
 export async function cleanupOrphanedUserMedia(userId: string, candidateIds: Iterable<string>) {
   const candidates = Array.from(new Set(candidateIds)).filter((id) => id.includes(":"));
@@ -102,42 +209,8 @@ export async function cleanupOrphanedUserMedia(userId: string, candidateIds: Ite
   });
   if (!rows.length) return 0;
 
-  const config = await getS3StorageConfig();
-  if (!config) return 0;
-
-  const deletedRows: typeof rows = [];
-  await Promise.all(
-    rows.map(async (row) => {
-      try {
-        await deleteS3ObjectStrict(config, row.objectKey);
-        const thumbKey = typeof row.meta?.thumbObjectKey === "string" ? row.meta.thumbObjectKey : "";
-        if (thumbKey) {
-          await deleteS3ObjectStrict(config, thumbKey).catch(() => undefined);
-        }
-        deletedRows.push(row);
-      } catch (error) {
-        console.warn(`[media-cleanup] 删除对象存储文件失败 (${row.objectKey}):`, error);
-      }
-    }),
-  );
-  if (!deletedRows.length) return 0;
-
-  const totalBytes = deletedRows.reduce((sum, row) => sum + getMediaTotalBytes(row.bytes, row.meta), 0);
-  const rowIds = deletedRows.map((row) => row.id);
-  await db.transaction(async (tx) => {
-    await tx.update(mediaObjects).set({ status: "deleted" }).where(and(eq(mediaObjects.userId, userId), inArray(mediaObjects.id, rowIds)));
-    if (totalBytes > 0) {
-      await tx
-        .update(users)
-        .set({
-          storageUsedBytes: sql`GREATEST(0, ${users.storageUsedBytes} - ${totalBytes})`,
-          updatedAt: new Date(),
-        })
-        .where(eq(users.id, userId));
-    }
-  });
-
-  return deletedRows.length;
+  const { deletedCount } = await deleteMediaRowsWithQuota(rows, { purgeReferences: false });
+  return deletedCount;
 }
 
 function filterPayloadRefs(list: unknown, deletedSet: Set<string>) {

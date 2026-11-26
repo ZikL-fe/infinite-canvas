@@ -1,3 +1,4 @@
+/** 本地视频/音频/通用媒体文件 IndexedDB 存储与云端文件按需上传/下载服务。 */
 import localforage from "localforage";
 import { nanoid } from "nanoid";
 

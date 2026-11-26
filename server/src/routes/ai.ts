@@ -4,7 +4,7 @@ import { Hono } from "hono";
 import { parseBuffer } from "music-metadata";
 import { nanoid } from "nanoid";
 
-import { aiBillingTasks, db, mediaObjects, users } from "../db/index.ts";
+import { aiBillingTasks, creditLedger, db, mediaObjects, users } from "../db/index.ts";
 import { env } from "../env.ts";
 import {
   fetchMediaBufferWithLimits,
@@ -55,6 +55,10 @@ type UsageTotals = {
 function buildUpstreamUrl(baseUrl: string, subPath: string, rawSearch: string, apiFormat: "openai" | "gemini", apiKey: string) {
   const cleanBase = baseUrl.trim().replace(/\/+$/, "");
   let cleanSub = subPath.startsWith("/") ? subPath : `/${subPath}`;
+  const decodedSub = decodeURIComponent(cleanSub);
+  if (decodedSub.includes("..") || decodedSub.includes("\\") || /[\r\n\0]/.test(decodedSub)) {
+    throw new Error("非法的代理请求路径");
+  }
   const lowerBase = cleanBase.toLowerCase();
   if (lowerBase.endsWith("/v1") && (cleanSub === "/v1" || cleanSub.startsWith("/v1/"))) {
     cleanSub = cleanSub.slice(3) || "/";
@@ -62,7 +66,11 @@ function buildUpstreamUrl(baseUrl: string, subPath: string, rawSearch: string, a
     cleanSub = cleanSub.slice(7) || "/";
   }
 
+  const baseObj = new URL(cleanBase);
   const target = new URL(`${cleanBase}${cleanSub}`);
+  if (target.origin !== baseObj.origin) {
+    throw new Error("非法的代理请求路径");
+  }
   const incomingParams = new URLSearchParams(rawSearch);
   const hadKeyParam = incomingParams.has("key");
   incomingParams.delete("key");
@@ -371,10 +379,11 @@ async function persistCompletedVideoIfNeeded(params: {
           params.channelApiFormat === "gemini" && !directUrl.includes("key=")
             ? `${directUrl}${directUrl.includes("?") ? "&" : "?"}key=${encodeURIComponent(params.channelApiKey)}`
             : directUrl;
-        fetched = await fetchMediaBufferWithLimits(target);
+        fetched = await fetchMediaBufferWithLimits(target, { allowPrivateNetwork: true });
       } else if (params.channelApiFormat === "openai") {
         const contentUrl = buildUpstreamUrl(params.channelBaseUrl, `/v1/videos/${encodeURIComponent(params.taskId)}/content`, "", "openai", params.channelApiKey);
         fetched = await fetchMediaBufferWithLimits(contentUrl, {
+          allowPrivateNetwork: true,
           headers: { Authorization: `Bearer ${params.channelApiKey}` },
         });
       }
@@ -498,7 +507,12 @@ aiRoutes.all("/proxy/:channelId/*", async (c) => {
   const prefix = `/api/ai/proxy/${channelId}`;
   const fullUrl = new URL(c.req.url);
   const subPath = fullUrl.pathname.startsWith(prefix) ? fullUrl.pathname.slice(prefix.length) || "/" : "/";
-  const targetUrl = buildUpstreamUrl(channel.baseUrl, subPath, fullUrl.search, channel.apiFormat, channel.apiKey);
+  let targetUrl: string;
+  try {
+    targetUrl = buildUpstreamUrl(channel.baseUrl, subPath, fullUrl.search, channel.apiFormat, channel.apiKey);
+  } catch (error) {
+    return c.json({ error: error instanceof Error ? error.message : "非法的代理请求路径" }, 400);
+  }
 
   const method = c.req.method.toUpperCase();
   const contentType = c.req.header("Content-Type") || "";
@@ -559,6 +573,9 @@ aiRoutes.all("/proxy/:channelId/*", async (c) => {
     "";
 
   const channelModel: PlatformChannelModel | undefined = channel.models.find((m) => m.name === modelName);
+  if (!isPolling && method === "POST" && !channelModel) {
+    return c.json({ error: "所选模型未在该渠道配置或不可用" }, 403);
+  }
   const pricing = channelModel?.pricing;
   // 所有受管模型 POST 请求均记录使用日志（含免费模型与极小用量 0 积分调用）
   const shouldTrackUsage = !isPolling && method === "POST" && Boolean(channelModel);
@@ -589,7 +606,9 @@ aiRoutes.all("/proxy/:channelId/*", async (c) => {
     "x-canvas-model",
     "x-client-task-id",
     "x-billing-resolution",
+    "x-billing-ref-video",
     "x-billing-ref-video-seconds",
+    "x-billing-video-seconds",
   ].forEach((key) => forwardHeaders.delete(key));
 
   if (channel.apiFormat === "gemini") {
@@ -992,11 +1011,18 @@ aiRoutes.all("/proxy/:channelId/*", async (c) => {
     const text = await upstream.text();
     let taskId = "";
     let initialTaskStatus: "not_started" | "processing" | "completed" | "failed" = "processing";
+    let parsedPayload: Record<string, unknown> | null = null;
     try {
-      const parsed = JSON.parse(text) as { id?: string; name?: string; data?: { id?: string } };
-      taskId = parsed.id || parsed.data?.id || parsed.name || "";
+      const parsed = JSON.parse(text) as Record<string, unknown>;
+      parsedPayload = parsed;
+      taskId =
+        (typeof parsed.id === "string" ? parsed.id : "") ||
+        (parsed.data && typeof parsed.data === "object" && typeof (parsed.data as { id?: unknown }).id === "string"
+          ? ((parsed.data as { id: string }).id)
+          : "") ||
+        (typeof parsed.name === "string" ? parsed.name : "");
       initialTaskStatus = mapUpstreamTaskStatus(parsed);
-      if (taskId) {
+      if (taskId && initialTaskStatus !== "failed") {
         await db
           .insert(aiBillingTasks)
           .values({
@@ -1013,9 +1039,36 @@ aiRoutes.all("/proxy/:channelId/*", async (c) => {
     } catch {
       // ignore parse failure
     }
-    if (preChargedLedgerId) {
+    const durationMs = Math.max(1, Date.now() - startedAt);
+    if (initialTaskStatus === "failed" || !taskId) {
+      const errorMessage = extractUpstreamErrorMessage(text, upstream.status);
+      if (preCharged > 0) {
+        await refundLedgerCharge({
+          userId: user.id,
+          ledgerId: preChargedLedgerId || undefined,
+          taskId: taskId || undefined,
+          refId: taskId || undefined,
+          refundAmount: preCharged,
+          markFailed: true,
+          metaPatch: {
+            durationMs,
+            isStream: false,
+            errorMessage,
+            ...(taskId ? { taskId } : {}),
+          },
+        }).catch(() => undefined);
+      } else if (preChargedLedgerId) {
+        await patchLedgerMeta(preChargedLedgerId, {
+          durationMs,
+          isStream: false,
+          taskStatus: "failed",
+          errorMessage,
+          ...(taskId ? { taskId } : {}),
+        }).catch(() => undefined);
+      }
+    } else if (preChargedLedgerId) {
       await patchLedgerMeta(preChargedLedgerId, {
-        durationMs: Math.max(1, Date.now() - startedAt),
+        durationMs,
         isStream: false,
         taskStatus: initialTaskStatus,
         ...(taskId ? { taskId } : {}),

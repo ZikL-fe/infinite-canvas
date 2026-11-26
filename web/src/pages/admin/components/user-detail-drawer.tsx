@@ -6,9 +6,10 @@ import { Ban, CheckCircle2, Coins, HardDrive, KeyRound, RefreshCw, Shield, User 
 import { useTranslation } from "react-i18next";
 
 import { formatCompactCredits, formatExactCredits } from "@/lib/format-number";
+import { formatBytes } from "@/pages/admin/admin-utils";
 import { ADMIN_TABLE_CLASS, ADMIN_TABLE_SCROLL } from "@/pages/admin/components/table-row-actions";
-import { formatBytes } from "@/pages/admin/user-panels";
 import { adminApi, type AdminUserDetailResponse, type AdminUserItem, type CreditLedgerItem } from "@/services/api/server";
+import { useUserStore } from "@/stores/use-user-store";
 
 type UnifiedStorageRow = {
     key: string;
@@ -51,7 +52,6 @@ function getRechargeRecordMeta(row: CreditLedgerItem, t: TFunction): { label: st
 export function UserDetailDrawer({
     userId,
     refreshKey = 0,
-    currentUserId,
     onClose,
     onOpenCredits,
     onOpenQuota,
@@ -59,12 +59,12 @@ export function UserDetailDrawer({
 }: {
     userId: string | null;
     refreshKey?: number;
-    currentUserId?: string;
     onClose: () => void;
     onOpenCredits: (user: AdminUserItem) => void;
     onOpenQuota: (user: AdminUserItem) => void;
     onUpdateUser: (userId: string, payload: { role?: "admin" | "user"; status?: "active" | "disabled" }) => Promise<void>;
 }) {
+    const currentUserId = useUserStore((s) => s.user?.id);
     const { t, i18n } = useTranslation();
     const locale = i18n.resolvedLanguage || undefined;
     const { message } = App.useApp();

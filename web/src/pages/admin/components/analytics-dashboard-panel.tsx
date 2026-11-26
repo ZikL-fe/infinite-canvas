@@ -1,9 +1,15 @@
 /** 平台 / 个人数据看板：支持今天/24h/7d/30d、ECharts 堆叠分布与趋势分析及管理员用户消耗排行。 */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { App, Button, Empty, Segmented, Spin, Tabs, Tag, Tooltip, Typography, theme as antdTheme } from "antd";
-import * as echarts from "echarts";
+import * as echarts from "echarts/core";
+import { BarChart, LineChart } from "echarts/charts";
+import { GridComponent, LegendComponent, TooltipComponent } from "echarts/components";
+import { CanvasRenderer } from "echarts/renderers";
+import type { EChartsCoreOption } from "echarts/core";
 import { RefreshCw } from "lucide-react";
 import { useTranslation } from "react-i18next";
+
+echarts.use([BarChart, LineChart, GridComponent, LegendComponent, TooltipComponent, CanvasRenderer]);
 
 import { formatCompactCount, formatCompactCredits, formatExactCredits } from "@/lib/format-number";
 import { accountApi, adminApi, type AnalyticsDashboardResponse, type DashboardRange } from "@/services/api/server";
@@ -27,7 +33,7 @@ function EChartBox({
     option,
     height = 300,
 }: {
-    option: echarts.EChartsOption;
+    option: EChartsCoreOption;
     height?: number;
 }) {
     const containerRef = useRef<HTMLDivElement | null>(null);
@@ -110,7 +116,7 @@ export function AnalyticsDashboardPanel({ scope }: { scope: "all" | "self" }) {
         textStyle: { color: textColor, fontSize: 12 },
     };
 
-    const creditChartOption: echarts.EChartsOption = data
+    const creditChartOption: EChartsCoreOption = data
         ? {
               color: CHART_PALETTE,
               tooltip: {
@@ -165,7 +171,7 @@ export function AnalyticsDashboardPanel({ scope }: { scope: "all" | "self" }) {
           }
         : {};
 
-    const modelCallOption: echarts.EChartsOption = data
+    const modelCallOption: EChartsCoreOption = data
         ? callChartMode === "trend"
             ? {
                   color: CHART_PALETTE,
@@ -242,7 +248,7 @@ export function AnalyticsDashboardPanel({ scope }: { scope: "all" | "self" }) {
                               position: "right",
                               color: secondaryColor,
                               fontSize: 11,
-                              formatter: (p) => t("dashboard.barCallLabel", { count: formatCompactCount(Number(p.value)) }),
+                              formatter: (p: { value?: unknown }) => t("dashboard.barCallLabel", { count: formatCompactCount(Number(p.value)) }),
                           },
                       },
                   ],
@@ -250,7 +256,7 @@ export function AnalyticsDashboardPanel({ scope }: { scope: "all" | "self" }) {
         : {};
 
     const rankedUsers = data?.userRanking ?? [];
-    const userRankingOption: echarts.EChartsOption = rankedUsers.length
+    const userRankingOption: EChartsCoreOption = rankedUsers.length
         ? {
               tooltip: {
                   ...commonTooltip,
@@ -300,7 +306,7 @@ export function AnalyticsDashboardPanel({ scope }: { scope: "all" | "self" }) {
                           position: "right",
                           color: secondaryColor,
                           fontSize: 11,
-                          formatter: (p) => formatCompactCredits(Number(p.value)),
+                          formatter: (p: { value?: unknown }) => formatCompactCredits(Number(p.value)),
                       },
                   },
               ],
@@ -308,7 +314,7 @@ export function AnalyticsDashboardPanel({ scope }: { scope: "all" | "self" }) {
         : {};
 
     const userTrends = data?.userTrendSeries ?? [];
-    const userTrendOption: echarts.EChartsOption = data && userTrends.length
+    const userTrendOption: EChartsCoreOption = data && userTrends.length
         ? {
               color: CHART_PALETTE,
               tooltip: {

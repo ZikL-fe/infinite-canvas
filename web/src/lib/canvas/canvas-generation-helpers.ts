@@ -2,7 +2,7 @@ import { defaultConfig, resolveModelForCapability, type AiConfig } from "@/store
 import i18n from "@/i18n";
 import { storageApi } from "@/services/api/server";
 import { isCloudAuthenticated } from "@/services/cloud-media";
-import { getImageBlob, prefetchUncachedImageUrls, resolveImageUrl, uploadImage } from "@/services/image-storage";
+import { ensureImagePreview, getImageBlob, prefetchUncachedImageUrls, resolveImageUrl, uploadImage } from "@/services/image-storage";
 import { prefetchUncachedMediaUrls, resolveMediaUrl } from "@/services/file-storage";
 import { imageMetadata, referenceUrl } from "@/lib/canvas/canvas-node-factory";
 import { fitNodeSize } from "@/lib/canvas/canvas-node-size";

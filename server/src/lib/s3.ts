@@ -84,6 +84,7 @@ export async function createMediaReadUrl(config: S3StorageConfig, objectKey: str
   return getSignedUrl(client, command, { expiresIn: env.S3_PRESIGN_EXPIRES_SECONDS });
 }
 
+/** 读取对象存储指定 Key 的元信息（大小与 MIME 类型）。 */
 export async function headS3Object(config: S3StorageConfig, objectKey: string) {
   const client = getReusableS3Client(config);
   return client.send(
@@ -105,6 +106,7 @@ export async function getS3Object(config: S3StorageConfig, objectKey: string) {
   );
 }
 
+/** 直接将内存 Buffer 或字符串写入对象存储指定 Key。 */
 export async function putS3Object(
   config: S3StorageConfig,
   objectKey: string,
@@ -122,6 +124,7 @@ export async function putS3Object(
   );
 }
 
+/** 判断 S3 SDK 抛出的异常是否表示对象不存在（NoSuchKey / NotFound / 404）。 */
 export function isS3NotFoundError(error: unknown) {
   if (!error || typeof error !== "object") return false;
   const err = error as { name?: unknown; Code?: unknown; code?: unknown; $metadata?: { httpStatusCode?: unknown } };
@@ -129,6 +132,7 @@ export function isS3NotFoundError(error: unknown) {
   return code === "NoSuchKey" || code === "NotFound" || err.$metadata?.httpStatusCode === 404;
 }
 
+/** 从对象存储删除指定 Key（对象不存在时不报错，其余网络或权限错误会抛出）。 */
 export async function deleteS3Object(config: S3StorageConfig, objectKey: string) {
   const client = getReusableS3Client(config);
   return client.send(

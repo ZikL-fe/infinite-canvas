@@ -3,7 +3,7 @@ import { eq } from "drizzle-orm";
 
 import { db, systemSettings, type UserWebdavConfig } from "../db/index.ts";
 import { env } from "../env.ts";
-import { decryptJson, encryptJson } from "./crypto.ts";
+import { decryptJson, decryptSecretValue, encryptJson } from "./crypto.ts";
 
 export const AUTH_POLICY_KEY = "auth.policy";
 export const STORAGE_S3_KEY = "storage.s3";
@@ -164,6 +164,7 @@ export type S3StorageConfig = {
 
 type S3PublicSettings = Omit<S3StorageConfig, "secretAccessKey">;
 
+/** 读取平台注册与邮箱验证策略配置。 */
 export async function getAuthPolicy(): Promise<AuthPolicy> {
   return getCachedSetting(AUTH_POLICY_KEY, async () => {
     const row = await db.query.systemSettings.findFirst({ where: eq(systemSettings.key, AUTH_POLICY_KEY) });
@@ -175,6 +176,7 @@ export async function getAuthPolicy(): Promise<AuthPolicy> {
   });
 }
 
+/** 保存平台注册策略配置并刷新本地设置缓存。 */
 export async function saveAuthPolicy(policy: AuthPolicy, updatedBy: string) {
   await db
     .insert(systemSettings)
@@ -187,6 +189,7 @@ export async function saveAuthPolicy(policy: AuthPolicy, updatedBy: string) {
   return policy;
 }
 
+/** 读取平台 SMTP 邮件与低余额提醒默认配置（含解密密码）。 */
 export async function getPlatformMailConfig(): Promise<PlatformMailConfig> {
   return getCachedSetting(MAIL_CONFIG_KEY, async () => {
     const row = await db.query.systemSettings.findFirst({ where: eq(systemSettings.key, MAIL_CONFIG_KEY) });
@@ -211,6 +214,7 @@ export async function getPlatformMailConfig(): Promise<PlatformMailConfig> {
   });
 }
 
+/** 保存平台 SMTP 邮件配置（密码经 AES-256-GCM 加密入库）并失效缓存。 */
 export async function savePlatformMailConfig(config: PlatformMailConfig, updatedBy: string) {
   const publicValue = {
     enabled: config.enabled,
@@ -247,6 +251,7 @@ export async function savePlatformMailConfig(config: PlatformMailConfig, updated
   invalidateSettingCache(MAIL_CONFIG_KEY);
 }
 
+/** 读取对象存储（S3/R2/OSS/COS）配置（优先数据库加密配置，其次回退环境变量）。 */
 export async function getS3StorageConfig(): Promise<S3StorageConfig | null> {
   return getCachedSetting(STORAGE_S3_KEY, async () => {
     const row = await db.query.systemSettings.findFirst({ where: eq(systemSettings.key, STORAGE_S3_KEY) });
@@ -288,6 +293,7 @@ export async function getS3StorageConfig(): Promise<S3StorageConfig | null> {
   });
 }
 
+/** 保存平台对象存储配置（密钥经 AES-256-GCM 加密）并失效缓存。 */
 export async function saveS3StorageConfig(config: S3StorageConfig, updatedBy: string) {
   const publicValue: S3PublicSettings = {
     provider: config.provider,
@@ -321,6 +327,7 @@ export async function saveS3StorageConfig(config: S3StorageConfig, updatedBy: st
   invalidateSettingCache(STORAGE_S3_KEY);
 }
 
+/** 读取平台启用的 AI 模型渠道与加密密钥配置。 */
 export async function getPlatformChannels(): Promise<PlatformChannel[]> {
   return getCachedSetting(AI_CHANNELS_KEY, async () => {
     const row = await db.query.systemSettings.findFirst({ where: eq(systemSettings.key, AI_CHANNELS_KEY) });
@@ -339,6 +346,7 @@ export async function getPlatformChannels(): Promise<PlatformChannel[]> {
   });
 }
 
+/** 保存平台 AI 模型渠道列表（各渠道 API Key 加密后存储）并失效缓存。 */
 export async function savePlatformChannels(channels: PlatformChannel[], updatedBy: string) {
   const publicChannels = channels.map(({ apiKey: _key, ...rest }) => rest);
   const keys = Object.fromEntries(channels.map((channel) => [channel.id, channel.apiKey]));
@@ -365,6 +373,7 @@ export async function savePlatformChannels(channels: PlatformChannel[], updatedB
   invalidateSettingCache(AI_CHANNELS_KEY);
 }
 
+/** 读取平台默认 WebDAV 归档配置（含解密密码）。 */
 export async function getPlatformWebdavConfig(): Promise<PlatformWebdavConfig> {
   return getCachedSetting(WEBDAV_CONFIG_KEY, async () => {
     const row = await db.query.systemSettings.findFirst({ where: eq(systemSettings.key, WEBDAV_CONFIG_KEY) });
@@ -381,6 +390,7 @@ export async function getPlatformWebdavConfig(): Promise<PlatformWebdavConfig> {
   });
 }
 
+/** 保存平台默认 WebDAV 配置（密码加密存储）并失效缓存。 */
 export async function savePlatformWebdavConfig(config: PlatformWebdavConfig, updatedBy: string) {
   const publicValue = {
     enabled: config.enabled,
@@ -412,6 +422,7 @@ export async function savePlatformWebdavConfig(config: PlatformWebdavConfig, upd
   invalidateSettingCache(WEBDAV_CONFIG_KEY);
 }
 
+/** 读取云端存储到期预警与宽限期清理策略配置。 */
 export async function getPlatformStorageExpiryPolicy(): Promise<PlatformStorageExpiryPolicy> {
   return getCachedSetting(STORAGE_EXPIRY_POLICY_KEY, async () => {
     const row = await db.query.systemSettings.findFirst({ where: eq(systemSettings.key, STORAGE_EXPIRY_POLICY_KEY) });
@@ -429,6 +440,7 @@ export async function getPlatformStorageExpiryPolicy(): Promise<PlatformStorageE
   });
 }
 
+/** 规范化并保存云端存储到期清理策略并失效缓存。 */
 export async function savePlatformStorageExpiryPolicy(policy: PlatformStorageExpiryPolicy, updatedBy: string) {
   const normalized: PlatformStorageExpiryPolicy = {
     enabled: Boolean(policy.enabled),
@@ -449,6 +461,7 @@ export async function savePlatformStorageExpiryPolicy(policy: PlatformStorageExp
   return normalized;
 }
 
+/** 读取全站顶部全局滚动/横幅公告配置。 */
 export async function getPlatformGlobalNotice(): Promise<PlatformGlobalNotice> {
   return getCachedSetting(PLATFORM_NOTICE_KEY, async () => {
     const row = await db.query.systemSettings.findFirst({ where: eq(systemSettings.key, PLATFORM_NOTICE_KEY) });
@@ -462,6 +475,7 @@ export async function getPlatformGlobalNotice(): Promise<PlatformGlobalNotice> {
   });
 }
 
+/** 保存全站全局公告配置，内容变更时自动刷新 `updatedAt` 以便前端重新展示未读。 */
 export async function savePlatformGlobalNotice(
   input: { enabled: boolean; title?: string; content?: string },
   updatedBy: string,
@@ -484,6 +498,7 @@ export async function savePlatformGlobalNotice(
   return normalized;
 }
 
+/** 读取数据看板采样缓存周期与使用日志保留天数策略。 */
 export async function getPlatformAnalyticsPolicy(): Promise<PlatformAnalyticsPolicy> {
   return getCachedSetting(ANALYTICS_POLICY_KEY, async () => {
     const row = await db.query.systemSettings.findFirst({ where: eq(systemSettings.key, ANALYTICS_POLICY_KEY) });
@@ -497,6 +512,7 @@ export async function getPlatformAnalyticsPolicy(): Promise<PlatformAnalyticsPol
   });
 }
 
+/** 保存数据看板采样与日志保留策略并失效缓存。 */
 export async function savePlatformAnalyticsPolicy(policy: PlatformAnalyticsPolicy, updatedBy: string): Promise<PlatformAnalyticsPolicy> {
   const normalized: PlatformAnalyticsPolicy = {
     sampleIntervalMinutes: Math.max(1, Math.min(1440, Math.floor(Number(policy.sampleIntervalMinutes) || 5))),
@@ -518,7 +534,7 @@ export function resolveEffectiveUserWebdav(platform: PlatformWebdavConfig, userC
   if (!userConfig?.enabled) return null;
   const url = (userConfig.url || platform.url || "").trim();
   const username = (userConfig.username || platform.username || "").trim();
-  const password = userConfig.password || platform.password || "";
+  const password = decryptSecretValue(userConfig.password) || platform.password || "";
   const directory = (userConfig.directory || platform.baseDirectory || "infinite-canvas").trim();
   if (!url) return null;
   const quotaBytes = typeof userConfig.quotaBytes === "number" && userConfig.quotaBytes > 0 ? userConfig.quotaBytes : null;

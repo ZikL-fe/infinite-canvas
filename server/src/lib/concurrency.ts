@@ -18,6 +18,7 @@ type Waiter = {
   onAbort?: () => void;
 };
 
+/** 创建进程内有界并发信号量，支持最大并发数、等待队列上限、排队超时及 AbortSignal 取消。 */
 export function createConcurrencyLimiter(options: {
   maxConcurrent: number;
   maxQueue?: number;

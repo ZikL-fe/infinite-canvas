@@ -6,6 +6,7 @@ import { z } from "zod";
 
 import { db, workbenchLogs } from "../db/index.ts";
 import { cleanupOrphanedUserMedia, extractStorageKeys, loadUserMediaByteMap, summarizeWorkspaceMedia } from "../lib/media-cleanup.ts";
+import { parseSinceParam, resolveServerUpdatedAt } from "../lib/sync-cursor.ts";
 import { requireAuth, type AppEnv } from "../middleware/auth.ts";
 
 const upsertLogSchema = z.object({
@@ -28,20 +29,6 @@ const batchDeleteSchema = z.object({
 export const workbenchRoutes = new Hono<AppEnv>();
 
 workbenchRoutes.use("*", requireAuth);
-
-function parseSinceParam(raw?: string) {
-  if (!raw?.trim()) return null;
-  const parsed = new Date(raw.trim());
-  return Number.isNaN(parsed.getTime()) ? null : parsed;
-}
-
-function resolveMonotonicUpdatedAt(raw?: string) {
-  const serverNow = new Date();
-  if (!raw) return serverNow;
-  const parsed = new Date(raw);
-  if (Number.isNaN(parsed.getTime())) return serverNow;
-  return parsed.getTime() >= serverNow.getTime() ? parsed : serverNow;
-}
 
 workbenchRoutes.get("/logs", async (c) => {
   const user = c.get("user");
@@ -101,7 +88,7 @@ workbenchRoutes.put("/logs/:id", zValidator("json", upsertLogSchema), async (c) 
   }
 
   const createdAt = body.createdAt ? new Date(body.createdAt) : new Date();
-  const updatedAt = resolveMonotonicUpdatedAt(body.updatedAt);
+  const updatedAt = resolveServerUpdatedAt();
   const durationMs = Math.round(body.durationMs);
 
   if (!existing) {

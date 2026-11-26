@@ -58,11 +58,21 @@ type CachedDashboardEntry = {
 const dashboardCache = new Map<string, CachedDashboardEntry>();
 const dashboardInFlight = new Map<string, Promise<AnalyticsDashboardPayload>>();
 
+function pruneExpiredDashboardCache(now = Date.now()) {
+  for (const [key, entry] of dashboardCache) {
+    if (entry.expiresAt <= now) {
+      dashboardCache.delete(key);
+    }
+  }
+}
+
+/** 清空数据分析看板进程内缓存及在途请求，供日志清理或配置调整后立即生效。 */
 export function invalidateAnalyticsCache() {
   dashboardCache.clear();
   dashboardInFlight.clear();
 }
 
+/** 规范化数据看板时间范围参数，非法取值统一回退为 `24h`。 */
 export function normalizeDashboardRange(raw?: string): DashboardRange {
   if (raw === "today" || raw === "24h" || raw === "7d" || raw === "30d") return raw;
   return "24h";
@@ -321,6 +331,7 @@ async function computeDashboardSnapshot(range: DashboardRange, sampleIntervalMin
   };
 }
 
+/** 查询个人或全站数据看板指标（支持按采样周期缓存与并发请求去重合并）。 */
 export async function queryAnalyticsDashboard(params: {
   range: DashboardRange;
   userId?: string;
@@ -340,6 +351,7 @@ export async function queryAnalyticsDashboard(params: {
 
   const task = computeDashboardSnapshot(params.range, policy.sampleIntervalMinutes, params.userId)
     .then((payload) => {
+      pruneExpiredDashboardCache();
       dashboardCache.set(cacheKey, {
         payload,
         expiresAt: Date.now() + ttlMs,
@@ -381,17 +393,27 @@ export async function cleanupExpiredUsageLogs(retentionDaysOverride?: number) {
 
 let retentionTimer: ReturnType<typeof setInterval> | null = null;
 const RETENTION_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
+const LOG_RETENTION_ADVISORY_LOCK_KEY = 730102;
 
+/** 启动过期使用日志定时清理调度器（每 6 小时检查一次，通过 PostgreSQL Advisory Lock 防止多实例重复执行）。 */
 export function startLogRetentionScheduler() {
   if (retentionTimer) return;
   const run = async () => {
+    let locked = false;
     try {
+      const lockRows = await db.execute(sql`SELECT pg_try_advisory_lock(${LOG_RETENTION_ADVISORY_LOCK_KEY}) AS locked`);
+      locked = Boolean((lockRows[0] as { locked?: boolean } | undefined)?.locked);
+      if (!locked) return;
       const result = await cleanupExpiredUsageLogs();
       if (result.deletedCount > 0) {
         console.info(`[analytics] 自动清理过期使用日志：保留 ${result.retentionDays} 天，共删除 ${result.deletedCount} 条`);
       }
     } catch (error) {
       console.warn("[analytics] 自动清理过期使用日志失败:", error);
+    } finally {
+      if (locked) {
+        await db.execute(sql`SELECT pg_advisory_unlock(${LOG_RETENTION_ADVISORY_LOCK_KEY})`).catch(() => undefined);
+      }
     }
   };
   setTimeout(() => void run(), 45_000);

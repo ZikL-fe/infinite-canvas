@@ -3,7 +3,7 @@ import { and, asc, eq, inArray, isNull, sql } from "drizzle-orm";
 
 import { canvasProjects, db, mediaObjects, userAssets, userStorageGrants, users, workbenchLogs } from "../db/index.ts";
 import { isMailConfigReady, sendStorageCleanedEmail, sendStorageExpiredNoticeEmail, sendStoragePreExpiryEmail } from "./mail.ts";
-import { getMediaTotalBytes, mediaTotalBytesSql } from "./media-cleanup.ts";
+import { getMediaTotalBytes, mediaTotalBytesSql, purgeMediaReferencesForUsers } from "./media-cleanup.ts";
 import { deleteS3ObjectStrict } from "./s3.ts";
 import { getPlatformMailConfig, getPlatformStorageExpiryPolicy, getS3StorageConfig, type PlatformStorageExpiryPolicy } from "./settings.ts";
 import { getEarliestPreExpiryWarningTimestamp, resolveEffectiveStorageQuota } from "./storage-quota.ts";
@@ -386,6 +386,7 @@ async function runSweepInternal(options?: {
 
     const s3Errors: string[] = [];
     const cleanedIds: string[] = [];
+    let actualFreedBytes = 0;
     for (const row of plan.targets) {
       if (!s3Config) {
         s3Errors.push(`${row.objectKey}: 管理员尚未配置对象存储`);
@@ -398,14 +399,20 @@ async function runSweepInternal(options?: {
           await deleteS3ObjectStrict(s3Config, thumbObjectKey).catch(() => undefined);
         }
         cleanedIds.push(row.id);
+        actualFreedBytes += getMediaTotalBytes(row.sizeBytes, row.meta);
       } catch (error) {
         s3Errors.push(`${row.objectKey}: ${error instanceof Error ? error.message : "S3删除失败"}`);
       }
     }
 
     if (cleanedIds.length > 0) {
-      await db.update(mediaObjects).set({ status: "deleted" }).where(inArray(mediaObjects.id, cleanedIds));
+      await db
+        .update(mediaObjects)
+        .set({ status: "deleted" })
+        .where(and(inArray(mediaObjects.id, cleanedIds), eq(mediaObjects.status, "active")));
     }
+    item.deletedMediaCount = cleanedIds.length;
+    item.freedBytes = actualFreedBytes;
 
     const [remainingRow] = await db
       .select({ total: sql<number>`coalesce(sum(${mediaTotalBytesSql}), 0)::bigint` })
@@ -422,18 +429,22 @@ async function runSweepInternal(options?: {
           .returning({ id: canvasProjects.id }),
         db
           .update(workbenchLogs)
-          .set({ deletedAt: now })
+          .set({ deletedAt: now, updatedAt: now })
           .where(and(eq(workbenchLogs.userId, user.id), isNull(workbenchLogs.deletedAt)))
           .returning({ id: workbenchLogs.id }),
         db
           .update(userAssets)
-          .set({ deletedAt: now })
+          .set({ deletedAt: now, updatedAt: now })
           .where(and(eq(userAssets.userId, user.id), isNull(userAssets.deletedAt)))
           .returning({ id: userAssets.id }),
       ]);
       item.deletedCanvasCount = deletedCanvases.length;
       item.deletedWorkbenchCount = deletedWorkbench.length;
       item.deletedAssetCount = deletedAssets.length;
+    } else if (cleanedIds.length > 0) {
+      await purgeMediaReferencesForUsers(new Map([[user.id, cleanedIds]])).catch((err) => {
+        console.warn("[storage-expiry] 清理媒体关联业务引用失败:", err);
+      });
     }
 
     await db
@@ -492,7 +503,9 @@ async function runSweepInternal(options?: {
   };
 }
 
-/** 执行一次云存储到期预警与逾期清理巡检（带并发互斥保护；指定 userId 时仅处理单个账号）。 */
+const STORAGE_EXPIRY_ADVISORY_LOCK_KEY = 730101;
+
+/** 执行一次云存储到期预警与逾期清理巡检（带进程内互斥与多实例 PostgreSQL Advisory Lock 保护；指定 userId 时仅处理单个账号）。 */
 export async function runStorageExpirySweep(options?: {
   now?: Date;
   dryRun?: boolean;
@@ -505,7 +518,39 @@ export async function runStorageExpirySweep(options?: {
   if (sweepInFlight) {
     return sweepInFlight;
   }
-  sweepInFlight = runSweepInternal(options).finally(() => {
+  const runLocked = async (): Promise<StorageExpirySweepResult> => {
+    if (options?.dryRun) {
+      return runSweepInternal(options);
+    }
+    const lockRows = await db.execute(sql`SELECT pg_try_advisory_lock(${STORAGE_EXPIRY_ADVISORY_LOCK_KEY}) AS locked`);
+    const locked = Boolean((lockRows[0] as { locked?: boolean } | undefined)?.locked);
+    if (!locked) {
+      const policy = await getPlatformStorageExpiryPolicy();
+      return {
+        ok: true,
+        dryRun: false,
+        skippedDisabled: true,
+        executedAt: (options?.now ?? new Date()).toISOString(),
+        policy,
+        scannedUsers: 0,
+        eligibleUsers: 0,
+        preExpiryWarned: 0,
+        expiredNoticed: 0,
+        cleanedUsers: 0,
+        freedBytesTotal: 0,
+        skippedNoEmail: 0,
+        failedCount: 0,
+        truncated: false,
+        items: [],
+      };
+    }
+    try {
+      return await runSweepInternal(options);
+    } finally {
+      await db.execute(sql`SELECT pg_advisory_unlock(${STORAGE_EXPIRY_ADVISORY_LOCK_KEY})`).catch(() => undefined);
+    }
+  };
+  sweepInFlight = runLocked().finally(() => {
     sweepInFlight = null;
   });
   return sweepInFlight;

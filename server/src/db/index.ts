@@ -299,15 +299,21 @@ export function ensureSchemaReady() {
         sqlClient`CREATE INDEX IF NOT EXISTS credit_ledger_user_created_idx ON credit_ledger (user_id, created_at DESC)`,
         sqlClient`CREATE INDEX IF NOT EXISTS credit_ledger_created_idx ON credit_ledger (created_at DESC)`,
         sqlClient`CREATE INDEX IF NOT EXISTS ai_billing_tasks_user_created_idx ON ai_billing_tasks (user_id, created_at DESC)`,
+        sqlClient`CREATE INDEX IF NOT EXISTS media_objects_user_client_task_idx ON media_objects (user_id, (meta->>'clientTaskId')) WHERE meta ? 'clientTaskId'`,
+        sqlClient`CREATE INDEX IF NOT EXISTS media_objects_user_video_task_idx ON media_objects (user_id, (meta->>'videoTaskId')) WHERE meta ? 'videoTaskId'`,
+        sqlClient`CREATE INDEX IF NOT EXISTS credit_ledger_user_client_task_idx ON credit_ledger (user_id, (meta->>'clientTaskId')) WHERE meta ? 'clientTaskId'`,
+        sqlClient`CREATE INDEX IF NOT EXISTS credit_ledger_user_task_id_idx ON credit_ledger (user_id, (meta->>'taskId')) WHERE meta ? 'taskId'`,
       ];
-      for (const stmt of statements) {
-        await stmt.catch((err) => {
-          console.warn("[db] schema bootstrap statement failed:", err);
-        });
+      try {
+        for (const stmt of statements) {
+          await stmt;
+        }
+      } catch (err) {
+        schemaReadyPromise = null;
+        console.error("[db] schema bootstrap failed:", err);
+        throw err;
       }
     })();
   }
   return schemaReadyPromise;
 }
-
-void ensureSchemaReady();

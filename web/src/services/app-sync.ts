@@ -1,4 +1,6 @@
-import localforage from "localforage";
+/** WebDAV 全量工作区双向同步服务：管理画布、资产与工作台日志的清单合并及媒体文件并发增量同步。 */
+import { runWithApplyingRemote } from "@/services/cloud-sync";
+import { imageWorkbenchLogStore, videoWorkbenchLogStore } from "@/services/workbench-sync";
 
 import i18n from "@/i18n";
 import { getMediaBlob, resolveMediaUrl, setMediaBlob } from "@/services/file-storage";
@@ -76,8 +78,8 @@ export type AppSyncProgressEvent = {
 export type AppSyncProgress = (event: AppSyncProgressEvent) => void;
 
 const FILE_CONCURRENCY = 3;
-const imageLogStore = localforage.createInstance({ name: "infinite-canvas", storeName: "image_generation_logs" });
-const videoLogStore = localforage.createInstance({ name: "infinite-canvas", storeName: "video_generation_logs" });
+const imageLogStore = imageWorkbenchLogStore;
+const videoLogStore = videoWorkbenchLogStore;
 type LogStore = typeof imageLogStore;
 const storageKeyPattern = /^(image|video|audio|file|video-reference|audio-reference):/;
 
@@ -95,7 +97,7 @@ export async function syncAppDataToWebdav(config: WebdavSyncConfig, onProgress?:
                 return { projects, deleted: deletedProjects };
             },
             mergeData: mergeCanvasData,
-            applyData: async (data) => useCanvasStore.getState().replaceProjects(data.projects, data.deleted),
+            applyData: async (data) => runWithApplyingRemote(() => useCanvasStore.getState().replaceProjects(data.projects, data.deleted)),
         }),
         syncDomain<AssetDomainData>(config, onProgress, {
             key: "assets",
@@ -103,7 +105,10 @@ export async function syncAppDataToWebdav(config: WebdavSyncConfig, onProgress?:
             emptyData: { assets: [] },
             localData: async () => ({ assets: useAssetStore.getState().assets }),
             mergeData: (local, remote) => ({ assets: mergeById(local.assets, remote.assets, "updatedAt") }),
-            applyData: async (data) => useAssetStore.getState().replaceAssets(await Promise.all(data.assets.map(hydrateAsset))),
+            applyData: async (data) => {
+                const hydrated = await Promise.all(data.assets.map(hydrateAsset));
+                await runWithApplyingRemote(() => useAssetStore.getState().replaceAssets(hydrated));
+            },
         }),
         syncDomain<LogDomainData>(config, onProgress, {
             key: "image-workbench",

@@ -40,6 +40,7 @@ export type StorageQuotaSummary = {
   earliestActiveExpiresAt: Date | null;
 };
 
+/** 合并基础存储配额与未过期的独立资源包，计算有效总配额、永久/限时拆分及最近到期时间。 */
 export function resolveEffectiveStorageQuota(
   baseQuotaBytesInput: number,
   baseExpiresAtInput: Date | null | undefined,
@@ -104,6 +105,7 @@ export function resolveEffectiveStorageQuota(
   };
 }
 
+/** 序列化单条存储资源包记录，补充 `isExpired` 与 `isEffective` 状态供接口返回。 */
 export function serializeStorageGrant(grant: StorageGrantRow, nowMs = Date.now()) {
   const expMs = grant.expiresAt ? new Date(grant.expiresAt).getTime() : null;
   const isExpired = Boolean(expMs !== null && expMs <= nowMs);
@@ -123,6 +125,7 @@ export function serializeStorageGrant(grant: StorageGrantRow, nowMs = Date.now()
   };
 }
 
+/** 查询单个用户的全部存储资源包并汇总当前有效云端存储配额。 */
 export async function getUserStorageQuotaSummary(userRow: UserBaseQuotaInput, executor: DbExecutor = db) {
   const grants = await executor.query.userStorageGrants.findMany({
     where: eq(userStorageGrants.userId, userRow.id),
@@ -244,6 +247,7 @@ export async function getUserQuotaAlertMeta(input: {
   };
 }
 
+/** 批量查询多个用户的存储资源包并聚合有效配额映射，避免列表接口产生 N+1 查询。 */
 export async function getUsersStorageQuotaMap(userRows: UserBaseQuotaInput[], executor: DbExecutor = db) {
   const result = new Map<string, StorageQuotaSummary>();
   if (!userRows.length) return result;

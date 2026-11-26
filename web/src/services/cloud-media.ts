@@ -53,16 +53,19 @@ export function initWorkspaceBroadcastChannel(onRemoteChange: (scope: WorkspaceC
     };
 }
 
+/** 判断当前是否存在已登录的云端访问令牌。 */
 export function isCloudAuthenticated() {
     return Boolean(useUserStore.getState().accessToken);
 }
 
+/** 判断当前用户云端存储配额是否已过期。 */
 export function isUserCloudQuotaExpired() {
     const user = useUserStore.getState().user;
     if (!user?.storageQuotaExpiresAt) return false;
     return new Date(user.storageQuotaExpiresAt).getTime() <= Date.now();
 }
 
+/** 判断当前用户云端存储配额是否已超限（含可选待写入的增量字节数）。 */
 export function isUserCloudQuotaExceeded(incomingBytes = 0) {
     const user = useUserStore.getState().user;
     if (!user) return false;
@@ -74,6 +77,7 @@ export function isUserCloudQuotaExceeded(incomingBytes = 0) {
     return incoming > 0 && used + incoming > quota;
 }
 
+/** 节流弹出云端存储配额到期或已满警告提示（3.5 秒内不重复弹出）。 */
 export function notifyCloudStorageQuotaExceeded() {
     const now = Date.now();
     if (now - lastQuotaWarningAt < 3500) return;
@@ -85,14 +89,17 @@ export function notifyCloudStorageQuotaExceeded() {
     antdMessage.warning(i18n.t("cloud.quotaExceededWarning"));
 }
 
+/** 标记云端工作区首次全量同步是否已完成水合。 */
 export function setCloudSyncHydrated(value: boolean) {
     cloudSyncHydrated = value;
 }
 
+/** 获取云端工作区是否已完成首屏水合同步。 */
 export function isCloudSyncHydrated() {
     return cloudSyncHydrated;
 }
 
+/** 根据 storageKey 前缀或 MIME 类型推导媒体分类（image / video / audio / file）。 */
 export function inferCloudMediaKind(storageKey: string, mimeType = ""): CloudKind {
     if (storageKey.startsWith("image:") || mimeType.startsWith("image/")) return "image";
     if (storageKey.startsWith("video") || mimeType.startsWith("video/")) return "video";
@@ -233,7 +240,9 @@ export function evictCloudMediaUrlCache(keys: Iterable<string>) {
 /** 批量预取云端媒体原图与缩略图签名地址并写入会话缓存，避免冷启动逐条请求。 */
 export async function prefetchCloudMediaUrls(keys: Iterable<string>): Promise<void> {
     if (!isCloudAuthenticated()) return;
-    const missing = Array.from(new Set(keys)).filter((key) => key.includes(":") && !readCachedUrl(urlCache, key));
+    const missing = Array.from(new Set(keys)).filter(
+        (key) => key.includes(":") && !missingCloudMediaKeys.has(key) && !readCachedUrl(urlCache, key),
+    );
     if (!missing.length) return;
 
     const chunks: string[][] = [];
@@ -246,8 +255,14 @@ export async function prefetchCloudMediaUrls(keys: Iterable<string>): Promise<vo
             try {
                 const res = await storageApi.getUrls(chunk);
                 const expiresAt = computeCacheExpiresAt(res.expiresIn);
-                for (const [id, url] of Object.entries(res.urls || {})) {
-                    if (url) urlCache.set(id, { url, expiresAt });
+                const returnedUrls = res.urls || {};
+                for (const id of chunk) {
+                    const url = returnedUrls[id];
+                    if (url) {
+                        urlCache.set(id, { url, expiresAt });
+                    } else {
+                        missingCloudMediaKeys.add(id);
+                    }
                 }
                 for (const [id, thumbUrl] of Object.entries(res.thumbnailUrls || {})) {
                     if (thumbUrl) thumbnailUrlCache.set(id, { url: thumbUrl, expiresAt });
@@ -259,8 +274,9 @@ export async function prefetchCloudMediaUrls(keys: Iterable<string>): Promise<vo
     );
 }
 
+/** 获取指定云端媒体的可访问签名地址（优先命中会话缓存与缺失缓存，并发请求自动去重）。 */
 export async function resolveCloudMediaUrl(storageKey: string, fallback = ""): Promise<string> {
-    if (!isCloudAuthenticated() || !storageKey) return fallback;
+    if (!isCloudAuthenticated() || !storageKey || missingCloudMediaKeys.has(storageKey)) return fallback;
     const cached = readCachedUrl(urlCache, storageKey);
     if (cached) return cached;
     const pending = inFlightUrls.get(storageKey);
@@ -274,7 +290,12 @@ export async function resolveCloudMediaUrl(storageKey: string, fallback = ""): P
             }
             return res.url || fallback;
         })
-        .catch(() => fallback)
+        .catch((error) => {
+            if (isNotFoundCloudError(error)) {
+                missingCloudMediaKeys.add(storageKey);
+            }
+            return fallback;
+        })
         .finally(() => {
             inFlightUrls.delete(storageKey);
         });
@@ -282,6 +303,7 @@ export async function resolveCloudMediaUrl(storageKey: string, fallback = ""): P
     return promise;
 }
 
+/** 从云端下载媒体原文件 Blob 并回填本地 IndexedDB 缓存（S3 跨域失败时自动降级走服务端同源代理）。 */
 export async function fetchCloudMediaBlob(storageKey: string, cacheLocal: (blob: Blob) => Promise<void>): Promise<Blob | null> {
     if (!isCloudAuthenticated() || !storageKey || missingCloudMediaKeys.has(storageKey)) return null;
     const pending = inFlightBlobs.get(storageKey);
@@ -329,6 +351,7 @@ export async function fetchCloudMediaBlob(storageKey: string, cacheLocal: (blob:
     return promise;
 }
 
+/** 拉取云端媒体缩略图 Blob（命中 404 时记入缺失缓存，避免页面滚动反复重试）。 */
 export async function fetchCloudThumbnailBlob(storageKey: string): Promise<Blob | null> {
     if (!isCloudAuthenticated() || !storageKey || missingCloudMediaKeys.has(storageKey) || missingCloudThumbKeys.has(storageKey)) {
         return null;

@@ -14,7 +14,7 @@ import { signAccessToken } from "../lib/jwt.ts";
 import { isMailConfigReady } from "../lib/mail.ts";
 import { getAuthPolicy, getPlatformMailConfig, getPlatformWebdavConfig } from "../lib/settings.ts";
 import { getUserQuotaAlertMeta, getUserStorageQuotaSummary, type UserQuotaAlertMeta } from "../lib/storage-quota.ts";
-import { requireAuth, type AppEnv } from "../middleware/auth.ts";
+import { requireAuthWithQuota, type AppEnv } from "../middleware/auth.ts";
 
 const registerSchema = z.object({
   username: z
@@ -398,7 +398,7 @@ authRoutes.post("/logout", zValidator("json", refreshSchema), async (c) => {
   return c.json({ ok: true });
 });
 
-authRoutes.get("/me", requireAuth, async (c) => {
+authRoutes.get("/me", requireAuthWithQuota, async (c) => {
   const user = c.get("user");
   const creditBalance = await getWalletBalance(user.id);
   return c.json({ user: { ...sanitizeUser(user), creditBalance } });

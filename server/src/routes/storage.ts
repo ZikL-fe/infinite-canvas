@@ -7,8 +7,21 @@ import { z } from "zod";
 
 import { canvasProjects, creditLedger, db, mediaObjects, userAssets, userStorageGrants, users, workbenchLogs, type MediaKind } from "../db/index.ts";
 import { env } from "../env.ts";
-import { buildThumbnailObjectKey, checkStorageQuotaBlock } from "../lib/ai-media-persist.ts";
-import { collectUserMediaReferences, getMediaThumbBytes, getMediaTotalBytes, purgeMediaReferencesForUsers, type MediaSourceModule } from "../lib/media-cleanup.ts";
+import {
+  assertSafeExternalUrl,
+  buildObjectKey,
+  buildThumbnailObjectKey,
+  checkStorageQuotaBlock,
+  fetchMediaBufferWithLimits,
+  inferExtension,
+} from "../lib/ai-media-persist.ts";
+import {
+  collectUserMediaReferences,
+  deleteMediaRowsWithQuota,
+  getMediaThumbBytes,
+  getMediaTotalBytes,
+  type MediaSourceModule,
+} from "../lib/media-cleanup.ts";
 import { claimRedeemCodeInTx } from "../lib/redeem.ts";
 import {
   createMediaReadUrl,
@@ -23,7 +36,7 @@ import {
 import { getPlatformWebdavConfig, getS3StorageConfig, resolveEffectiveUserWebdav } from "../lib/settings.ts";
 import { getUserQuotaAlertMeta, getUserStorageQuotaSummary, serializeStorageGrant } from "../lib/storage-quota.ts";
 import { uploadFileToWebdav } from "../lib/webdav.ts";
-import { requireAuth, type AppEnv } from "../middleware/auth.ts";
+import { requireAuthWithQuota, type AppEnv } from "../middleware/auth.ts";
 
 const presignUploadSchema = z.object({
   mediaId: z
@@ -69,31 +82,6 @@ const storageRedeemSchema = z.object({
   code: z.string().trim().min(1, "请输入云端存储兑换码").max(64),
 });
 
-function inferExtension(filename: string | undefined, mimeType: string) {
-  const fromName = filename?.split(".").pop()?.toLowerCase().replace(/[^a-z0-9]/g, "");
-  if (fromName && fromName.length <= 10) return `.${fromName}`;
-  const map: Record<string, string> = {
-    "image/png": ".png",
-    "image/jpeg": ".jpg",
-    "image/webp": ".webp",
-    "image/gif": ".gif",
-    "image/svg+xml": ".svg",
-    "video/mp4": ".mp4",
-    "video/webm": ".webm",
-    "audio/mpeg": ".mp3",
-    "audio/wav": ".wav",
-    "audio/ogg": ".ogg",
-  };
-  return map[mimeType.toLowerCase()] || "";
-}
-
-function buildObjectKey(userId: string, kind: MediaKind, ext: string) {
-  const now = new Date();
-  const yyyy = now.getUTCFullYear();
-  const mm = String(now.getUTCMonth() + 1).padStart(2, "0");
-  return `users/${userId}/${yyyy}/${mm}/${kind}/${nanoid()}${ext}`;
-}
-
 function inferKindFromMime(mimeType: string, fallback: MediaKind = "file"): MediaKind {
   if (mimeType.startsWith("image/")) return "image";
   if (mimeType.startsWith("video/")) return "video";
@@ -103,7 +91,7 @@ function inferKindFromMime(mimeType: string, fallback: MediaKind = "file"): Medi
 
 export const storageRoutes = new Hono<AppEnv>();
 
-storageRoutes.use("*", requireAuth);
+storageRoutes.use("*", requireAuthWithQuota);
 
 storageRoutes.get("/grants", async (c) => {
   const user = c.get("user");
@@ -336,6 +324,11 @@ storageRoutes.post("/confirm", zValidator("json", confirmUploadSchema), async (c
   }
 
   const updated = await db.transaction(async (tx) => {
+    const whereClause =
+      existing.status === "pending"
+        ? and(eq(mediaObjects.id, existing.id), eq(mediaObjects.userId, user.id), eq(mediaObjects.status, "pending"))
+        : and(eq(mediaObjects.id, existing.id), eq(mediaObjects.userId, user.id));
+
     const [row] = await tx
       .update(mediaObjects)
       .set({
@@ -346,8 +339,19 @@ storageRoutes.post("/confirm", zValidator("json", confirmUploadSchema), async (c
         height: body.height ?? existing.height,
         durationMs: body.durationMs ?? existing.durationMs,
       })
-      .where(and(eq(mediaObjects.id, existing.id), eq(mediaObjects.userId, user.id)))
+      .where(whereClause)
       .returning();
+
+    if (!row) {
+      const latest = await tx.query.mediaObjects.findFirst({
+        where: and(eq(mediaObjects.id, existing.id), eq(mediaObjects.userId, user.id)),
+      });
+      const latestUser = await tx.query.users.findFirst({
+        where: eq(users.id, user.id),
+        columns: { storageUsedBytes: true },
+      });
+      return { row: latest ?? existing, storageUsedBytes: latestUser?.storageUsedBytes ?? user.storageUsedBytes };
+    }
 
     let storageUsedBytes = user.storageUsedBytes;
     if (existing.status === "pending" && actualBytes > 0) {
@@ -390,22 +394,29 @@ storageRoutes.post("/ingest-url", zValidator("json", ingestUrlSchema), async (c)
   }
 
   const body = c.req.valid("json");
-  const parsedUrl = new URL(body.url);
-  if (parsedUrl.protocol !== "http:" && parsedUrl.protocol !== "https:") {
-    return c.json({ error: "仅支持 http/https 资源链接转存" }, 400);
+  let parsedUrl: URL;
+  try {
+    parsedUrl = assertSafeExternalUrl(body.url);
+  } catch (error) {
+    return c.json({ error: error instanceof Error ? error.message : "非法的远程资源链接" }, 400);
   }
 
-  const remoteRes = await fetch(parsedUrl.toString());
-  if (!remoteRes.ok) {
-    return c.json({ error: `拉取远程资源失败（HTTP ${remoteRes.status}）` }, 400);
+  let fetched: { buffer: Buffer; mimeType: string } | null;
+  try {
+    fetched = await fetchMediaBufferWithLimits(parsedUrl.toString());
+  } catch (error) {
+    return c.json({ error: error instanceof Error ? error.message : "拉取远程资源失败" }, 400);
+  }
+  if (!fetched) {
+    return c.json({ error: "拉取远程资源失败或文件超出允许大小限制" }, 400);
   }
 
-  const mimeType = remoteRes.headers.get("content-type")?.split(";")[0]?.trim() || "application/octet-stream";
+  const mimeType = fetched.mimeType || "application/octet-stream";
   const kind = body.kind || inferKindFromMime(mimeType, "file");
   const ext = inferExtension(parsedUrl.pathname, mimeType);
   const objectKey = buildObjectKey(user.id, kind, ext);
   const mediaId = `${kind}:${nanoid()}`;
-  const buffer = Buffer.from(await remoteRes.arrayBuffer());
+  const buffer = fetched.buffer;
 
   const postBlock = checkStorageQuotaBlock(user.storageUsedBytes, user.storageQuotaBytes, user.storageQuotaExpiresAt, buffer.byteLength);
   if (postBlock.blocked) {
@@ -952,91 +963,6 @@ storageRoutes.post("/urls", zValidator("json", batchUrlsSchema), async (c) => {
 
   return c.json({ urls, thumbnailUrls, expiresIn: env.S3_PRESIGN_EXPIRES_SECONDS });
 });
-
-async function deleteMediaRowsWithQuota(
-  rows: Array<{ id: string; userId: string; objectKey: string; bytes: number; status: string; meta: Record<string, unknown> | null }>,
-) {
-  const activeRows = rows.filter((row) => row.status === "active");
-  if (!activeRows.length) return { deletedCount: 0, freedBytesTotal: 0, failedCount: 0, firstError: "" };
-
-  const config = await getS3StorageConfig();
-  if (!config) {
-    return {
-      deletedCount: 0,
-      freedBytesTotal: 0,
-      failedCount: activeRows.length,
-      firstError: "管理员尚未配置对象存储，无法从存储桶删除文件",
-    };
-  }
-
-  const deletedRows: typeof activeRows = [];
-  let failedCount = 0;
-  let firstError = "";
-
-  await Promise.all(
-    activeRows.map(async (media) => {
-      try {
-        await deleteS3ObjectStrict(config, media.objectKey);
-        const thumbKey = typeof media.meta?.thumbObjectKey === "string" ? media.meta.thumbObjectKey : "";
-        if (thumbKey) {
-          await deleteS3ObjectStrict(config, thumbKey).catch(() => undefined);
-        }
-        deletedRows.push(media);
-      } catch (error) {
-        failedCount += 1;
-        if (!firstError) {
-          firstError = error instanceof Error ? error.message : "对象存储删除失败";
-        }
-      }
-    }),
-  );
-
-  if (!deletedRows.length) {
-    return { deletedCount: 0, freedBytesTotal: 0, failedCount, firstError };
-  }
-
-  const dbResult = await db.transaction(async (tx) => {
-    const updated = await tx
-      .update(mediaObjects)
-      .set({ status: "deleted" })
-      .where(and(inArray(mediaObjects.id, deletedRows.map((row) => row.id)), eq(mediaObjects.status, "active")))
-      .returning({ id: mediaObjects.id, userId: mediaObjects.userId, bytes: mediaObjects.bytes, meta: mediaObjects.meta });
-
-    if (!updated.length) return { deletedCount: 0, freedBytesTotal: 0, deletedIdsByUser: new Map<string, string[]>() };
-
-    const bytesByUser = new Map<string, number>();
-    const deletedIdsByUser = new Map<string, string[]>();
-    let freedBytesTotal = 0;
-    for (const row of updated) {
-      const bytes = getMediaTotalBytes(row.bytes, row.meta);
-      freedBytesTotal += bytes;
-      if (bytes > 0) bytesByUser.set(row.userId, (bytesByUser.get(row.userId) ?? 0) + bytes);
-      const list = deletedIdsByUser.get(row.userId);
-      if (list) list.push(row.id);
-      else deletedIdsByUser.set(row.userId, [row.id]);
-    }
-
-    for (const [ownerId, freed] of bytesByUser) {
-      await tx
-        .update(users)
-        .set({
-          storageUsedBytes: sql`GREATEST(0, ${users.storageUsedBytes} - ${freed})`,
-          updatedAt: new Date(),
-        })
-        .where(eq(users.id, ownerId));
-    }
-
-    return { deletedCount: updated.length, freedBytesTotal, deletedIdsByUser };
-  });
-
-  if (dbResult.deletedIdsByUser.size > 0) {
-    await purgeMediaReferencesForUsers(dbResult.deletedIdsByUser).catch((err) => {
-      console.warn("[storage] 级联清理媒体关联业务引用失败:", err);
-    });
-  }
-
-  return { deletedCount: dbResult.deletedCount, freedBytesTotal: dbResult.freedBytesTotal, failedCount, firstError };
-}
 
 storageRoutes.post("/batch-delete", zValidator("json", batchDeleteMediaSchema), async (c) => {
   const user = c.get("user");
