@@ -369,7 +369,7 @@ export function UserDetailDrawer({
                                             <Descriptions
                                                 bordered
                                                 size="small"
-                                                column={2}
+                                                column={{ xs: 1, sm: 2 }}
                                                 styles={{ label: { whiteSpace: "nowrap", width: 112 } }}
                                             >
                                                 <Descriptions.Item label={t("userDetail.fields.username")}>
@@ -416,6 +416,7 @@ export function UserDetailDrawer({
                                                     size="small"
                                                     bordered
                                                     className={ADMIN_TABLE_CLASS}
+                                                    scroll={ADMIN_TABLE_SCROLL}
                                                     dataSource={workspaceRows}
                                                     pagination={false}
                                                     columns={[

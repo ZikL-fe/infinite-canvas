@@ -394,11 +394,11 @@ export function AnalyticsDashboardPanel({ scope }: { scope: "all" | "self" }) {
     const overviewContent = (
         <div className="flex flex-col gap-4">
             {/* 顶部 6 张等高 KPI 卡片 */}
-            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-6">
                 {kpis.map((item) => (
                     <Tooltip key={item.label} title={item.exact}>
                         <div
-                            className="flex flex-col justify-between rounded-xl border p-3.5"
+                            className="flex min-w-0 flex-col justify-between rounded-xl border p-3.5"
                             style={{
                                 borderColor: token.colorBorderSecondary,
                                 backgroundColor: token.colorBgContainer,
@@ -534,7 +534,7 @@ export function AnalyticsDashboardPanel({ scope }: { scope: "all" | "self" }) {
                     backgroundColor: token.colorBgContainer,
                 }}
             >
-                <div className="mb-3 flex items-center justify-between gap-2">
+                <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
                     <span className="text-sm font-semibold" style={{ color: token.colorText }}>
                         {t("dashboard.userRankingTitle")}
                     </span>
@@ -558,7 +558,7 @@ export function AnalyticsDashboardPanel({ scope }: { scope: "all" | "self" }) {
                     backgroundColor: token.colorBgContainer,
                 }}
             >
-                <div className="mb-3 flex items-center justify-between gap-2">
+                <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
                     <span className="text-sm font-semibold" style={{ color: token.colorText }}>
                         {t("dashboard.userTrendTitle")}
                     </span>
@@ -582,11 +582,13 @@ export function AnalyticsDashboardPanel({ scope }: { scope: "all" | "self" }) {
             <div className="flex flex-col gap-4">
                 {/* 顶部时间窗口与采样状态栏 */}
                 <div className="flex flex-wrap items-center justify-between gap-3">
-                    <Segmented
-                        value={range}
-                        options={rangeOptions}
-                        onChange={(val) => setRange(val as DashboardRange)}
-                    />
+                    <div className="max-w-full overflow-x-auto">
+                        <Segmented
+                            value={range}
+                            options={rangeOptions}
+                            onChange={(val) => setRange(val as DashboardRange)}
+                        />
+                    </div>
                     <div className="flex flex-wrap items-center gap-2.5">
                         {data ? (
                             <Typography.Text type="secondary" className="text-xs">

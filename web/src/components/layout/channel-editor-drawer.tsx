@@ -122,7 +122,7 @@ export function ChannelEditorDrawer({
                             <span className="min-w-0 flex-1 truncate text-sm" title={model.name}>
                                 {model.name}
                             </span>
-                            <div className="flex shrink-0 items-center gap-2">
+                            <div className="flex flex-wrap items-center gap-2">
                                 <Tag>{formatModelPricingSummary(model.capability, model.pricing)}</Tag>
                                 <Segmented size="small" value={model.capability} options={capabilityOptions} onChange={(value) => setCapability(model.name, value as ModelCapability)} />
                                 <Button size="small" icon={<Coins className="size-3.5" />} onClick={() => setPricingTarget({ name: model.name, capability: model.capability, value: model.pricing })}>

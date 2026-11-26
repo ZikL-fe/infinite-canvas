@@ -286,7 +286,7 @@ export function ConsumptionTrendCard({
                         </span>
                     }
                     extra={
-                        <Space>
+                        <Space wrap>
                             <Typography.Text type="secondary" className="text-xs">
                                 {t("userPanels.trendCard.rangeSummary", { credits: rangeConsumedCredits, calls: rangeCalls })}
                             </Typography.Text>
@@ -304,36 +304,38 @@ export function ConsumptionTrendCard({
                     }
                 >
                     {dailyTrend.length ? (
-                        <div className="flex h-48 items-end gap-1.5 pt-4">
-                            {dailyTrend.map((item) => {
-                                const heightPct = item.credits > 0 ? Math.max(6, Math.round((item.credits / maxCredits) * 100)) : 2;
-                                return (
-                                    <Tooltip
-                                        key={item.date}
-                                        title={t("userPanels.trendCard.tooltip", {
-                                            date: item.date,
-                                            credits: item.credits,
-                                            calls: item.calls,
-                                        })}
-                                    >
-                                        <div className="flex h-full min-w-0 flex-1 flex-col items-center justify-end gap-1.5">
-                                            <div className="flex w-full flex-1 items-end justify-center">
-                                                <div
-                                                    className="w-full max-w-7 rounded-t transition-all"
-                                                    style={{
-                                                        height: `${heightPct}%`,
-                                                        backgroundColor: item.credits > 0 ? token.colorPrimary : token.colorBorderSecondary,
-                                                        opacity: item.credits > 0 ? 0.85 : 0.45,
-                                                    }}
-                                                />
+                        <div className="overflow-x-auto pb-1">
+                            <div className={`flex h-48 items-end gap-1.5 pt-4 ${dailyTrend.length > 14 ? "min-w-[380px]" : ""}`}>
+                                {dailyTrend.map((item) => {
+                                    const heightPct = item.credits > 0 ? Math.max(6, Math.round((item.credits / maxCredits) * 100)) : 2;
+                                    return (
+                                        <Tooltip
+                                            key={item.date}
+                                            title={t("userPanels.trendCard.tooltip", {
+                                                date: item.date,
+                                                credits: item.credits,
+                                                calls: item.calls,
+                                            })}
+                                        >
+                                            <div className="flex h-full min-w-0 flex-1 flex-col items-center justify-end gap-1.5">
+                                                <div className="flex w-full flex-1 items-end justify-center">
+                                                    <div
+                                                        className="w-full max-w-7 rounded-t transition-all"
+                                                        style={{
+                                                            height: `${heightPct}%`,
+                                                            backgroundColor: item.credits > 0 ? token.colorPrimary : token.colorBorderSecondary,
+                                                            opacity: item.credits > 0 ? 0.85 : 0.45,
+                                                        }}
+                                                    />
+                                                </div>
+                                                <span className="truncate text-[10px]" style={{ color: token.colorTextSecondary }}>
+                                                    {item.date.slice(5)}
+                                                </span>
                                             </div>
-                                            <span className="truncate text-[10px]" style={{ color: token.colorTextSecondary }}>
-                                                {item.date.slice(5)}
-                                            </span>
-                                        </div>
-                                    </Tooltip>
-                                );
-                            })}
+                                        </Tooltip>
+                                    );
+                                })}
+                            </div>
                         </div>
                     ) : (
                         <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={t("userPanels.trendCard.noTrendData")} />
@@ -549,7 +551,7 @@ export function UserOverviewPanel({ onOpenWallet, onOpenMedia }: { onOpenWallet?
             ) : null}
 
             <Row gutter={[16, 16]}>
-                <Col xs={24} sm={12} md={6}>
+                <Col xs={24} sm={12} xl={6}>
                     <Card loading={loading}>
                         <Tooltip title={t("userPanels.overview.exactBalance", { value: formatExactCredits(data?.creditBalance ?? 0) })}>
                             <div>
@@ -568,7 +570,7 @@ export function UserOverviewPanel({ onOpenWallet, onOpenMedia }: { onOpenWallet?
                         </Tooltip>
                     </Card>
                 </Col>
-                <Col xs={24} sm={12} md={6}>
+                <Col xs={24} sm={12} xl={6}>
                     <Card loading={loading}>
                         <Tooltip title={t("userPanels.overview.exactValue", { value: formatExactCredits(data?.todayConsumedCredits ?? 0) })}>
                             <div>
@@ -577,7 +579,7 @@ export function UserOverviewPanel({ onOpenWallet, onOpenMedia }: { onOpenWallet?
                         </Tooltip>
                     </Card>
                 </Col>
-                <Col xs={24} sm={12} md={6}>
+                <Col xs={24} sm={12} xl={6}>
                     <Card loading={loading}>
                         <Tooltip title={t("userPanels.overview.exactValue", { value: formatExactCredits(data?.totalConsumedCredits ?? 0) })}>
                             <div>
@@ -586,7 +588,7 @@ export function UserOverviewPanel({ onOpenWallet, onOpenMedia }: { onOpenWallet?
                         </Tooltip>
                     </Card>
                 </Col>
-                <Col xs={24} sm={12} md={6}>
+                <Col xs={24} sm={12} xl={6}>
                     <Card loading={loading}>
                         <Statistic
                             title={t("userPanels.overview.storageAndCanvas")}
@@ -814,7 +816,7 @@ export function ProfileSecurityPanel() {
     return (
         <div className="flex flex-col gap-5">
             <Row gutter={[16, 16]}>
-                <Col xs={24} sm={12} md={6}>
+                <Col xs={24} sm={12} xl={6}>
                     <Card loading={loading}>
                         <Tooltip title={t("userPanels.overview.exactBalance", { value: formatExactCredits(detail?.creditBalance ?? 0) })}>
                             <div>
@@ -823,7 +825,7 @@ export function ProfileSecurityPanel() {
                         </Tooltip>
                     </Card>
                 </Col>
-                <Col xs={24} sm={12} md={6}>
+                <Col xs={24} sm={12} xl={6}>
                     <Card loading={loading}>
                         <Statistic
                             title={t("userPanels.profile.storageQuota")}
@@ -831,12 +833,12 @@ export function ProfileSecurityPanel() {
                         />
                     </Card>
                 </Col>
-                <Col xs={24} sm={12} md={6}>
+                <Col xs={24} sm={12} xl={6}>
                     <Card loading={loading}>
                         <Statistic title={t("userPanels.profile.canvasCount")} value={profileData?.stats.canvasProjectCount ?? 0} />
                     </Card>
                 </Col>
-                <Col xs={24} sm={12} md={6}>
+                <Col xs={24} sm={12} xl={6}>
                     <Card loading={loading}>
                         <Statistic title={t("userPanels.profile.assetCount")} value={profileData?.stats.assetCount ?? 0} />
                     </Card>
@@ -1135,9 +1137,9 @@ export function ProfileSecurityPanel() {
                     onFinish={handleSaveAlertSettings}
                 >
                     <Row gutter={16} align="bottom">
-                        <Col xs={24} md={12}>
+                        <Col xs={24} xl={12}>
                             <Form.Item name="mode" label={t("userPanels.profile.alertPolicyLabel")}>
-                                <Radio.Group>
+                                <Radio.Group className="flex flex-wrap gap-y-2">
                                     <Radio value="inherit">
                                         {t("userPanels.profile.alertInheritPrefix")}
                                         {profileData?.lowBalanceAlert?.platformEnabled
@@ -1151,7 +1153,7 @@ export function ProfileSecurityPanel() {
                             </Form.Item>
                         </Col>
                         {alertModeWatch === "custom_on" ? (
-                            <Col xs={24} md={6}>
+                            <Col xs={24} sm={12} xl={6}>
                                 <Form.Item
                                     name="threshold"
                                     label={t("userPanels.profile.thresholdLabel")}
@@ -1161,7 +1163,7 @@ export function ProfileSecurityPanel() {
                                 </Form.Item>
                             </Col>
                         ) : null}
-                        <Col xs={24} md={6}>
+                        <Col xs={24} sm={12} xl={6}>
                             <Form.Item>
                                 <Button type="primary" htmlType="submit" icon={<Save className="size-4" />} loading={savingAlert}>
                                     {t("userPanels.profile.saveAlertSettings")}
@@ -1188,7 +1190,7 @@ export function ProfileSecurityPanel() {
                     </span>
                 }
                 extra={
-                    <Space>
+                    <Space wrap>
                         <Popconfirm title={t("userPanels.profile.confirmRevokeOthers")} onConfirm={() => void handleRevokeOtherSessions()}>
                             <Button size="small" icon={<LogOut className="size-3.5" />}>
                                 {t("userPanels.profile.revokeOthers")}
@@ -1419,7 +1421,7 @@ function LedgerDetailModal({
                                 {new Date(item.createdAt).toLocaleString(locale)}
                             </Typography.Text>
                         </div>
-                        <div className="flex items-baseline gap-2.5">
+                        <div className="flex flex-wrap items-baseline gap-2.5">
                             {isFailedTask ? (
                                 <Tag color="orange" style={{ marginInlineEnd: 0 }}>
                                     {t("userPanels.ledgerDetail.zeroCredits")}
@@ -1654,7 +1656,7 @@ function LedgerDetailModal({
                                     </Typography.Text>
                                 </div>
                             ) : mediaItems.length ? (
-                                <div className={mediaItems.length === 1 ? "grid grid-cols-1 gap-2.5" : "grid grid-cols-1 gap-2.5 sm:grid-cols-2"}>
+                                <div className="grid grid-cols-1 gap-2.5">
                                     {mediaItems.map((media) => {
                                         const thumb = media.thumbnailUrl || previewUrlFor(media.id) || "";
                                         const fileLabel = mediaDownloadFilename(media);
@@ -1662,7 +1664,7 @@ function LedgerDetailModal({
                                         return (
                                             <div
                                                 key={media.id}
-                                                className="flex items-center gap-3 rounded-lg border p-2.5"
+                                                className="flex flex-wrap items-center gap-3 rounded-lg border p-2.5"
                                                 style={{ borderColor: token.colorBorderSecondary }}
                                             >
                                                 <button
@@ -1907,7 +1909,7 @@ export function MyWalletPanel({ compact = false, onOpenLogs }: { compact?: boole
     const creditAlertCopy = creditAlert ? formatCreditAlertCopy(t, creditAlert) : null;
 
     return (
-        <div className="flex flex-col gap-4">
+        <div className="admin-shell flex flex-col gap-4">
             {creditAlertCopy ? (
                 <Alert
                     type={creditAlert?.level === "error" ? "error" : "warning"}
@@ -1935,7 +1937,7 @@ export function MyWalletPanel({ compact = false, onOpenLogs }: { compact?: boole
                             </Button>
                         ) : null}
                     </div>
-                    <Space.Compact style={{ width: compact ? 310 : 360 }}>
+                    <Space.Compact className={compact ? "w-full! sm:w-[310px]!" : "w-full! sm:w-[360px]!"}>
                         <Input
                             value={redeemCode}
                             placeholder={t("userPanels.wallet.codePlaceholder")}
@@ -1961,7 +1963,7 @@ export function MyWalletPanel({ compact = false, onOpenLogs }: { compact?: boole
                 <div className="mb-3 flex flex-wrap items-center gap-2">
                     <Select
                         value={reasonFilter}
-                        style={{ width: 140 }}
+                        className="w-full! sm:w-[140px]!"
                         onChange={(val) => {
                             setPage(1);
                             setReasonFilter(val);
@@ -1974,6 +1976,7 @@ export function MyWalletPanel({ compact = false, onOpenLogs }: { compact?: boole
                         ]}
                     />
                     <DatePicker.RangePicker
+                        className="w-full! sm:w-auto!"
                         value={dateRange}
                         onChange={(dates) => {
                             setPage(1);
@@ -2231,7 +2234,7 @@ export function UsageLogsPanel({ defaultScope = "self" }: { defaultScope?: "all"
             <Card
                 title={t("userPanels.usageLogs.cardTitle", { count: summary.recordCount })}
                 extra={
-                    <Space>
+                    <Space wrap>
                         {isAdmin ? (
                             <Segmented
                                 size="small"
@@ -2260,7 +2263,7 @@ export function UsageLogsPanel({ defaultScope = "self" }: { defaultScope?: "all"
                 <div className="mb-3 flex flex-wrap items-center gap-2">
                     <Select
                         value={reasonFilter}
-                        style={{ width: 130 }}
+                        className="min-w-[125px] flex-1 sm:w-[130px]! sm:flex-none"
                         onChange={(val) => {
                             setPage(1);
                             setReasonFilter(val);
@@ -2275,7 +2278,7 @@ export function UsageLogsPanel({ defaultScope = "self" }: { defaultScope?: "all"
                     />
                     <Select
                         value={statusFilter}
-                        style={{ width: 115 }}
+                        className="min-w-[115px] flex-1 sm:w-[115px]! sm:flex-none"
                         onChange={(val) => {
                             setPage(1);
                             setStatusFilter(val);
@@ -2294,7 +2297,7 @@ export function UsageLogsPanel({ defaultScope = "self" }: { defaultScope?: "all"
                         value={modelFilter}
                         prefix={<Search className="size-3.5 opacity-50" />}
                         placeholder={t("userPanels.usageLogs.filterModel")}
-                        style={{ width: 180 }}
+                        className="w-full! sm:w-[180px]!"
                         onChange={(e) => {
                             setPage(1);
                             setModelFilter(e.target.value);
@@ -2306,7 +2309,7 @@ export function UsageLogsPanel({ defaultScope = "self" }: { defaultScope?: "all"
                             value={userQueryFilter}
                             prefix={<User className="size-3.5 opacity-50" />}
                             placeholder={t("userPanels.usageLogs.searchUser")}
-                            style={{ width: 180 }}
+                            className="w-full! sm:w-[180px]!"
                             onChange={(e) => {
                                 setPage(1);
                                 setUserQueryFilter(e.target.value);
@@ -2318,13 +2321,14 @@ export function UsageLogsPanel({ defaultScope = "self" }: { defaultScope?: "all"
                         value={logIdFilter}
                         prefix={<Search className="size-3.5 opacity-50" />}
                         placeholder={t("userPanels.usageLogs.searchLogId")}
-                        style={{ width: 190 }}
+                        className="w-full! sm:w-[190px]!"
                         onChange={(e) => {
                             setPage(1);
                             setLogIdFilter(e.target.value);
                         }}
                     />
                     <DatePicker.RangePicker
+                        className="w-full! sm:w-auto!"
                         value={dateRange}
                         onChange={(dates) => {
                             setPage(1);
@@ -3077,10 +3081,10 @@ export function MyMediaPanel() {
             >
                 <div className="flex flex-col gap-3">
                     <div className="flex flex-wrap items-center justify-between gap-3">
-                        <div className="min-w-[220px] flex-1">
+                        <div className="w-full min-w-0 sm:min-w-[220px] sm:flex-1">
                             <Progress percent={quotaPercent} status={quotaExceeded ? "exception" : "active"} />
                         </div>
-                        <Space.Compact style={{ width: 340 }}>
+                        <Space.Compact className="w-full! sm:w-[340px]!">
                             <Input
                                 value={storageRedeemCode}
                                 placeholder={t("userPanels.myMedia.codePlaceholder")}
@@ -3147,10 +3151,10 @@ export function MyMediaPanel() {
                             children: (
                                 <>
                                     <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
-                                        <Space wrap>
+                                        <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto">
                                             <Select
                                                 value={moduleFilter}
-                                                style={{ width: 130 }}
+                                                className="min-w-[125px] flex-1 sm:w-[130px]! sm:flex-none"
                                                 onChange={(val) => {
                                                     setPage(1);
                                                     setModuleFilter(val);
@@ -3159,7 +3163,7 @@ export function MyMediaPanel() {
                                             />
                                             <Select
                                                 value={kind}
-                                                style={{ width: 120 }}
+                                                className="min-w-[115px] flex-1 sm:w-[120px]! sm:flex-none"
                                                 onChange={(val) => {
                                                     setPage(1);
                                                     setKind(val);
@@ -3175,13 +3179,13 @@ export function MyMediaPanel() {
                                             <Input.Search
                                                 allowClear
                                                 placeholder={t("userPanels.myMedia.searchPath")}
-                                                style={{ width: 200 }}
+                                                className="w-full! sm:w-[200px]!"
                                                 onSearch={(val) => {
                                                     setPage(1);
                                                     setQ(val.trim());
                                                 }}
                                             />
-                                        </Space>
+                                        </div>
                                         <Space wrap>
                                             {selectedMediaIds.length > 0 ? (
                                                 <>

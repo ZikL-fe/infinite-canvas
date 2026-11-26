@@ -524,8 +524,57 @@
 .ant-input-number-group-wrapper.w-full,
 .ant-picker.w-full,
 .ant-select.w-full,
-.ant-input-affix-wrapper.w-full {
+.ant-input-affix-wrapper.w-full,
+.ant-input-search.w-full,
+.ant-space-compact.w-full {
     width: 100%;
+}
+
+/* 后台与个人中心窄屏适配：允许卡片标题与操作区自动折行、抽屉不超出视口、日期范围面板在小屏纵向堆叠 */
+.admin-shell .ant-card-head {
+    min-height: auto;
+    padding-block: 8px;
+}
+
+.admin-shell .ant-card-head-wrapper {
+    flex-wrap: wrap;
+    gap: 6px 12px;
+}
+
+.admin-shell .ant-card-head-title {
+    flex: 1 1 180px;
+    padding: 4px 0;
+    white-space: normal;
+}
+
+.admin-shell .ant-card-extra {
+    margin-inline-start: 0;
+    max-width: 100%;
+    padding: 4px 0;
+}
+
+.admin-shell .ant-table-wrapper {
+    max-width: 100%;
+}
+
+.admin-shell .ant-statistic-content {
+    font-size: clamp(18px, 2.2vw, 24px);
+    overflow-wrap: anywhere;
+}
+
+.ant-drawer-content-wrapper {
+    max-width: 100vw !important;
+}
+
+@media (max-width: 639px) {
+    .admin-shell .ant-card-head,
+    .admin-shell .ant-card-body {
+        padding-inline: 14px;
+    }
+
+    .ant-picker-dropdown .ant-picker-panels {
+        flex-direction: column;
+    }
 }
 
 /* 深色模式下部分主色高亮组件未提供独立前景色 Token，确保浅灰/白底上的文字、滑块圆点与勾选标记具备对比度 */

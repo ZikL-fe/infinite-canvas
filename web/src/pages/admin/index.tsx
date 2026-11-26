@@ -1409,7 +1409,7 @@ export default function AdminPage() {
                             children: (
                                 <div className="flex flex-col gap-5">
                                     <Row gutter={[16, 16]}>
-                                        <Col xs={24} sm={12} md={6}>
+                                        <Col xs={24} sm={12} xl={6}>
                                             <Card loading={overviewLoading}>
                                                 <Statistic
                                                     title={t("admin.overviewTab.totalUsers")}
@@ -1425,7 +1425,7 @@ export default function AdminPage() {
                                                 />
                                             </Card>
                                         </Col>
-                                        <Col xs={24} sm={12} md={6}>
+                                        <Col xs={24} sm={12} xl={6}>
                                             <Card loading={overviewLoading}>
                                                 <Tooltip title={t("admin.overviewTab.exactCreditsTooltip", { value: formatExactCredits(overview?.totalConsumedCredits ?? 0) })}>
                                                     <div>
@@ -1434,7 +1434,7 @@ export default function AdminPage() {
                                                 </Tooltip>
                                             </Card>
                                         </Col>
-                                        <Col xs={24} sm={12} md={6}>
+                                        <Col xs={24} sm={12} xl={6}>
                                             <Card loading={overviewLoading}>
                                                 <Tooltip title={t("admin.overviewTab.exactCreditsTooltip", { value: formatExactCredits(overview?.todayConsumedCredits ?? 0) })}>
                                                     <div>
@@ -1443,7 +1443,7 @@ export default function AdminPage() {
                                                 </Tooltip>
                                             </Card>
                                         </Col>
-                                        <Col xs={24} sm={12} md={6}>
+                                        <Col xs={24} sm={12} xl={6}>
                                             <Card loading={overviewLoading}>
                                                 <Statistic title={t("admin.overviewTab.usedStorage")} value={formatBytes(totalStorageBytes)} />
                                             </Card>
@@ -1498,14 +1498,14 @@ export default function AdminPage() {
                                                             const percent = totalStorageBytes > 0 ? Math.round((item.bytes / totalStorageBytes) * 100) : 0;
                                                             return (
                                                                 <div key={item.kind} className="flex flex-col gap-1">
-                                                                    <div className="flex items-center justify-between text-sm">
-                                                                        <span>
+                                                                    <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
+                                                                        <span className="min-w-0">
                                                                             {t("admin.overviewTab.kindItemCount", {
                                                                                 kind: getKindLabel(item.kind, t),
                                                                                 count: item.count,
                                                                             })}
                                                                         </span>
-                                                                        <Typography.Text type="secondary">{formatBytes(item.bytes)}</Typography.Text>
+                                                                        <Typography.Text type="secondary" className="shrink-0">{formatBytes(item.bytes)}</Typography.Text>
                                                                     </div>
                                                                     <Progress percent={percent} size="small" showInfo={false} />
                                                                 </div>
@@ -1525,8 +1525,8 @@ export default function AdminPage() {
                                                             const percent = totalStorageBytes > 0 ? Math.round((item.storageUsedBytes / totalStorageBytes) * 100) : 0;
                                                             return (
                                                                 <div key={item.id} className="flex flex-col gap-1">
-                                                                    <div className="flex items-center justify-between text-sm">
-                                                                        <span>
+                                                                    <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
+                                                                        <span className="min-w-0 truncate">
                                                                             {item.displayName || item.username}{" "}
                                                                             <Tag color={item.role === "admin" ? "blue" : "default"}>
                                                                                 {item.role === "admin"
@@ -1534,7 +1534,7 @@ export default function AdminPage() {
                                                                                     : t("admin.overviewTab.roleUserTag")}
                                                                             </Tag>
                                                                         </span>
-                                                                        <Typography.Text type="secondary">{formatBytes(item.storageUsedBytes)}</Typography.Text>
+                                                                        <Typography.Text type="secondary" className="shrink-0">{formatBytes(item.storageUsedBytes)}</Typography.Text>
                                                                     </div>
                                                                     <Progress percent={percent} size="small" showInfo={false} />
                                                                 </div>
@@ -1714,10 +1714,10 @@ export default function AdminPage() {
                                 <Card
                                     title={t("admin.usersTab.cardTitle")}
                                     extra={
-                                        <Space wrap>
+                                        <div className="flex flex-wrap items-center gap-2">
                                             <Select
                                                 value={userRoleFilter}
-                                                style={{ width: 115 }}
+                                                className="min-w-[115px] flex-1 sm:w-[115px]! sm:flex-none"
                                                 onChange={(value) => {
                                                     setUsersPage(1);
                                                     setUserRoleFilter(value);
@@ -1730,7 +1730,7 @@ export default function AdminPage() {
                                             />
                                             <Select
                                                 value={userStatusFilter}
-                                                style={{ width: 115 }}
+                                                className="min-w-[115px] flex-1 sm:w-[115px]! sm:flex-none"
                                                 onChange={(value) => {
                                                     setUsersPage(1);
                                                     setUserStatusFilter(value);
@@ -1743,7 +1743,7 @@ export default function AdminPage() {
                                             />
                                             <Select
                                                 value={userSort}
-                                                style={{ width: 145 }}
+                                                className="min-w-[140px] flex-1 sm:w-[145px]! sm:flex-none"
                                                 onChange={(value) => {
                                                     setUsersPage(1);
                                                     setUserSort(value);
@@ -1756,13 +1756,13 @@ export default function AdminPage() {
                                             <Input.Search
                                                 allowClear
                                                 placeholder={t("admin.usersTab.searchPlaceholder")}
-                                                style={{ width: 220 }}
+                                                className="w-full! sm:w-[220px]!"
                                                 onSearch={(value) => {
                                                     setUsersPage(1);
                                                     setUserQuery(value.trim());
                                                 }}
                                             />
-                                        </Space>
+                                        </div>
                                     }
                                 >
                                     <Table<AdminUserItem>
@@ -1972,10 +1972,10 @@ export default function AdminPage() {
                                     <Card
                                         title={t("admin.redeemTab.cardTitle")}
                                         extra={
-                                            <Space wrap>
+                                            <div className="flex flex-wrap items-center gap-2">
                                                 <Select
                                                     value={redeemStatusFilter}
-                                                    style={{ width: 115 }}
+                                                    className="min-w-[115px] flex-1 sm:w-[115px]! sm:flex-none"
                                                     onChange={(value) => {
                                                         setRedeemPage(1);
                                                         setSelectedRedeemIds([]);
@@ -1990,7 +1990,7 @@ export default function AdminPage() {
                                                 <Input.Search
                                                     allowClear
                                                     placeholder={t("admin.redeemTab.searchPlaceholder")}
-                                                    style={{ width: 200 }}
+                                                    className="w-full! sm:w-[200px]!"
                                                     onSearch={(value) => {
                                                         setRedeemPage(1);
                                                         setSelectedRedeemIds([]);
@@ -2017,7 +2017,7 @@ export default function AdminPage() {
                                                 >
                                                     {redeemActiveKind === "storage" ? t("admin.redeemTab.createStorageBtn") : t("admin.redeemTab.createCreditsBtn")}
                                                 </Button>
-                                            </Space>
+                                            </div>
                                         }
                                     >
                                         <Tabs
@@ -2046,7 +2046,7 @@ export default function AdminPage() {
                                                         </Typography.Text>
                                                     ) : null}
                                                 </span>
-                                                <Space>
+                                                <Space wrap>
                                                     <Button size="small" icon={<Copy className="size-3.5" />} onClick={handleBatchCopyRedeemCodes}>
                                                         {t("admin.redeemTab.batchCopy")}
                                                     </Button>
@@ -2240,10 +2240,10 @@ export default function AdminPage() {
                                     }
                                     extra={
                                         mediaSubTab === "media" ? (
-                                            <Space wrap>
+                                            <div className="flex flex-wrap items-center gap-2">
                                                 <Select
                                                     value={mediaModuleFilter}
-                                                    style={{ width: 130 }}
+                                                    className="min-w-[125px] flex-1 sm:w-[130px]! sm:flex-none"
                                                     onChange={(value) => {
                                                         setMediaPage(1);
                                                         setMediaModuleFilter(value);
@@ -2252,7 +2252,7 @@ export default function AdminPage() {
                                                 />
                                                 <Select
                                                     value={mediaKindFilter}
-                                                    style={{ width: 120 }}
+                                                    className="min-w-[115px] flex-1 sm:w-[120px]! sm:flex-none"
                                                     onChange={(value) => {
                                                         setMediaPage(1);
                                                         setMediaKindFilter(value);
@@ -2268,7 +2268,7 @@ export default function AdminPage() {
                                                 <Input.Search
                                                     allowClear
                                                     placeholder={t("admin.mediaTab.searchMediaPlaceholder")}
-                                                    style={{ width: 220 }}
+                                                    className="w-full! sm:w-[220px]!"
                                                     onSearch={(value) => {
                                                         setMediaPage(1);
                                                         setMediaQuery(value.trim());
@@ -2281,13 +2281,13 @@ export default function AdminPage() {
                                                 >
                                                     {t("common.refresh")}
                                                 </Button>
-                                            </Space>
+                                            </div>
                                         ) : (
-                                            <Space wrap>
+                                            <div className="flex flex-wrap items-center gap-2">
                                                 <Input.Search
                                                     allowClear
                                                     placeholder={t("admin.mediaTab.searchWorkspacePlaceholder")}
-                                                    style={{ width: 220 }}
+                                                    className="w-full! sm:w-[220px]!"
                                                     onSearch={(value) => {
                                                         setWorkspaceDataPage(1);
                                                         setWorkspaceDataQuery(value.trim());
@@ -2300,7 +2300,7 @@ export default function AdminPage() {
                                                 >
                                                     {t("common.refresh")}
                                                 </Button>
-                                            </Space>
+                                            </div>
                                         )
                                     }
                                 >
@@ -2611,7 +2611,7 @@ export default function AdminPage() {
                                                     </Form.Item>
                                                 </Col>
                                             </Row>
-                                            <Space>
+                                            <Space wrap>
                                                 <Button icon={<Wifi className="size-4" />} onClick={handleTestStorage} loading={storageTesting}>
                                                     {t("admin.storageTab.testProbeBtn")}
                                                 </Button>
@@ -2660,27 +2660,29 @@ export default function AdminPage() {
                                         <Spin spinning={settingsLoading}>
                                             <Card title={t("admin.settingsTab.auth.cardTitle")}>
                                             <div className="flex flex-col gap-4">
-                                                <div className="flex items-center justify-between gap-4">
-                                                    <div>
+                                                <div className="flex items-start justify-between gap-4 sm:items-center">
+                                                    <div className="min-w-0 flex-1">
                                                         <div className="font-medium">{t("admin.settingsTab.auth.allowRegister")}</div>
                                                         <Typography.Text type="secondary">
                                                             {t("admin.settingsTab.auth.allowRegisterDesc")}
                                                         </Typography.Text>
                                                     </div>
                                                     <Switch
+                                                        className="shrink-0"
                                                         checked={allowRegister}
                                                         loading={authPolicySaving}
                                                         onChange={(checked) => void handleUpdateAuthPolicy({ allowRegister: checked })}
                                                     />
                                                 </div>
-                                                <div className="flex items-center justify-between gap-4 border-t border-black/5 pt-4 dark:border-white/5">
-                                                    <div>
+                                                <div className="flex items-start justify-between gap-4 border-t border-black/5 pt-4 sm:items-center dark:border-white/5">
+                                                    <div className="min-w-0 flex-1">
                                                         <div className="font-medium">{t("admin.settingsTab.auth.requireEmail")}</div>
                                                         <Typography.Text type="secondary">
                                                             {t("admin.settingsTab.auth.requireEmailDesc")}
                                                         </Typography.Text>
                                                     </div>
                                                     <Switch
+                                                        className="shrink-0"
                                                         checked={requireEmailOnRegister}
                                                         disabled={!mailReady && !requireEmailOnRegister}
                                                         loading={authPolicySaving}
@@ -2791,17 +2793,17 @@ export default function AdminPage() {
                                                     </Col>
                                                 </Row>
                                                 <div className="flex flex-wrap items-center justify-between gap-3">
-                                                    <Space wrap>
+                                                    <div className="flex flex-wrap items-center gap-2">
                                                         <Input
                                                             value={testMailTo}
                                                             onChange={(e) => setTestMailTo(e.target.value)}
                                                             placeholder={t("admin.settingsTab.mail.testToPlaceholder")}
-                                                            style={{ width: 240 }}
+                                                            className="w-full! sm:w-[240px]!"
                                                         />
                                                         <Button icon={<Send className="size-4" />} onClick={() => void handleTestMailSettings()} loading={mailTesting}>
                                                             {t("admin.settingsTab.mail.sendTestBtn")}
                                                         </Button>
-                                                    </Space>
+                                                    </div>
                                                     <Button type="primary" htmlType="submit" icon={<Save className="size-4" />} loading={mailSaving}>
                                                         {t("admin.settingsTab.mail.saveBtn")}
                                                     </Button>
@@ -2864,7 +2866,7 @@ export default function AdminPage() {
                                                         </Form.Item>
                                                     </Col>
                                                 </Row>
-                                                <Space>
+                                                <Space wrap>
                                                     <Button icon={<Wifi className="size-4" />} onClick={() => void handleTestPlatformWebdav()} loading={webdavTesting}>
                                                         {t("admin.settingsTab.webdav.testBtn")}
                                                     </Button>
@@ -3017,7 +3019,7 @@ export default function AdminPage() {
                                                         rowKey={(row) => `${row.userId}-${row.action}`}
                                                         dataSource={storageExpiryResult.items}
                                                         pagination={{ defaultPageSize: 10, showSizeChanger: true, pageSizeOptions: [10, 20, 30, 50, 100], showTotal: (count) => t("common.totalItems", { count }) }}
-                                                        scroll={{ x: 960 }}
+                                                        scroll={ADMIN_TABLE_SCROLL}
                                                         locale={{ emptyText: t("admin.settingsTab.storageExpiry.emptyText") }}
                                                         columns={[
                                                             {
@@ -3511,10 +3513,10 @@ export default function AdminPage() {
 
     return (
         <div
-            className="flex h-full flex-col overflow-hidden"
+            className="admin-shell flex h-full flex-col overflow-hidden"
             style={{ backgroundColor: token.colorBgLayout }}
         >
-            <div className="mx-auto grid min-h-0 w-full max-w-[1680px] flex-1 grid-cols-1 gap-3 overflow-hidden px-4 py-3 sm:px-6 lg:grid-cols-[240px_minmax(0,1fr)] lg:px-10">
+            <div className="mx-auto grid min-h-0 w-full max-w-[1680px] flex-1 grid-cols-1 gap-3 overflow-hidden px-2.5 py-2.5 sm:px-6 sm:py-3 lg:grid-cols-[216px_minmax(0,1fr)] lg:px-6 xl:grid-cols-[240px_minmax(0,1fr)] xl:px-8">
                 <aside
                     className="thin-scrollbar hidden min-h-0 flex-col overflow-y-auto rounded-lg border p-3 lg:flex"
                     style={{
@@ -3553,13 +3555,13 @@ export default function AdminPage() {
                 </aside>
 
                 <main
-                    className="thin-scrollbar flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto rounded-lg border p-5"
+                    className="thin-scrollbar flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto rounded-lg border p-3 sm:p-5"
                     style={{
                         backgroundColor: token.colorBgContainer,
                         borderColor: token.colorBorderSecondary,
                     }}
                 >
-                    <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
+                    <div className="mb-3 flex flex-wrap items-center justify-between gap-2 sm:mb-5 sm:gap-3">
                         <div className="flex items-center gap-3">
                             <div className="lg:hidden">
                                 <Button icon={<MenuIcon className="size-4" />} onClick={() => setMobileMenuOpen(true)}>
@@ -3645,7 +3647,7 @@ export default function AdminPage() {
                         <Input.Password placeholder={t("admin.modals.webdav.passwordPlaceholder")} />
                     </Form.Item>
                     <Row gutter={12}>
-                        <Col span={12}>
+                        <Col xs={24} sm={12}>
                             <Form.Item
                                 name="quotaMb"
                                 label={t("admin.modals.webdav.quotaMb", { used: formatBytes(assigningUser?.webdavConfig?.usedBytes ?? 0) })}
@@ -3653,7 +3655,7 @@ export default function AdminPage() {
                                 <InputNumber min={0} step={100} className="w-full" placeholder={t("admin.modals.webdav.quotaPlaceholder")} />
                             </Form.Item>
                         </Col>
-                        <Col span={12}>
+                        <Col xs={24} sm={12}>
                             <Form.Item name="expiresAt" label={t("admin.modals.webdav.expiresAt")}>
                                 <DatePicker showTime className="w-full" placeholder={t("admin.modals.webdav.expiresPlaceholder")} />
                             </Form.Item>
@@ -3717,7 +3719,7 @@ export default function AdminPage() {
                 </Form>
 
                 <div className="mt-2 border-t pt-3" style={{ borderColor: token.colorBorderSecondary }}>
-                    <div className="mb-2 flex items-center justify-between">
+                    <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
                         <Typography.Text strong className="text-xs">
                             {t("admin.modals.quota.grantsTitle", { count: storageQuotaGrants.length })}
                         </Typography.Text>
@@ -3734,7 +3736,7 @@ export default function AdminPage() {
                             {storageQuotaGrants.map((grant) => (
                                 <div
                                     key={grant.id}
-                                    className="flex items-center justify-between gap-2 rounded-lg border px-3 py-2 text-xs"
+                                    className="flex flex-wrap items-center justify-between gap-2 rounded-lg border px-3 py-2 text-xs"
                                     style={{ borderColor: token.colorBorderSecondary }}
                                 >
                                     <div className="min-w-0 flex-1">
@@ -3861,19 +3863,19 @@ export default function AdminPage() {
                         />
                     </Form.Item>
                     <Row gutter={12}>
-                        <Col span={12}>
+                        <Col xs={24} sm={12}>
                             <Form.Item name="count" label={t("admin.modals.redeem.countLabel")} rules={[{ required: true, message: t("admin.modals.redeem.countReq") }]}>
                                 <InputNumber className="w-full" min={1} max={100} />
                             </Form.Item>
                         </Col>
                         {redeemKindWatch === "credits" ? (
-                            <Col span={12}>
+                            <Col xs={24} sm={12}>
                                 <Form.Item name="credits" label={t("admin.modals.redeem.creditsLabel")} rules={[{ required: true, message: t("admin.modals.redeem.creditsReq") }]}>
                                     <InputNumber className="w-full" min={0.01} step={10} />
                                 </Form.Item>
                             </Col>
                         ) : (
-                            <Col span={12}>
+                            <Col xs={24} sm={12}>
                                 <Form.Item name="storageQuotaMb" label={t("admin.modals.redeem.storageQuotaLabel")} rules={[{ required: true, message: t("admin.modals.redeem.storageQuotaReq") }]}>
                                     <InputNumber className="w-full" min={1} step={100} />
                                 </Form.Item>
@@ -3905,12 +3907,12 @@ export default function AdminPage() {
                         </>
                     ) : null}
                     <Row gutter={12}>
-                        <Col span={12}>
+                        <Col xs={24} sm={12}>
                             <Form.Item name="prefix" label={t("admin.modals.redeem.prefixLabel")}>
                                 <Input placeholder={redeemKindWatch === "storage" ? "ST" : "IC"} maxLength={16} />
                             </Form.Item>
                         </Col>
-                        <Col span={12}>
+                        <Col xs={24} sm={12}>
                             <Form.Item label={t("admin.modals.redeem.limitLabel")}>
                                 <Input value={t("admin.modals.redeem.limitValue")} disabled />
                             </Form.Item>
@@ -3945,7 +3947,7 @@ export default function AdminPage() {
                 title={t("userPanels.myMedia.previewModalTitle")}
                 onCancel={() => setPreviewMediaItem(null)}
                 footer={
-                    <Space>
+                    <Space wrap>
                         {previewMediaItem ? (
                             <Button
                                 icon={<Download className="size-4" />}
@@ -4005,12 +4007,12 @@ export default function AdminPage() {
                         <Input placeholder={t("admin.settingsTab.announcements.titlePlaceholder")} maxLength={120} />
                     </Form.Item>
                     <Row gutter={12}>
-                        <Col span={12}>
+                        <Col xs={24} sm={12}>
                             <Form.Item name="level" label={t("admin.settingsTab.announcements.levelLabel")} rules={[{ required: true }]}>
                                 <Select options={announcementLevelOptions} />
                             </Form.Item>
                         </Col>
-                        <Col span={12}>
+                        <Col xs={24} sm={12}>
                             <Form.Item name="createdAt" label={t("admin.settingsTab.announcements.createdAtLabel")}>
                                 <DatePicker showTime allowClear className="w-full" placeholder={t("admin.settingsTab.announcements.createdAtPlaceholder")} />
                             </Form.Item>
@@ -4020,12 +4022,12 @@ export default function AdminPage() {
                         <Input.TextArea rows={5} placeholder={t("admin.settingsTab.announcements.contentPlaceholder")} maxLength={4000} showCount />
                     </Form.Item>
                     <Row gutter={16}>
-                        <Col span={12}>
+                        <Col xs={24} sm={12}>
                             <Form.Item name="isPinned" label={t("admin.settingsTab.announcements.isPinnedLabel")} valuePropName="checked">
                                 <Switch />
                             </Form.Item>
                         </Col>
-                        <Col span={12}>
+                        <Col xs={24} sm={12}>
                             <Form.Item name="isPublished" label={t("admin.settingsTab.announcements.isPublishedLabel")} valuePropName="checked">
                                 <Switch />
                             </Form.Item>
