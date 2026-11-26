@@ -8,7 +8,7 @@ import { z } from "zod";
 import { canvasProjects, creditLedger, db, mediaObjects, userAssets, userStorageGrants, users, workbenchLogs, type MediaKind } from "../db/index.ts";
 import { env } from "../env.ts";
 import { buildThumbnailObjectKey, checkStorageQuotaBlock } from "../lib/ai-media-persist.ts";
-import { collectUserMediaReferences, purgeMediaReferencesForUsers, type MediaSourceModule } from "../lib/media-cleanup.ts";
+import { collectUserMediaReferences, getMediaThumbBytes, getMediaTotalBytes, purgeMediaReferencesForUsers, type MediaSourceModule } from "../lib/media-cleanup.ts";
 import { claimRedeemCodeInTx } from "../lib/redeem.ts";
 import {
   createMediaReadUrl,
@@ -572,17 +572,67 @@ storageRoutes.post("/thumbnail/:mediaId", async (c) => {
     return c.json({ error: "缩略图体积过大" }, 400);
   }
 
+  const buffer = Buffer.from(await file.arrayBuffer());
+  const oldThumbBytes = getMediaThumbBytes(media.meta);
+  const newThumbBytes = buffer.byteLength;
+  const deltaBytes = newThumbBytes - oldThumbBytes;
+
+  if (deltaBytes > 0) {
+    let targetUsedBytes = user.storageUsedBytes;
+    let targetQuotaBytes = user.storageQuotaBytes;
+    let targetExpiresAt = user.storageQuotaExpiresAt;
+    if (media.userId !== user.id) {
+      const ownerRow = await db.query.users.findFirst({ where: eq(users.id, media.userId) });
+      if (!ownerRow) {
+        return c.json({ error: "媒体所属用户不存在" }, 404);
+      }
+      const ownerSummary = await getUserStorageQuotaSummary(ownerRow);
+      targetUsedBytes = ownerRow.storageUsedBytes;
+      targetQuotaBytes = ownerSummary.storageQuotaBytes;
+      targetExpiresAt = ownerSummary.storageQuotaExpiresAt;
+    }
+    const block = checkStorageQuotaBlock(targetUsedBytes, targetQuotaBytes, targetExpiresAt, deltaBytes);
+    if (block.blocked) {
+      return c.json(
+        {
+          error: block.error,
+          code: block.code,
+          storageUsedBytes: targetUsedBytes,
+          storageQuotaBytes: targetQuotaBytes,
+        },
+        403,
+      );
+    }
+  }
+
   const thumbObjectKey =
     typeof media.meta?.thumbObjectKey === "string" && media.meta.thumbObjectKey
       ? media.meta.thumbObjectKey
       : buildThumbnailObjectKey(media.userId, media.id);
-  const buffer = Buffer.from(await file.arrayBuffer());
   await putS3Object(config, thumbObjectKey, buffer, file.type || "image/webp");
 
-  const nextMeta = { ...(media.meta || {}), thumbObjectKey };
-  await db.update(mediaObjects).set({ meta: nextMeta }).where(eq(mediaObjects.id, media.id));
+  const nextMeta = { ...(media.meta || {}), thumbObjectKey, thumbBytes: newThumbBytes };
+  const storageUsedBytes = await db.transaction(async (tx) => {
+    await tx.update(mediaObjects).set({ meta: nextMeta }).where(eq(mediaObjects.id, media.id));
+    if (deltaBytes === 0) return undefined;
+    const [updatedUser] = await tx
+      .update(users)
+      .set({
+        storageUsedBytes: sql`GREATEST(0, ${users.storageUsedBytes} + ${deltaBytes})`,
+        updatedAt: new Date(),
+      })
+      .where(eq(users.id, media.userId))
+      .returning({ storageUsedBytes: users.storageUsedBytes });
+    return updatedUser?.storageUsedBytes;
+  });
   const thumbnailUrl = await createMediaReadUrl(config, thumbObjectKey);
-  return c.json({ ok: true, thumbnailUrl });
+  return c.json({
+    ok: true,
+    userId: media.userId,
+    thumbnailUrl,
+    thumbBytes: newThumbBytes,
+    ...(typeof storageUsedBytes === "number" ? { storageUsedBytes } : {}),
+  });
 });
 
 storageRoutes.get("/thumbnail/:mediaId", async (c) => {
@@ -950,7 +1000,7 @@ async function deleteMediaRowsWithQuota(
       .update(mediaObjects)
       .set({ status: "deleted" })
       .where(and(inArray(mediaObjects.id, deletedRows.map((row) => row.id)), eq(mediaObjects.status, "active")))
-      .returning({ id: mediaObjects.id, userId: mediaObjects.userId, bytes: mediaObjects.bytes });
+      .returning({ id: mediaObjects.id, userId: mediaObjects.userId, bytes: mediaObjects.bytes, meta: mediaObjects.meta });
 
     if (!updated.length) return { deletedCount: 0, freedBytesTotal: 0, deletedIdsByUser: new Map<string, string[]>() };
 
@@ -958,7 +1008,7 @@ async function deleteMediaRowsWithQuota(
     const deletedIdsByUser = new Map<string, string[]>();
     let freedBytesTotal = 0;
     for (const row of updated) {
-      const bytes = Math.max(0, Number(row.bytes || 0));
+      const bytes = getMediaTotalBytes(row.bytes, row.meta);
       freedBytesTotal += bytes;
       if (bytes > 0) bytesByUser.set(row.userId, (bytesByUser.get(row.userId) ?? 0) + bytes);
       const list = deletedIdsByUser.get(row.userId);

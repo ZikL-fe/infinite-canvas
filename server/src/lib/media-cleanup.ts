@@ -7,6 +7,20 @@ import { getS3StorageConfig } from "./settings.ts";
 
 export type MediaSourceModule = "canvas" | "image_workbench" | "video_workbench" | "assets";
 
+/** 从媒体元数据中读取已记录的缩略图字节数。 */
+export function getMediaThumbBytes(meta: Record<string, unknown> | null | undefined): number {
+  const raw = Number(meta?.thumbBytes ?? 0);
+  return Number.isFinite(raw) && raw > 0 ? Math.round(raw) : 0;
+}
+
+/** 计算媒体原文件与缩略图合计占用的云端存储字节数。 */
+export function getMediaTotalBytes(bytes: number | null | undefined, meta: Record<string, unknown> | null | undefined): number {
+  return Math.max(0, Number(bytes || 0)) + getMediaThumbBytes(meta);
+}
+
+/** SQL 表达式：单条媒体原文件与 `meta.thumbBytes` 合计占用的字节数。 */
+export const mediaTotalBytesSql = sql<number>`(${mediaObjects.bytes} + (CASE WHEN COALESCE(${mediaObjects.meta}->>'thumbBytes', '') ~ '^[0-9]+$' THEN (${mediaObjects.meta}->>'thumbBytes')::bigint ELSE 0 END))`;
+
 /** 递归提取 JSON 结构内全部 `storageKey`（格式为 `kind:id`）。 */
 export function extractStorageKeys(value: unknown, keys = new Set<string>()): Set<string> {
   if (!value || typeof value !== "object") return keys;
@@ -108,7 +122,7 @@ export async function cleanupOrphanedUserMedia(userId: string, candidateIds: Ite
   );
   if (!deletedRows.length) return 0;
 
-  const totalBytes = deletedRows.reduce((sum, row) => sum + Math.max(0, row.bytes || 0), 0);
+  const totalBytes = deletedRows.reduce((sum, row) => sum + getMediaTotalBytes(row.bytes, row.meta), 0);
   const rowIds = deletedRows.map((row) => row.id);
   await db.transaction(async (tx) => {
     await tx.update(mediaObjects).set({ status: "deleted" }).where(and(eq(mediaObjects.userId, userId), inArray(mediaObjects.id, rowIds)));
@@ -336,12 +350,12 @@ export async function loadUserMediaByteMap(userIds: string[]) {
   if (!uniqueIds.length) return byteMap;
 
   const rows = await db
-    .select({ id: mediaObjects.id, userId: mediaObjects.userId, bytes: mediaObjects.bytes })
+    .select({ id: mediaObjects.id, userId: mediaObjects.userId, bytes: mediaObjects.bytes, meta: mediaObjects.meta })
     .from(mediaObjects)
     .where(and(inArray(mediaObjects.userId, uniqueIds), eq(mediaObjects.status, "active")));
 
   for (const row of rows) {
-    byteMap.set(`${row.userId}:${row.id}`, Math.max(0, row.bytes || 0));
+    byteMap.set(`${row.userId}:${row.id}`, getMediaTotalBytes(row.bytes, row.meta));
   }
   return byteMap;
 }

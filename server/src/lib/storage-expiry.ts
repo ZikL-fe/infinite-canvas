@@ -3,6 +3,7 @@ import { and, asc, eq, inArray, isNull, sql } from "drizzle-orm";
 
 import { canvasProjects, db, mediaObjects, userAssets, userStorageGrants, users, workbenchLogs } from "../db/index.ts";
 import { isMailConfigReady, sendStorageCleanedEmail, sendStorageExpiredNoticeEmail, sendStoragePreExpiryEmail } from "./mail.ts";
+import { getMediaTotalBytes, mediaTotalBytesSql } from "./media-cleanup.ts";
 import { deleteS3ObjectStrict } from "./s3.ts";
 import { getPlatformMailConfig, getPlatformStorageExpiryPolicy, getS3StorageConfig, type PlatformStorageExpiryPolicy } from "./settings.ts";
 import { getEarliestPreExpiryWarningTimestamp, resolveEffectiveStorageQuota } from "./storage-quota.ts";
@@ -88,7 +89,7 @@ function selectMediaForCleanup(
   rows: Array<{ id: string; objectKey: string; sizeBytes: number; meta: Record<string, unknown> | null }>,
   effectiveQuotaBytes: number,
 ) {
-  const actualUsedBytes = rows.reduce((sum, item) => sum + Math.max(0, Number(item.sizeBytes || 0)), 0);
+  const actualUsedBytes = rows.reduce((sum, item) => sum + getMediaTotalBytes(item.sizeBytes, item.meta), 0);
   if (effectiveQuotaBytes <= 0) {
     return {
       actualUsedBytes,
@@ -103,7 +104,7 @@ function selectMediaForCleanup(
   const targets: typeof rows = [];
   for (const row of rows) {
     if (remaining <= effectiveQuotaBytes) break;
-    const size = Math.max(0, Number(row.sizeBytes || 0));
+    const size = getMediaTotalBytes(row.sizeBytes, row.meta);
     targets.push(row);
     remaining = Math.max(0, remaining - size);
     freedBytes += size;
@@ -407,7 +408,7 @@ async function runSweepInternal(options?: {
     }
 
     const [remainingRow] = await db
-      .select({ total: sql<number>`coalesce(sum(${mediaObjects.bytes}), 0)::bigint` })
+      .select({ total: sql<number>`coalesce(sum(${mediaTotalBytesSql}), 0)::bigint` })
       .from(mediaObjects)
       .where(and(eq(mediaObjects.userId, user.id), eq(mediaObjects.status, "active")));
     const nextUsedBytes = Math.max(0, Number(remainingRow?.total ?? 0));

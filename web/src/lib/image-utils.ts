@@ -15,6 +15,17 @@ export function formatBytes(bytes: number, zeroFallback = "") {
     return `${value >= 10 || unitIndex === 0 ? value.toFixed(0) : value.toFixed(1)} ${units[unitIndex]}`;
 }
 
+/** 读取媒体元数据中记录的缩略图字节数。 */
+export function getMediaThumbBytes(meta?: Record<string, unknown> | null): number {
+    const raw = Number(meta?.thumbBytes ?? 0);
+    return Number.isFinite(raw) && raw > 0 ? Math.round(raw) : 0;
+}
+
+/** 计算云端媒体（原文件 + 缩略图）合计占用的字节数。 */
+export function getMediaTotalBytes(bytes: number, meta?: Record<string, unknown> | null): number {
+    return Math.max(0, Number(bytes || 0)) + getMediaThumbBytes(meta);
+}
+
 /** 格式化存储用量与配额，无用量或无配额时统一显示为 `0 MB`。 */
 export function formatStoragePair(usedBytes?: number | null, quotaBytes?: number | null) {
     return `${formatBytes(usedBytes ?? 0, "0 MB")} / ${formatBytes(quotaBytes ?? 0, "0 MB")}`;

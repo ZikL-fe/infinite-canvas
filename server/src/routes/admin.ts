@@ -14,7 +14,9 @@ import {
   cleanupOrphanedUserMedia,
   collectUserMediaReferences,
   extractStorageKeys,
+  getMediaTotalBytes,
   loadUserMediaByteMap,
+  mediaTotalBytesSql,
   purgeMediaReferencesForUsers,
   summarizeWorkspaceMedia,
   type MediaSourceModule,
@@ -265,7 +267,7 @@ adminRoutes.get("/overview", async (c) => {
     db
       .select({
         activeMediaCount: count(),
-        totalStorageBytes: sql<number>`COALESCE(SUM(${mediaObjects.bytes}), 0)::bigint`,
+        totalStorageBytes: sql<number>`COALESCE(SUM(${mediaTotalBytesSql}), 0)::bigint`,
       })
       .from(mediaObjects)
       .where(eq(mediaObjects.status, "active")),
@@ -275,7 +277,7 @@ adminRoutes.get("/overview", async (c) => {
       .select({
         kind: mediaObjects.kind,
         count: count(),
-        bytes: sql<number>`COALESCE(SUM(${mediaObjects.bytes}), 0)::bigint`,
+        bytes: sql<number>`COALESCE(SUM(${mediaTotalBytesSql}), 0)::bigint`,
       })
       .from(mediaObjects)
       .where(eq(mediaObjects.status, "active"))
@@ -726,7 +728,7 @@ adminRoutes.put("/users/:id/storage-quota", zValidator("json", userStorageQuotaS
   if (body.recalculateUsedBytes) {
     const [mediaSum] = await db
       .select({
-        bytes: sql<number>`COALESCE(SUM(${mediaObjects.bytes}), 0)::bigint`,
+        bytes: sql<number>`COALESCE(SUM(${mediaTotalBytesSql}), 0)::bigint`,
       })
       .from(mediaObjects)
       .where(and(eq(mediaObjects.userId, targetId), eq(mediaObjects.status, "active")));
@@ -1552,7 +1554,7 @@ adminRoutes.get("/media", async (c) => {
     db
       .select({
         total: count(),
-        filteredBytes: sql<number>`COALESCE(SUM(${mediaObjects.bytes}), 0)::double precision`,
+        filteredBytes: sql<number>`COALESCE(SUM(${mediaTotalBytesSql}), 0)::double precision`,
       })
       .from(mediaObjects)
       .leftJoin(users, eq(mediaObjects.userId, users.id))
@@ -1758,11 +1760,12 @@ adminRoutes.delete("/media/:id", async (c) => {
 
   await db.transaction(async (tx) => {
     await tx.update(mediaObjects).set({ status: "deleted" }).where(eq(mediaObjects.id, media.id));
-    if (media.status === "active" && media.bytes > 0) {
+    const freedBytes = getMediaTotalBytes(media.bytes, media.meta);
+    if (media.status === "active" && freedBytes > 0) {
       await tx
         .update(users)
         .set({
-          storageUsedBytes: sql`GREATEST(0, ${users.storageUsedBytes} - ${media.bytes})`,
+          storageUsedBytes: sql`GREATEST(0, ${users.storageUsedBytes} - ${freedBytes})`,
           updatedAt: new Date(),
         })
         .where(eq(users.id, media.userId));

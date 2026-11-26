@@ -12,6 +12,7 @@ import { useBatchZipDownload } from "@/hooks/use-batch-zip-download";
 import { useEmailCodeSender } from "@/hooks/use-email-code-sender";
 import { formatCompactCredits, formatExactCredits } from "@/lib/format-number";
 import { createImageThumbnail, createVideoThumbnail } from "@/lib/image-thumbnail";
+import { getMediaThumbBytes, getMediaTotalBytes } from "@/lib/image-utils";
 import {
     formatCreditAlertCopy,
     formatStorageAlertCopy,
@@ -116,6 +117,24 @@ export function WorkspaceSizeCell({ mediaBytes = 0, dataBytes = 0 }: { mediaByte
                 ) : null}
             </span>
         </Tooltip>
+    );
+}
+
+/** 展示云端媒体占用大小（含原文件与缩略图体积明细）。 */
+export function MediaSizeCell({ bytes, meta }: { bytes: number; meta?: Record<string, unknown> | null }) {
+    const { t } = useTranslation();
+    const thumbBytes = getMediaThumbBytes(meta);
+    const totalBytes = getMediaTotalBytes(bytes, meta);
+    if (thumbBytes <= 0) {
+        return <span className="whitespace-nowrap">{formatBytes(bytes)}</span>;
+    }
+    return (
+        <div className="leading-tight">
+            <div className="whitespace-nowrap font-medium">{formatBytes(totalBytes)}</div>
+            <Typography.Text type="secondary" className="block whitespace-nowrap text-[11px]">
+                {t("common.withThumbSummary", { original: formatBytes(bytes), thumb: formatBytes(thumbBytes) })}
+            </Typography.Text>
+        </div>
     );
 }
 
@@ -1681,7 +1700,7 @@ function LedgerDetailModal({
                                                         {fileLabel}
                                                     </div>
                                                     <Typography.Text type="secondary" className="block text-xs">
-                                                        {formatBytes(media.bytes)}
+                                                        <MediaSizeCell bytes={media.bytes} meta={media.meta} />
                                                     </Typography.Text>
                                                 </div>
                                                 <Space size={6} className="shrink-0">
@@ -2893,7 +2912,23 @@ export function MyMediaPanel() {
                         if (!thumb) return;
                         const uploaded = await storageApi.uploadThumbnail(record.id, thumb);
                         if (uploaded.thumbnailUrl) {
-                            setItems((prev) => prev.map((it) => (it.id === record.id ? { ...it, thumbnailUrl: uploaded.thumbnailUrl } : it)));
+                            setItems((prev) =>
+                                prev.map((it) =>
+                                    it.id === record.id
+                                        ? {
+                                              ...it,
+                                              thumbnailUrl: uploaded.thumbnailUrl,
+                                              meta: {
+                                                  ...(it.meta || {}),
+                                                  ...(typeof uploaded.thumbBytes === "number" ? { thumbBytes: uploaded.thumbBytes } : {}),
+                                              },
+                                          }
+                                        : it,
+                                ),
+                            );
+                        }
+                        if (typeof uploaded.storageUsedBytes === "number") {
+                            setUsedBytes(uploaded.storageUsedBytes);
                         }
                     } catch {
                         // ignore backfill error
@@ -3209,26 +3244,16 @@ export function MyMediaPanel() {
                                         }}
                                         columns={[
                                             {
-                                                title: t("userPanels.myMedia.colPreviewPath"),
+                                                title: t("userPanels.myMedia.colPreview"),
                                                 key: "preview",
-                                                width: 300,
+                                                width: 88,
                                                 render: (_, record) => {
                                                     const thumb = record.thumbnailUrl || previewUrlFor(record.id) || "";
-                                                    return (
-                                                        <div className="flex max-w-[280px] items-center gap-3">
-                                                            {thumb ? (
-                                                                <img src={thumb} alt={record.objectKey} className="size-10 shrink-0 rounded object-cover" />
-                                                            ) : (
-                                                                <div className="flex size-10 shrink-0 items-center justify-center rounded bg-black/5 text-stone-400 dark:bg-white/10">
-                                                                    {record.kind === "video" ? <Video className="size-4" /> : record.kind === "audio" ? <AudioLines className="size-4" /> : record.kind === "image" ? <ImageIcon className="size-4" /> : <FileIcon className="size-4" />}
-                                                                </div>
-                                                            )}
-                                                            <div className="min-w-0">
-                                                                <div className="truncate font-mono text-xs">{record.objectKey}</div>
-                                                                <Typography.Text type="secondary" className="block truncate text-xs">
-                                                                    {record.mimeType}
-                                                                </Typography.Text>
-                                                            </div>
+                                                    return thumb ? (
+                                                        <img src={thumb} alt={record.mimeType} className="size-10 shrink-0 rounded object-cover" />
+                                                    ) : (
+                                                        <div className="flex size-10 shrink-0 items-center justify-center rounded bg-black/5 text-stone-400 dark:bg-white/10">
+                                                            {record.kind === "video" ? <Video className="size-4" /> : record.kind === "audio" ? <AudioLines className="size-4" /> : record.kind === "image" ? <ImageIcon className="size-4" /> : <FileIcon className="size-4" />}
                                                         </div>
                                                     );
                                                 },
@@ -3242,10 +3267,31 @@ export function MyMediaPanel() {
                                             {
                                                 title: t("userPanels.myMedia.colKind"),
                                                 dataIndex: "kind",
-                                                width: 85,
-                                                render: (v: string) => <Tag>{getKindLabel(v, t)}</Tag>,
+                                                width: 175,
+                                                render: (v: string, record: MediaItem) => (
+                                                    <div className="flex items-center gap-1.5">
+                                                        <Tag style={{ marginInlineEnd: 0 }}>{getKindLabel(v, t)}</Tag>
+                                                        <Typography.Text type="secondary" className="truncate font-mono text-xs" title={record.mimeType}>
+                                                            {record.mimeType}
+                                                        </Typography.Text>
+                                                    </div>
+                                                ),
                                             },
-                                            { title: t("userPanels.myMedia.colSize"), dataIndex: "bytes", width: 100, render: (bytes: number) => formatBytes(bytes) },
+                                            {
+                                                title: t("userPanels.myMedia.colSize"),
+                                                dataIndex: "bytes",
+                                                width: 105,
+                                                render: (bytes: number) => <span className="whitespace-nowrap">{formatBytes(bytes)}</span>,
+                                            },
+                                            {
+                                                title: t("userPanels.myMedia.colThumbSize"),
+                                                key: "thumbBytes",
+                                                width: 115,
+                                                render: (_, record: MediaItem) => {
+                                                    const thumbBytes = getMediaThumbBytes(record.meta);
+                                                    return <span className="whitespace-nowrap">{thumbBytes > 0 ? formatBytes(thumbBytes) : "—"}</span>;
+                                                },
+                                            },
                                             { title: t("userPanels.myMedia.colUploadedAt"), dataIndex: "createdAt", width: 170, render: (v: string) => new Date(v).toLocaleString(locale) },
                                             {
                                                 title: t("userPanels.wallet.colActions"),

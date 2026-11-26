@@ -749,13 +749,24 @@ export const storageApi = {
     },
     getLedgerMedia: (ledgerId: string) => requestServer<{ items: MediaItem[] }>(`/storage/ledger-media/${encodeURIComponent(ledgerId)}`),
     getThumbnailUrl: (mediaId: string) => requestServer<{ mediaId: string; thumbnailUrl: string }>(`/storage/thumbnail/${encodeURIComponent(mediaId)}`),
-    uploadThumbnail: (mediaId: string, blob: Blob) => {
+    uploadThumbnail: async (mediaId: string, blob: Blob) => {
         const form = new FormData();
         form.append("file", blob, "thumb.webp");
-        return requestServer<{ ok: boolean; thumbnailUrl: string }>(`/storage/thumbnail/${encodeURIComponent(mediaId)}`, {
-            method: "POST",
-            body: form,
-        });
+        const res = await requestServer<{ ok: boolean; userId?: string; thumbnailUrl: string; thumbBytes?: number; storageUsedBytes?: number }>(
+            `/storage/thumbnail/${encodeURIComponent(mediaId)}`,
+            {
+                method: "POST",
+                body: form,
+            },
+        );
+        const currentUser = useUserStore.getState().user;
+        if (currentUser && typeof res.storageUsedBytes === "number" && (!res.userId || res.userId === currentUser.id)) {
+            useUserStore.getState().setUser({
+                ...currentUser,
+                storageUsedBytes: res.storageUsedBytes,
+            });
+        }
+        return res;
     },
     getUrls: (mediaIds: string[]) =>
         requestServer<{ urls: Record<string, string>; thumbnailUrls?: Record<string, string>; expiresIn?: number }>("/storage/urls", {

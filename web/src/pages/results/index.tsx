@@ -8,7 +8,7 @@ import { useNavigate } from "react-router-dom";
 import { useBatchZipDownload } from "@/hooks/use-batch-zip-download";
 import { useCopyText } from "@/hooks/use-copy-text";
 import { createImageThumbnail, createVideoThumbnail } from "@/lib/image-thumbnail";
-import { formatBytes, formatStoragePair } from "@/lib/image-utils";
+import { formatBytes, formatStoragePair, getMediaThumbBytes, getMediaTotalBytes } from "@/lib/image-utils";
 import { authApi, mediaDownloadFilename, storageApi, type MediaItem } from "@/services/api/server";
 import { notifyCloudWorkspaceChanged, WORKSPACE_CHANGED_EVENT } from "@/services/cloud-media";
 import { syncCloudWorkspace } from "@/services/cloud-sync";
@@ -111,7 +111,20 @@ export default function ResultsPage() {
             if (!thumbBlob) return;
             const uploaded = await storageApi.uploadThumbnail(item.id, thumbBlob);
             if (uploaded.thumbnailUrl) {
-                setItems((prev) => prev.map((entry) => (entry.id === item.id ? { ...entry, thumbnailUrl: uploaded.thumbnailUrl } : entry)));
+                setItems((prev) =>
+                    prev.map((entry) =>
+                        entry.id === item.id
+                            ? {
+                                  ...entry,
+                                  thumbnailUrl: uploaded.thumbnailUrl,
+                                  meta: {
+                                      ...(entry.meta || {}),
+                                      ...(typeof uploaded.thumbBytes === "number" ? { thumbBytes: uploaded.thumbBytes } : {}),
+                                  },
+                              }
+                            : entry,
+                    ),
+                );
             }
         } catch {
             // ignore thumbnail backfill error
@@ -546,14 +559,20 @@ export default function ResultsPage() {
                                                     )}
                                                 </div>
                                                 <div className="mt-auto space-y-2">
-                                                    <Typography.Text
-                                                        type="secondary"
-                                                        ellipsis={{ tooltip: `${item.width && item.height ? `${item.width}x${item.height} · ` : ""}${formatBytes(item.bytes)} · ${new Date(item.createdAt).toLocaleString(i18n.resolvedLanguage)}` }}
-                                                        className="block text-[11px]"
-                                                    >
-                                                        {item.width && item.height ? `${item.width}x${item.height} · ` : ""}
-                                                        {formatBytes(item.bytes)} · {new Date(item.createdAt).toLocaleString(i18n.resolvedLanguage)}
-                                                    </Typography.Text>
+                                                    {(() => {
+                                                        const thumbBytes = getMediaThumbBytes(item.meta);
+                                                        const totalBytes = getMediaTotalBytes(item.bytes, item.meta);
+                                                        const sizeText =
+                                                            thumbBytes > 0
+                                                                ? `${formatBytes(totalBytes)} (${t("common.withThumbSummary", { original: formatBytes(item.bytes), thumb: formatBytes(thumbBytes) })})`
+                                                                : formatBytes(item.bytes);
+                                                        const metaLine = `${item.width && item.height ? `${item.width}x${item.height} · ` : ""}${sizeText} · ${new Date(item.createdAt).toLocaleString(i18n.resolvedLanguage)}`;
+                                                        return (
+                                                            <Typography.Text type="secondary" ellipsis={{ tooltip: metaLine }} className="block text-[11px]">
+                                                                {metaLine}
+                                                            </Typography.Text>
+                                                        );
+                                                    })()}
                                                     <div className="flex items-center justify-between gap-1.5 border-t border-black/5 pt-2 dark:border-white/5">
                                                         <div className="flex min-w-0 items-center gap-1.5">
                                                             <Button
@@ -684,7 +703,15 @@ export default function ResultsPage() {
                                           {previewItem.width && previewItem.height ? `${previewItem.width} × ${previewItem.height}` : "—"}
                                           {previewItem.durationMs ? ` · ${(previewItem.durationMs / 1000).toFixed(1)}s` : ""}
                                       </Descriptions.Item>
-                                      <Descriptions.Item label={t("results.fileSize")}>{formatBytes(previewItem.bytes)}</Descriptions.Item>
+                                      <Descriptions.Item label={t("results.fileSize")}>
+                                          {(() => {
+                                              const thumbBytes = getMediaThumbBytes(previewItem.meta);
+                                              const totalBytes = getMediaTotalBytes(previewItem.bytes, previewItem.meta);
+                                              return thumbBytes > 0
+                                                  ? `${formatBytes(totalBytes)} (${t("common.withThumbSummary", { original: formatBytes(previewItem.bytes), thumb: formatBytes(thumbBytes) })})`
+                                                  : formatBytes(previewItem.bytes);
+                                          })()}
+                                      </Descriptions.Item>
                                       <Descriptions.Item label={t("results.fileType")}>{previewItem.mimeType}</Descriptions.Item>
                                       <Descriptions.Item label={t("results.createdAt")}>{new Date(previewItem.createdAt).toLocaleString(i18n.resolvedLanguage)}</Descriptions.Item>
                                   </Descriptions>

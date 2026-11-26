@@ -12,6 +12,7 @@ import { AppConfigPanel } from "@/components/layout/app-config-modal";
 import { ChannelEditorDrawer } from "@/components/layout/channel-editor-drawer";
 import { VersionReleaseModal } from "@/components/layout/version-release-modal";
 import { formatCompactCredits, formatExactCredits } from "@/lib/format-number";
+import { getMediaThumbBytes } from "@/lib/image-utils";
 import { AnalyticsDashboardPanel } from "@/pages/admin/components/analytics-dashboard-panel";
 import { ADMIN_TABLE_CLASS, ADMIN_TABLE_SCROLL, TableRowActions } from "@/pages/admin/components/table-row-actions";
 import { UserDetailDrawer } from "@/pages/admin/components/user-detail-drawer";
@@ -2375,8 +2376,17 @@ export default function AdminPage() {
                                                             {
                                                                 title: t("admin.mediaTab.colSize"),
                                                                 dataIndex: "bytes",
-                                                                width: 100,
-                                                                render: (bytes: number) => formatBytes(bytes),
+                                                                width: 105,
+                                                                render: (bytes: number) => <span className="whitespace-nowrap">{formatBytes(bytes)}</span>,
+                                                            },
+                                                            {
+                                                                title: t("admin.mediaTab.colThumbSize"),
+                                                                key: "thumbBytes",
+                                                                width: 115,
+                                                                render: (_, record: MediaItem) => {
+                                                                    const thumbBytes = getMediaThumbBytes(record.meta);
+                                                                    return <span className="whitespace-nowrap">{thumbBytes > 0 ? formatBytes(thumbBytes) : "—"}</span>;
+                                                                },
                                                             },
                                                             {
                                                                 title: t("admin.mediaTab.colUploadedAt"),
