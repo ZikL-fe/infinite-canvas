@@ -1,5 +1,5 @@
 /** 积分计费、钱包账本事务操作、消费趋势统计与多维度日志查询。 */
-import { and, count, desc, eq, gte, ilike, inArray, lte, or, sql, type SQL } from "drizzle-orm";
+import { and, count, desc, eq, gte, gt, ilike, inArray, lte, or, sql, type SQL } from "drizzle-orm";
 import { nanoid } from "nanoid";
 
 import { creditLedger, creditWallets, db, users } from "../db/index.ts";
@@ -138,18 +138,52 @@ export type AdjustCreditsParams = {
 
 type DbTransaction = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
+async function lockWalletBalance(tx: DbTransaction, userId: string) {
+  await tx.insert(creditWallets).values({ userId, balance: 0 }).onConflictDoNothing();
+  const rows = await tx.execute(
+    sql`SELECT balance FROM credit_wallets WHERE user_id = ${userId} FOR UPDATE`,
+  );
+  return roundCredits(Number((rows[0] as { balance?: number } | undefined)?.balance ?? 0));
+}
+
+async function getReservedCredits(tx: DbTransaction, userId: string, excludeLedgerId?: string) {
+  const excludeLedger = excludeLedgerId ? sql`AND id <> ${excludeLedgerId}` : sql``;
+  const [row] = await tx.execute(sql`
+    SELECT COALESCE(SUM(reserved_credits), 0) AS reserved
+    FROM credit_ledger
+    WHERE user_id = ${userId} AND reserved_credits > 0 AND reservation_expires_at > clock_timestamp() ${excludeLedger}
+  `);
+  return roundCredits(Number(row?.reserved ?? 0));
+}
+
+async function expireWalletReservations(tx: DbTransaction, userId: string) {
+  await tx
+    .update(creditLedger)
+    .set({
+      reservedCredits: 0,
+      reservationExpiresAt: null,
+      meta: sql`${creditLedger.meta} || '{"billingStatus":"reservation_expired","taskStatus":"failed"}'::jsonb`,
+    })
+    .where(
+      and(
+        eq(creditLedger.userId, userId),
+        gt(creditLedger.reservedCredits, 0),
+        sql`${creditLedger.reservationExpiresAt} <= clock_timestamp()`,
+      ),
+    );
+}
+
 /** 在现有数据库事务内原子扣减/增加用户积分并写入账本记录（使用行级锁 FOR UPDATE 防并发透支）。 */
 export async function adjustWalletCreditsInTx(tx: DbTransaction, params: AdjustCreditsParams) {
   const delta = roundCredits(params.delta);
-  await tx.insert(creditWallets).values({ userId: params.userId, balance: 0 }).onConflictDoNothing();
-  const rows = await tx.execute(
-    sql`SELECT balance FROM credit_wallets WHERE user_id = ${params.userId} FOR UPDATE`,
-  );
-  const current = roundCredits(Number((rows[0] as { balance?: number } | undefined)?.balance ?? 0));
+  const current = await lockWalletBalance(tx, params.userId);
   const nextBalance = roundCredits(current + delta);
 
-  if (delta < 0 && !params.allowNegative && nextBalance < 0) {
-    return { ok: false as const, balance: current };
+  if (delta < 0) {
+    const reserved = await getReservedCredits(tx, params.userId);
+    if ((!params.allowNegative || reserved > 0) && nextBalance < reserved) {
+      return { ok: false as const, balance: params.allowNegative ? current : Math.max(0, roundCredits(current - reserved)) };
+    }
   }
 
   if (delta !== 0) {
@@ -191,11 +225,10 @@ export async function clearWalletCredits(params: {
   meta?: Record<string, unknown>;
 }) {
   return db.transaction(async (tx) => {
-    await tx.insert(creditWallets).values({ userId: params.userId, balance: 0 }).onConflictDoNothing();
-    const rows = await tx.execute(
-      sql`SELECT balance FROM credit_wallets WHERE user_id = ${params.userId} FOR UPDATE`,
-    );
-    const current = roundCredits(Number((rows[0] as { balance?: number } | undefined)?.balance ?? 0));
+    const current = await lockWalletBalance(tx, params.userId);
+    if (await getReservedCredits(tx, params.userId)) {
+      return { ok: false as const, balance: current };
+    }
     if (current === 0) {
       return { ok: true as const, balance: 0, delta: 0 };
     }
@@ -235,7 +268,45 @@ export async function patchLedgerMetaByTaskId(userId: string, taskId: string, pa
     .where(and(eq(creditLedger.userId, userId), sql`${creditLedger.meta}->>'taskId' = ${taskId}`));
 }
 
-/** 在同一数据库事务内结算一条 processing 占位账本：扣减积分并合并写入最终元数据。 */
+/** 付费文本、语音请求按预估金额锁定可用余额（不超过实际可用余额），免费请求只留下待结算记录。 */
+export async function reserveProcessingLedger(params: {
+  userId: string;
+  reason: "text_gen" | "audio_gen";
+  priced: boolean;
+  reserveCredits?: number;
+  expiresAt: Date;
+  meta: Record<string, unknown>;
+}) {
+  return db.transaction(async (tx) => {
+    const balance = await lockWalletBalance(tx, params.userId);
+    await expireWalletReservations(tx, params.userId);
+    const available = params.priced ? roundCredits(balance - (await getReservedCredits(tx, params.userId))) : 0;
+    if (params.priced && available <= 0) {
+      return { ok: false as const, balance: Math.max(0, available) };
+    }
+    const reserved = params.priced
+      ? Math.min(available, Math.max(0.0001, roundCredits(params.reserveCredits ?? available)))
+      : 0;
+    const ledgerId = nanoid();
+    await tx.insert(creditLedger).values({
+      id: ledgerId,
+      userId: params.userId,
+      delta: 0,
+      balanceAfter: balance,
+      reservedCredits: reserved,
+      reservationExpiresAt: params.expiresAt,
+      reason: params.reason,
+      meta: {
+        ...params.meta,
+        reservedCredits: reserved,
+        billingStatus: reserved > 0 ? "reserved" : "pending",
+      },
+    });
+    return { ok: true as const, balance, ledgerId };
+  });
+}
+
+/** 钱包与预约账本在同一事务结算；超时预约自动释放，已结算或超时请求均不可再次扣款。 */
 export async function settleProcessingLedger(params: {
   ledgerId: string;
   userId: string;
@@ -244,32 +315,69 @@ export async function settleProcessingLedger(params: {
 }) {
   const charge = Math.max(0, roundCredits(params.credits));
   const settled = await db.transaction(async (tx) => {
-    await tx.insert(creditWallets).values({ userId: params.userId, balance: 0 }).onConflictDoNothing();
-    const rows = await tx.execute(
-      sql`SELECT balance FROM credit_wallets WHERE user_id = ${params.userId} FOR UPDATE`,
-    );
-    const current = roundCredits(Number((rows[0] as { balance?: number } | undefined)?.balance ?? 0));
-    const nextBalance = charge > 0 ? roundCredits(current - charge) : current;
-    if (charge > 0) {
+    const current = await lockWalletBalance(tx, params.userId);
+    const where = and(eq(creditLedger.id, params.ledgerId), eq(creditLedger.userId, params.userId));
+    const [entry] = await tx.select({
+      reservedCredits: creditLedger.reservedCredits,
+      reservationExpiresAt: creditLedger.reservationExpiresAt,
+      expired: sql<boolean>`${creditLedger.reservationExpiresAt} <= clock_timestamp()`,
+      delta: creditLedger.delta,
+      balanceAfter: creditLedger.balanceAfter,
+      meta: creditLedger.meta,
+    }).from(creditLedger).where(where).for("update");
+
+    if (!entry) return { balance: current, chargedCredits: 0, uncollectedCredits: charge, applied: false };
+    const previousMeta = entry.meta && typeof entry.meta === "object" ? entry.meta : {};
+    const previousStatus = previousMeta.billingStatus;
+    if (!entry.reservationExpiresAt) {
+      if (!["settled", "released", "insufficient_balance", "reservation_expired"].includes(String(previousStatus))) {
+        return { balance: current, chargedCredits: 0, uncollectedCredits: charge, applied: false };
+      }
+      return {
+        balance: current,
+        chargedCredits: roundCredits(Number(previousMeta.chargedCredits ?? Math.abs(Math.min(0, entry.delta)))),
+        uncollectedCredits: roundCredits(Number(previousMeta.uncollectedCredits ?? 0)),
+        applied: previousStatus !== "reservation_expired",
+      };
+    }
+    const expired = Boolean(entry.expired);
+    const available = Math.max(0, roundCredits(current - (await getReservedCredits(tx, params.userId, params.ledgerId))));
+    const chargeable = available;
+    const chargedCredits = Math.min(charge, chargeable);
+    const uncollectedCredits = roundCredits(charge - chargedCredits);
+    const nextBalance = chargedCredits > 0 ? roundCredits(current - chargedCredits) : current;
+    if (chargedCredits > 0) {
       await tx
         .update(creditWallets)
         .set({ balance: nextBalance, updatedAt: new Date() })
         .where(eq(creditWallets.userId, params.userId));
     }
-    if (params.ledgerId) {
-      await tx
-        .update(creditLedger)
-        .set({
-          delta: charge > 0 ? -charge : 0,
-          balanceAfter: nextBalance,
-          meta: sql`COALESCE(${creditLedger.meta}, '{}'::jsonb) || ${JSON.stringify(params.metaPatch)}::jsonb`,
-        })
-        .where(eq(creditLedger.id, params.ledgerId));
-    }
-    return { balance: nextBalance };
+    const meta = {
+      ...params.metaPatch,
+      chargedCredits,
+      ...(uncollectedCredits > 0 ? { uncollectedCredits } : {}),
+      billingStatus: uncollectedCredits > 0
+        ? "insufficient_balance"
+        : chargedCredits > 0
+          ? "settled"
+          : "released",
+      ...(expired ? { reservationExpired: true } : {}),
+      ...(uncollectedCredits > 0 ? { taskStatus: "failed" } : {}),
+    };
+    await tx
+      .update(creditLedger)
+      .set({
+        delta: -chargedCredits,
+        balanceAfter: nextBalance,
+        reservedCredits: 0,
+        reservationExpiresAt: null,
+        meta: sql`${creditLedger.meta} || ${JSON.stringify(meta)}::jsonb`,
+      })
+      .where(where);
+    return { balance: nextBalance, chargedCredits, uncollectedCredits, applied: true };
   });
-  if (charge > 0) {
-    scheduleWalletBalanceAlertCheck(params.userId, -charge, settled.balance);
+  if (settled.chargedCredits > 0) {
+    scheduleWalletBalanceAlertCheck(params.userId, -settled.chargedCredits, settled.balance);
   }
   return settled;
 }

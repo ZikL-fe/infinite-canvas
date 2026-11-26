@@ -325,6 +325,9 @@ adminUsersRoutes.post("/users/:id/credits", zValidator("json", adjustCreditsSche
       reason: "admin_adjust",
       meta: { adminId: c.get("user").id, note: body.note || "管理员清零积分", action: "clear" },
     });
+    if (!result.ok) {
+      return c.json({ error: "用户积分正在用于生成任务，请稍后重试" }, 409);
+    }
     return c.json({ ok: true, balance: result.balance });
   }
   const result = await adjustWalletCredits({
@@ -334,6 +337,9 @@ adminUsersRoutes.post("/users/:id/credits", zValidator("json", adjustCreditsSche
     allowNegative: true,
     meta: { adminId: c.get("user").id, note: body.note || "" },
   });
+  if (!result.ok) {
+    return c.json({ error: "扣减后余额会低于正在使用的积分，请稍后重试" }, 409);
+  }
   return c.json({ ok: true, balance: result.balance });
 });
 

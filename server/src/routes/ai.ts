@@ -7,23 +7,23 @@ import { nanoid } from "nanoid";
 import { aiBillingTasks, creditLedger, db, mediaObjects, users } from "../db/index.ts";
 import { env } from "../env.ts";
 import {
+  assertSafeExternalUrl,
   fetchMediaBufferWithLimits,
   persistCloudMediaBuffer,
   persistGeneratedImagesFromPayload,
   runMediaPersistTask,
 } from "../lib/ai-media-persist.ts";
+import { AiRequestError, parseAiProxyRoute, readAiGenerationRequest } from "../lib/ai-request.ts";
 import { ConcurrencyLimitError, createConcurrencyLimiter } from "../lib/concurrency.ts";
 import {
   adjustWalletCredits,
-  calculateAudioCredits,
   calculateImageCredits,
-  calculateTextCredits,
   calculateVideoCredits,
-  getWalletBalance,
   hasNonZeroPricing,
   patchLedgerMeta,
   patchLedgerMetaByTaskId,
   refundLedgerCharge,
+  reserveProcessingLedger,
   roundCredits,
   settleProcessingLedger,
 } from "../lib/billing.ts";
@@ -32,7 +32,6 @@ import {
   getPlatformChannels,
   type AudioModelPricing,
   type ImageModelPricing,
-  type PlatformChannelModel,
   type TextModelPricing,
   type VideoModelPricing,
 } from "../lib/settings.ts";
@@ -52,7 +51,7 @@ type UsageTotals = {
   outputTokens: number;
 };
 
-function buildUpstreamUrl(baseUrl: string, subPath: string, rawSearch: string, apiFormat: "openai" | "gemini", apiKey: string) {
+function buildUpstreamUrl(baseUrl: string, subPath: string, stream = false) {
   const cleanBase = baseUrl.trim().replace(/\/+$/, "");
   let cleanSub = subPath.startsWith("/") ? subPath : `/${subPath}`;
   const decodedSub = decodeURIComponent(cleanSub);
@@ -66,24 +65,115 @@ function buildUpstreamUrl(baseUrl: string, subPath: string, rawSearch: string, a
     cleanSub = cleanSub.slice(7) || "/";
   }
 
-  const baseObj = new URL(cleanBase);
-  const target = new URL(`${cleanBase}${cleanSub}`);
-  if (target.origin !== baseObj.origin) {
+  const target = new URL(cleanBase);
+  if (!/^https?:$/.test(target.protocol) || target.username || target.password || target.hash || target.search) {
     throw new Error("非法的代理请求路径");
   }
-  const incomingParams = new URLSearchParams(rawSearch);
-  const hadKeyParam = incomingParams.has("key");
-  incomingParams.delete("key");
-  incomingParams.forEach((value, key) => target.searchParams.append(key, value));
-  if (apiFormat === "gemini" && hadKeyParam) {
-    target.searchParams.set("key", apiKey);
-  }
+  target.pathname = `${target.pathname.replace(/\/+$/, "")}${cleanSub}`;
+  if (stream) target.searchParams.set("alt", "sse");
   return target.toString();
 }
 
-function extractGeminiModelFromPath(subPath: string) {
-  const match = subPath.match(/\/models\/([^/:]+):/);
-  return match ? decodeURIComponent(match[1]) : "";
+function upstreamHeaders(channel: { apiFormat: "openai" | "gemini"; apiKey: string }) {
+  const headers = new Headers();
+  if (channel.apiFormat === "gemini") headers.set("x-goog-api-key", channel.apiKey);
+  else headers.set("Authorization", `Bearer ${channel.apiKey}`);
+  return headers;
+}
+
+function resolveGeminiMediaUrl(baseUrl: string, rawUrl: string) {
+  const base = new URL(baseUrl);
+  const target = new URL(rawUrl);
+  const basePath = base.pathname.replace(/\/+$/, "").replace(/\/(?:v1|v1beta)$/i, "");
+  if (
+    target.origin !== base.origin ||
+    !/^https?:$/.test(target.protocol) ||
+    target.username || target.password || target.hash ||
+    (basePath && target.pathname !== basePath && !target.pathname.startsWith(`${basePath}/`))
+  ) {
+    throw new Error("上游视频地址与渠道配置不匹配");
+  }
+  target.searchParams.delete("key");
+  return target;
+}
+
+async function fetchWithSafeRedirect(url: string, init: RequestInit, trustedOrigin: string) {
+  const res = await fetch(url, { ...init, redirect: "manual" });
+  if (res.status >= 300 && res.status < 400) {
+    const location = res.headers.get("location");
+    if (!location) return res;
+    const next = new URL(location, url);
+    if (next.origin !== trustedOrigin) {
+      assertSafeExternalUrl(next.toString());
+    }
+    const headers = new Headers(init.headers);
+    if (next.origin !== trustedOrigin) {
+      headers.delete("x-goog-api-key");
+      headers.delete("authorization");
+    }
+    return fetch(next.toString(), { ...init, headers, redirect: "error" });
+  }
+  return res;
+}
+
+function geminiProxyVideoUrl(channelId: string, taskId: string) {
+  return `/api/ai/proxy/${encodeURIComponent(channelId)}/v1beta/${taskId}/content`;
+}
+
+function geminiVideoUri(payload: unknown) {
+  const response = (payload as { response?: Record<string, unknown> } | null)?.response;
+  const result = response?.generateVideoResponse as { generatedSamples?: Array<{ video?: { uri?: unknown } }> } | undefined;
+  return result?.generatedSamples?.[0]?.video?.uri;
+}
+
+function rewriteGeminiVideoUris(payload: Record<string, unknown>, channelId: string, taskId: string) {
+  const response = payload.response as Record<string, unknown> | undefined;
+  const result = response?.generateVideoResponse as Record<string, unknown> | undefined;
+  const samples = result?.generatedSamples;
+  if (!Array.isArray(samples)) return;
+  for (const sample of samples) {
+    if (!sample || typeof sample !== "object") continue;
+    const video = (sample as { video?: Record<string, unknown> }).video;
+    if (video && typeof video.uri === "string") video.uri = geminiProxyVideoUrl(channelId, taskId);
+  }
+}
+
+async function fetchGeminiVideoContent(params: {
+  baseUrl: string;
+  apiKey: string;
+  taskId: string;
+}) {
+  const operationUrl = buildUpstreamUrl(params.baseUrl, `/v1beta/${params.taskId}`);
+  const operation = await fetch(operationUrl, {
+    headers: upstreamHeaders({ apiFormat: "gemini", apiKey: params.apiKey }),
+    redirect: "error",
+    signal: AbortSignal.timeout(env.AI_POLL_TIMEOUT_MS),
+  });
+  if (!operation.ok) return new Response("视频任务暂不可用", { status: operation.status });
+  const payload = await operation.json().catch(() => null);
+  const uri = geminiVideoUri(payload);
+  if (typeof uri !== "string") return new Response("视频内容尚未就绪", { status: 409 });
+  const target = resolveGeminiMediaUrl(params.baseUrl, uri);
+  const media = await fetchWithSafeRedirect(
+    target.toString(),
+    {
+      method: "GET",
+      headers: { "x-goog-api-key": params.apiKey },
+      signal: AbortSignal.timeout(env.AI_UPSTREAM_TIMEOUT_MS),
+    },
+    target.origin,
+  );
+  if (!media.ok) return new Response("无法获取上游视频内容", { status: media.status });
+  const mimeType = media.headers.get("content-type")?.split(";")[0]?.trim() || "video/mp4";
+  if (mimeType.includes("json")) return new Response("上游未返回视频内容", { status: 502 });
+  return new Response(media.body, {
+    status: 200,
+    headers: { "Content-Type": mimeType.startsWith("video/") ? mimeType : "video/mp4", "Cache-Control": "private, no-store" },
+  });
+}
+
+function isTokenCount(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
 }
 
 function extractUsageFromObject(obj: unknown): UsageTotals | null {
@@ -98,25 +188,97 @@ function extractUsageFromObject(obj: unknown): UsageTotals | null {
     const inputDetails =
       (usage.input_tokens_details as Record<string, unknown> | undefined) ||
       (usage.prompt_tokens_details as Record<string, unknown> | undefined);
-    const inputTokens = Number(usage.input_tokens ?? usage.prompt_tokens ?? 0);
-    const cachedInputTokens = Number(inputDetails?.cached_tokens ?? 0);
-    const outputTokens = Number(usage.output_tokens ?? usage.completion_tokens ?? 0);
-    if (inputTokens > 0 || outputTokens > 0 || cachedInputTokens > 0) {
-      return { inputTokens, cachedInputTokens, outputTokens };
+    const hasTotals = ["input_tokens", "prompt_tokens", "output_tokens", "completion_tokens"].some((key) => Object.hasOwn(usage, key));
+    if (hasTotals) {
+      const inputTokens = usage.input_tokens ?? usage.prompt_tokens ?? 0;
+      const cachedInputTokens = inputDetails?.cached_tokens ?? 0;
+      const outputTokens = usage.output_tokens ?? usage.completion_tokens ?? 0;
+      if (isTokenCount(inputTokens) && isTokenCount(cachedInputTokens) && isTokenCount(outputTokens)) {
+        return { inputTokens, cachedInputTokens, outputTokens };
+      }
+      return null;
     }
   }
 
   // Gemini usageMetadata
   const meta = rec.usageMetadata as Record<string, unknown> | undefined;
   if (meta && typeof meta === "object") {
-    const inputTokens = Number(meta.promptTokenCount ?? 0);
-    const cachedInputTokens = Number(meta.cachedContentTokenCount ?? 0);
-    const outputTokens = Number(meta.candidatesTokenCount ?? 0) + Number(meta.thoughtsTokenCount ?? 0);
-    if (inputTokens > 0 || outputTokens > 0 || cachedInputTokens > 0) {
-      return { inputTokens, cachedInputTokens, outputTokens };
+    const hasTotals = ["promptTokenCount", "cachedContentTokenCount", "candidatesTokenCount", "thoughtsTokenCount"].some((key) => Object.hasOwn(meta, key));
+    if (hasTotals) {
+      const inputTokens = meta.promptTokenCount ?? 0;
+      const cachedInputTokens = meta.cachedContentTokenCount ?? 0;
+      const candidates = meta.candidatesTokenCount ?? 0;
+      const thoughts = meta.thoughtsTokenCount ?? 0;
+      const outputTokens = typeof candidates === "number" && typeof thoughts === "number" ? candidates + thoughts : NaN;
+      if (isTokenCount(inputTokens) && isTokenCount(cachedInputTokens) && isTokenCount(outputTokens)) {
+        return { inputTokens, cachedInputTokens, outputTokens };
+      }
+      return null;
     }
   }
 
+  return null;
+}
+
+function calculateTextCharge(pricing: TextModelPricing, usage: UsageTotals): number | null {
+  const cached = Math.min(usage.inputTokens, usage.cachedInputTokens);
+  const uncached = usage.inputTokens - cached;
+  const raw = (uncached * pricing.inputPerMillion + cached * pricing.cachedInputPerMillion + usage.outputTokens * pricing.outputPerMillion) / 1_000_000;
+  if (!Number.isFinite(raw) || raw < 0 || !Number.isFinite(raw * 10_000)) return null;
+  return roundCredits(raw);
+}
+
+function calculateAudioCharge(pricing: AudioModelPricing, durationSeconds: number): number | null {
+  const raw = pricing.perSecond * durationSeconds;
+  if (!Number.isFinite(raw) || raw < 0 || !Number.isFinite(raw * 10_000)) return null;
+  return roundCredits(raw);
+}
+
+async function readAudioOutput(buffer: Buffer, contentType: string, responseFormat?: string) {
+  let audioBuffer = buffer;
+  let mimeType = contentType.split(";")[0]?.trim() || "";
+  let pcmMimeType = contentType;
+  if (mimeType.includes("application/json")) {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(buffer.toString("utf8"));
+    } catch {
+      return null;
+    }
+    const candidates = (parsed as { candidates?: Array<{ content?: { parts?: Array<Record<string, unknown>> } }> })?.candidates;
+    const inline = candidates?.flatMap((candidate) => candidate.content?.parts ?? []).map((part) =>
+      (part.inlineData ?? part.inline_data) as { data?: unknown; mimeType?: unknown; mime_type?: unknown } | undefined,
+    ).find((item) => typeof item?.data === "string" && item.data);
+    if (!inline || typeof inline.data !== "string") return null;
+    const base64 = inline.data;
+    if (!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(base64)) return null;
+    audioBuffer = Buffer.from(base64, "base64");
+    pcmMimeType = typeof inline.mimeType === "string" ? inline.mimeType : typeof inline.mime_type === "string" ? inline.mime_type : "";
+    mimeType = pcmMimeType.split(";")[0]?.trim() || "";
+    if (!mimeType.startsWith("audio/") || !audioBuffer.length) return null;
+  }
+
+  if (/^audio\/(?:pcm|l16)$/i.test(mimeType)) {
+    const rate = Number(pcmMimeType.match(/(?:^|;)\s*rate=(\d+)/i)?.[1] || (responseFormat === "pcm" ? 24000 : 0));
+    const channels = Number(pcmMimeType.match(/(?:^|;)\s*channels=(\d+)/i)?.[1] || 1);
+    const bytesPerSecond = rate * channels * 2;
+    if (!Number.isSafeInteger(rate) || rate <= 0 || !Number.isSafeInteger(channels) || channels <= 0 ||
+      !Number.isSafeInteger(bytesPerSecond) || audioBuffer.length % (2 * channels) !== 0) {
+      return null;
+    }
+    const durationSeconds = audioBuffer.length / bytesPerSecond;
+    return Number.isFinite(durationSeconds) && durationSeconds > 0 ? { buffer: audioBuffer, mimeType: "audio/pcm", durationSeconds } : null;
+  }
+
+  try {
+    const metadata = await parseBuffer(new Uint8Array(audioBuffer), undefined, { duration: true, skipCovers: true });
+    const durationSeconds = metadata.format.duration ?? 0;
+    if (Number.isFinite(durationSeconds) && durationSeconds > 0) {
+      return { buffer: audioBuffer, mimeType: mimeType || metadata.format.container || "audio/mpeg", durationSeconds };
+    }
+  } catch {
+    // Unknown or malformed audio must not be delivered as a paid successful generation.
+  }
   return null;
 }
 
@@ -330,12 +492,6 @@ function mapUpstreamTaskStatus(payload: unknown): "not_started" | "processing" |
   return "processing";
 }
 
-function isVideoPollingOrContentRequest(method: string, subPath: string) {
-  if (method === "GET" || method === "HEAD") return true;
-  if (subPath.includes("/operations/")) return true;
-  return false;
-}
-
 async function persistCompletedVideoIfNeeded(params: {
   userId: string;
   taskId: string;
@@ -375,15 +531,21 @@ async function persistCompletedVideoIfNeeded(params: {
 
       let fetched: { buffer: Buffer; mimeType: string } | null = null;
       if (directUrl) {
-        const target =
-          params.channelApiFormat === "gemini" && !directUrl.includes("key=")
-            ? `${directUrl}${directUrl.includes("?") ? "&" : "?"}key=${encodeURIComponent(params.channelApiKey)}`
-            : directUrl;
-        fetched = await fetchMediaBufferWithLimits(target, { allowPrivateNetwork: true });
+        if (params.channelApiFormat === "gemini") {
+          const target = resolveGeminiMediaUrl(params.channelBaseUrl, directUrl);
+          fetched = await fetchMediaBufferWithLimits(target.toString(), {
+            allowPrivateNetwork: true,
+            redirect: "error",
+            headers: { "x-goog-api-key": params.channelApiKey },
+          });
+        } else {
+          fetched = await fetchMediaBufferWithLimits(directUrl, { redirect: "error" });
+        }
       } else if (params.channelApiFormat === "openai") {
-        const contentUrl = buildUpstreamUrl(params.channelBaseUrl, `/v1/videos/${encodeURIComponent(params.taskId)}/content`, "", "openai", params.channelApiKey);
+        const contentUrl = buildUpstreamUrl(params.channelBaseUrl, `/v1/videos/${encodeURIComponent(params.taskId)}/content`);
         fetched = await fetchMediaBufferWithLimits(contentUrl, {
           allowPrivateNetwork: true,
+          redirect: "error",
           headers: { Authorization: `Bearer ${params.channelApiKey}` },
         });
       }
@@ -474,8 +636,7 @@ aiRoutes.all("/proxy/:channelId/*", async (c) => {
   const authHeader = c.req.header("Authorization");
   const bearerToken = authHeader?.startsWith("Bearer ") ? authHeader.slice(7).trim() : "";
   const googleKeyToken = c.req.header("x-goog-api-key")?.trim() || "";
-  const queryToken = c.req.query("key")?.trim() || "";
-  const token = bearerToken || googleKeyToken || queryToken;
+  const token = bearerToken || googleKeyToken;
 
   if (!token) {
     return c.json({ error: "请先登录" }, 401);
@@ -507,119 +668,82 @@ aiRoutes.all("/proxy/:channelId/*", async (c) => {
   const prefix = `/api/ai/proxy/${channelId}`;
   const fullUrl = new URL(c.req.url);
   const subPath = fullUrl.pathname.startsWith(prefix) ? fullUrl.pathname.slice(prefix.length) || "/" : "/";
+  const method = c.req.method.toUpperCase();
+  const route = parseAiProxyRoute(channel.apiFormat, method, subPath);
+  if (!route) return c.json({ error: "托管渠道不支持此 API 路径或请求方法" }, 404);
+
+  if (route.kind === "models") {
+    return channel.apiFormat === "openai"
+      ? c.json({ object: "list", data: channel.models.map((model) => ({ id: model.name, object: "model", created: 0, owned_by: channel.name })) })
+      : c.json({
+          models: channel.models.map((model) => ({
+            name: `models/${model.name}`,
+            displayName: model.name,
+            supportedGenerationMethods: model.capability === "video" ? ["predictLongRunning"] : model.capability === "text" ? ["generateContent", "streamGenerateContent"] : ["generateContent"],
+          })),
+        });
+  }
+
+  let task: typeof aiBillingTasks.$inferSelect | undefined;
+  if (route.kind === "task") {
+    task = await db.query.aiBillingTasks.findFirst({
+      where: and(
+        eq(aiBillingTasks.userId, user.id),
+        eq(aiBillingTasks.channelId, channelId),
+        eq(aiBillingTasks.taskId, route.taskId),
+      ),
+    });
+    if (!task) return c.json({ error: "任务不存在或无权访问" }, 404);
+  }
+
+  if (route.kind === "task" && route.content && channel.apiFormat === "gemini") {
+    try {
+      return await fetchGeminiVideoContent({ baseUrl: channel.baseUrl, apiKey: channel.apiKey, taskId: route.taskId });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "无法获取上游视频内容";
+      return c.json({ error: message }, 502);
+    }
+  }
+
   let targetUrl: string;
   try {
-    targetUrl = buildUpstreamUrl(channel.baseUrl, subPath, fullUrl.search, channel.apiFormat, channel.apiKey);
+    targetUrl = buildUpstreamUrl(channel.baseUrl, subPath, route.kind === "generate" && route.endpoint === "streamGenerateContent" && channel.apiFormat === "gemini");
   } catch (error) {
     return c.json({ error: error instanceof Error ? error.message : "非法的代理请求路径" }, 400);
   }
 
-  const method = c.req.method.toUpperCase();
-  const contentType = c.req.header("Content-Type") || "";
-  const isPolling = isVideoPollingOrContentRequest(method, subPath);
-
-  let rawBody: ArrayBuffer | undefined;
-  let jsonBody: Record<string, unknown> | null = null;
-  let formModel = "";
-  let formPrompt = "";
-  let formCount = 1;
-  let formSize = "";
-  let formSeconds = 0;
-  let formHasRefVideo = false;
   const clientTaskId = c.req.header("X-Client-Task-Id")?.trim() || "";
-
-  if (method !== "GET" && method !== "HEAD") {
-    if (contentType.includes("application/json")) {
-      rawBody = await c.req.arrayBuffer();
-      try {
-        jsonBody = JSON.parse(new TextDecoder().decode(rawBody)) as Record<string, unknown>;
-      } catch {
-        jsonBody = null;
-      }
-    } else if (contentType.includes("multipart/form-data")) {
-      const cloned = c.req.raw.clone();
-      rawBody = await c.req.arrayBuffer();
-      try {
-        const form = await cloned.formData();
-        formModel = String(form.get("model") || "");
-        formPrompt = String(form.get("prompt") || "");
-        formCount = Math.max(1, Number(form.get("n") || 1));
-        formSize = String(form.get("size") || "");
-        formSeconds = Number(form.get("seconds") || 0);
-        formHasRefVideo = form.has("video[]") || form.has("video");
-      } catch {
-        // ignore multipart parse failure
-      }
-    } else {
-      rawBody = await c.req.arrayBuffer();
+  let generation: Awaited<ReturnType<typeof readAiGenerationRequest>> | undefined;
+  if (route.kind === "generate") {
+    try {
+      generation = await readAiGenerationRequest(c.req.raw, route, channel.models);
+    } catch (error) {
+      if (error instanceof AiRequestError) return c.json({ error: error.message }, error.status);
+      throw error;
     }
   }
-
-  const promptText =
-    (typeof jsonBody?.prompt === "string" ? jsonBody.prompt : "") ||
-    formPrompt ||
-    (Array.isArray(jsonBody?.contents)
-      ? ((jsonBody.contents[0] as { parts?: Array<{ text?: string }> } | undefined)?.parts || [])
-          .map((p) => (typeof p.text === "string" ? p.text : ""))
-          .filter(Boolean)
-          .join("\n")
-      : "");
-
-  const modelName =
-    extractGeminiModelFromPath(subPath) ||
-    (typeof jsonBody?.model === "string" ? jsonBody.model : "") ||
-    formModel ||
-    c.req.header("X-Canvas-Model")?.trim() ||
-    "";
-
-  const channelModel: PlatformChannelModel | undefined = channel.models.find((m) => m.name === modelName);
-  if (!isPolling && method === "POST" && !channelModel) {
-    return c.json({ error: "所选模型未在该渠道配置或不可用" }, 403);
-  }
+  const channelModel = generation?.channelModel;
+  const modelName = generation?.modelName ?? task?.model ?? "";
+  const promptText = generation?.promptText ?? "";
+  const requestedImageCount = generation?.requestedImageCount ?? 1;
+  const resolutionTier = generation?.resolutionTier;
+  const sizeStr = generation?.sizeStr ?? "";
+  const seconds = generation?.seconds ?? 0;
+  const hasReferenceVideo = generation?.hasReferenceVideo ?? false;
+  const referenceVideoSeconds = generation?.referenceVideoSeconds;
   const pricing = channelModel?.pricing;
   // 所有受管模型 POST 请求均记录使用日志（含免费模型与极小用量 0 积分调用）
-  const shouldTrackUsage = !isPolling && method === "POST" && Boolean(channelModel);
+  const shouldTrackUsage = route.kind === "generate" && method === "POST" && Boolean(channelModel);
   const shouldBill = shouldTrackUsage && hasNonZeroPricing(pricing);
 
-  // 为 OpenAI chat/completions 流式请求补充 include_usage 以便结算 Token
-  if (
-    shouldTrackUsage &&
-    channelModel?.capability === "text" &&
-    jsonBody &&
-    jsonBody.stream === true &&
-    subPath.includes("/chat/completions") &&
-    !jsonBody.stream_options
-  ) {
-    jsonBody = { ...jsonBody, stream_options: { include_usage: true } };
-    rawBody = new TextEncoder().encode(JSON.stringify(jsonBody)).buffer as ArrayBuffer;
-  }
-
-  const forwardHeaders = new Headers(c.req.raw.headers);
-  [
-    "host",
-    "content-length",
-    "connection",
-    "origin",
-    "referer",
-    "authorization",
-    "x-goog-api-key",
-    "x-canvas-model",
-    "x-client-task-id",
-    "x-billing-resolution",
-    "x-billing-ref-video",
-    "x-billing-ref-video-seconds",
-    "x-billing-video-seconds",
-  ].forEach((key) => forwardHeaders.delete(key));
-
-  if (channel.apiFormat === "gemini") {
-    forwardHeaders.set("x-goog-api-key", channel.apiKey);
-  } else {
-    forwardHeaders.set("Authorization", `Bearer ${channel.apiKey}`);
-  }
+  const forwardHeaders = upstreamHeaders(channel);
+  if (generation?.contentType) forwardHeaders.set("Content-Type", generation.contentType);
+  if (generation?.streaming) forwardHeaders.set("Accept", "text/event-stream");
+  const rawBody = generation?.rawBody;
+  const isPolling = route.kind === "task";
 
   // 非轮询生成请求先申请全局并发槽位，排队满或超时快速返回 429 且不预扣积分
   let releaseProxySlot: (() => void) | null = null;
-  let slotTransferredToStream = false;
   if (!isPolling) {
     try {
       releaseProxySlot = await aiProxyLimiter.acquire(c.req.raw.signal);
@@ -634,687 +758,346 @@ aiRoutes.all("/proxy/:channelId/*", async (c) => {
     }
   }
 
-  try {
-  // 预检查与预扣费
-  let preCharged = 0;
-  let preChargedLedgerId = "";
-  let requestedImageCount = 1;
-
-  if (shouldTrackUsage && channelModel) {
-    if (channelModel.capability === "image") {
-      const genConfig = jsonBody?.generationConfig as Record<string, unknown> | undefined;
-      const imageConfig = genConfig?.imageConfig as Record<string, unknown> | undefined;
-      requestedImageCount = Math.max(
-        1,
-        Math.floor(Number(jsonBody?.n ?? genConfig?.candidateCount ?? formCount ?? 1)),
-      );
-      const resolutionTier =
-        (typeof imageConfig?.imageSize === "string" ? imageConfig.imageSize : undefined) ||
-        c.req.header("X-Billing-Resolution") ||
-        undefined;
-      const sizeStr = (typeof jsonBody?.size === "string" ? jsonBody.size : "") || formSize;
-      preCharged = pricing ? calculateImageCredits(pricing as ImageModelPricing, requestedImageCount, resolutionTier, sizeStr) : 0;
-
-      const deduct = await adjustWalletCredits({
-        userId: user.id,
-        delta: -preCharged,
-        reason: "image_gen",
-        forceLedger: true,
-        meta: {
-          model: modelName,
-          count: requestedImageCount,
-          resolutionTier,
-          size: sizeStr,
-          isStream: false,
-          taskStatus: "processing",
-          ...(clientTaskId ? { clientTaskId } : {}),
-        },
-      });
-      if (!deduct.ok) {
-        const msg = `积分不足（当前余额 ${deduct.balance}，本次预计需要 ${preCharged}）`;
-        return c.json({ error: msg, message: msg }, 402);
-      }
-      preChargedLedgerId = deduct.ledgerId;
-    } else if (channelModel.capability === "video") {
-      const geminiParams = jsonBody?.parameters as Record<string, unknown> | undefined;
-      const geminiInstances = Array.isArray(jsonBody?.instances) ? (jsonBody?.instances as Array<Record<string, unknown>>) : [];
-      const seconds =
-        formSeconds ||
-        Number(jsonBody?.seconds ?? geminiParams?.durationSeconds ?? c.req.header("X-Billing-Video-Seconds") ?? 8);
-      const hasReferenceVideo =
-        formHasRefVideo || Boolean(geminiInstances[0]?.video) || c.req.header("X-Billing-Ref-Video") === "1";
-      const refSecondsRaw = Number(c.req.header("X-Billing-Ref-Video-Seconds") || 0);
-      preCharged = pricing
-        ? calculateVideoCredits(pricing as VideoModelPricing, {
-            seconds,
-            hasReferenceVideo,
-            referenceVideoSeconds: refSecondsRaw > 0 ? refSecondsRaw : undefined,
-          })
-        : 0;
-
-      const deduct = await adjustWalletCredits({
-        userId: user.id,
-        delta: -preCharged,
-        reason: "video_gen",
-        forceLedger: true,
-        meta: {
-          model: modelName,
-          seconds,
-          hasReferenceVideo,
-          isStream: false,
-          taskStatus: "not_started",
-          provider: channel.apiFormat,
-          ...(clientTaskId ? { clientTaskId } : {}),
-        },
-      });
-      if (!deduct.ok) {
-        const msg = `积分不足（当前余额 ${deduct.balance}，本次需要 ${preCharged}）`;
-        return c.json({ error: msg, message: msg }, 402);
-      }
-      preChargedLedgerId = deduct.ledgerId;
-    } else if (channelModel.capability === "text" || channelModel.capability === "audio") {
-      if (shouldBill) {
-        const balance = await getWalletBalance(user.id);
-        if (balance <= 0) {
-          const msg = "积分余额不足，请先充值或联系管理员";
-          return c.json({ error: msg, message: msg }, 402);
-        }
-      }
-      const placeholder = await adjustWalletCredits({
-        userId: user.id,
-        delta: 0,
-        reason: channelModel.capability === "audio" ? "audio_gen" : "text_gen",
-        allowNegative: true,
-        forceLedger: true,
-        meta: {
-          model: modelName,
-          isStream: false,
-          taskStatus: "processing",
-          ...(clientTaskId ? { clientTaskId } : {}),
-        },
-      });
-      if (placeholder.ok) {
-        preChargedLedgerId = placeholder.ledgerId;
-      }
-    } else if (shouldBill) {
-      const balance = await getWalletBalance(user.id);
-      if (balance <= 0) {
-        const msg = "积分余额不足，请先充值或联系管理员";
-        return c.json({ error: msg, message: msg }, 402);
-      }
-    }
-  }
-
-  const startedAt = Date.now();
   let clientAborted = Boolean(c.req.raw.signal?.aborted);
-  const handleAbort = () => {
-    clientAborted = true;
-  };
+  const handleAbort = () => { clientAborted = true; };
   c.req.raw.signal?.addEventListener("abort", handleAbort, { once: true });
 
-  const upstreamTimeoutMs = isPolling ? env.AI_POLL_TIMEOUT_MS : env.AI_UPSTREAM_TIMEOUT_MS;
-  let upstream: Response;
   try {
-    upstream = await fetch(targetUrl, {
-      method,
-      headers: forwardHeaders,
-      body: rawBody,
-      signal: AbortSignal.timeout(upstreamTimeoutMs),
-    });
-  } catch (error) {
-    c.req.raw.signal?.removeEventListener("abort", handleAbort);
-    const elapsedMs = Math.max(1, Date.now() - startedAt);
-    const isTimeout = error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError");
-    const errorMessage = isTimeout
-      ? `上游请求超时（超过 ${Math.round(upstreamTimeoutMs / 1000)} 秒）`
-      : truncateErrorText(error instanceof Error ? error.message : String(error || "上游连接失败")) || "上游连接失败";
-    const failureMetaPatch: Record<string, unknown> = {
-      durationMs: elapsedMs,
-      upstreamMs: elapsedMs,
-      errorMessage,
-      ...(clientAborted ? { clientAborted: true } : {}),
+    let preCharged = 0;
+    let preChargedLedgerId = "";
+    const isReservedCapability = channelModel?.capability === "text" || channelModel?.capability === "audio";
+
+    if (shouldTrackUsage && channelModel) {
+      if (channelModel.capability === "image") {
+        preCharged = pricing ? calculateImageCredits(pricing as ImageModelPricing, requestedImageCount, resolutionTier, sizeStr) : 0;
+        const deduct = await adjustWalletCredits({
+          userId: user.id, delta: -preCharged, reason: "image_gen", forceLedger: true,
+          meta: { model: modelName, count: requestedImageCount, resolutionTier, size: sizeStr, isStream: false, taskStatus: "processing", ...(clientTaskId ? { clientTaskId } : {}) },
+        });
+        if (!deduct.ok) {
+          const msg = "积分不足（当前可用余额 " + deduct.balance + "，本次预计需要 " + preCharged + "）";
+          return c.json({ error: msg, message: msg }, 402);
+        }
+        preChargedLedgerId = deduct.ledgerId;
+      } else if (channelModel.capability === "video") {
+        preCharged = pricing ? calculateVideoCredits(pricing as VideoModelPricing, { seconds, hasReferenceVideo, referenceVideoSeconds }) : 0;
+        const deduct = await adjustWalletCredits({
+          userId: user.id, delta: -preCharged, reason: "video_gen", forceLedger: true,
+          meta: { model: modelName, seconds, hasReferenceVideo, ...(referenceVideoSeconds !== undefined ? { referenceVideoSeconds } : {}), isStream: false, taskStatus: "not_started", provider: channel.apiFormat, ...(clientTaskId ? { clientTaskId } : {}) },
+        });
+        if (!deduct.ok) {
+          const msg = "积分不足（当前可用余额 " + deduct.balance + "，本次需要 " + preCharged + "）";
+          return c.json({ error: msg, message: msg }, 402);
+        }
+        preChargedLedgerId = deduct.ledgerId;
+      } else if (isReservedCapability) {
+        const reservation = await reserveProcessingLedger({
+          userId: user.id,
+          reason: channelModel.capability === "audio" ? "audio_gen" : "text_gen",
+          priced: shouldBill,
+          reserveCredits: generation?.estimatedReserveCredits,
+          expiresAt: new Date(Date.now() + env.AI_UPSTREAM_TIMEOUT_MS),
+          meta: { model: modelName, isStream: Boolean(generation?.streaming), taskStatus: "processing", ...(clientTaskId ? { clientTaskId } : {}) },
+        });
+        if (!reservation.ok) {
+          const msg = "积分余额不足或已被其他请求占用，请先充值";
+          return c.json({ error: msg, message: msg, balance: reservation.balance }, 402);
+        }
+        preChargedLedgerId = reservation.ledgerId;
+      }
+    }
+
+    const startedAt = Date.now();
+    const finishFailedBilling = async (message: string, extra: Record<string, unknown> = {}) => {
+      const metaPatch = { model: modelName, durationMs: Math.max(1, Date.now() - startedAt), taskStatus: "failed", errorMessage: message, ...extra };
+      if (preChargedLedgerId && isReservedCapability) {
+        await settleProcessingLedger({ ledgerId: preChargedLedgerId, userId: user.id, credits: 0, metaPatch }).catch(() => undefined);
+      } else if (preCharged > 0) {
+        await refundLedgerCharge({
+          userId: user.id, ledgerId: preChargedLedgerId || undefined, taskId: task?.taskId, refId: task?.taskId,
+          refundAmount: preCharged, markFailed: true, metaPatch: { ...metaPatch, refundDetail: "上游请求失败自动退回" },
+        }).catch(() => undefined);
+      } else if (preChargedLedgerId) {
+        await patchLedgerMeta(preChargedLedgerId, metaPatch).catch(() => undefined);
+      }
     };
-    if (preCharged > 0) {
-      await refundLedgerCharge({
-        userId: user.id,
-        ledgerId: preChargedLedgerId || undefined,
-        refundAmount: preCharged,
-        markFailed: true,
-        metaPatch: {
-          ...failureMetaPatch,
-          model: modelName,
-          refundDetail: isTimeout ? "上游请求超时自动退回" : "上游连接失败自动退回",
-        },
-      }).catch(() => undefined);
-    } else if (preChargedLedgerId) {
-      await patchLedgerMeta(preChargedLedgerId, {
-        taskStatus: "failed",
-        ...failureMetaPatch,
-      }).catch(() => undefined);
-    }
-    if (isTimeout) {
-      return c.json({ error: errorMessage, message: errorMessage }, 504);
-    }
-    throw error;
-  }
+    const settleReserved = async (credits: number, metaPatch: Record<string, unknown>) => {
+      if (!preChargedLedgerId) return { ok: false, insufficient: false };
+      try {
+        const result = await settleProcessingLedger({ ledgerId: preChargedLedgerId, userId: user.id, credits, metaPatch });
+        return { ok: result.applied && result.uncollectedCredits === 0, insufficient: result.uncollectedCredits > 0 };
+      } catch {
+        return { ok: false, insufficient: false };
+      }
+    };
 
-  const responseHeaders = new Headers(upstream.headers);
-  responseHeaders.delete("content-encoding");
-  responseHeaders.delete("content-length");
-  const respType = (upstream.headers.get("content-type") || "").toLowerCase();
-
-  // 轮询视频状态时检查任务是否失败并自动退回预扣积分；若视频完成则尝试服务端自动归档对象存储
-  if (method === "GET" && upstream.ok && respType.includes("application/json") && !subPath.endsWith("/content")) {
-    const text = await upstream.text();
+    let upstream: Response;
     try {
-      const parsed = JSON.parse(text) as Record<string, unknown>;
-      const videoMatch = subPath.match(/\/videos\/([^/]+)$/);
-      const geminiMatch = subPath.match(/\/v1beta\/(.+)$/);
-      const taskId = videoMatch?.[1] || (typeof parsed.name === "string" ? parsed.name : geminiMatch?.[1] || "");
-      if (taskId) {
-        await handleVideoPollTaskState(user.id, taskId, parsed);
+      upstream = await fetch(targetUrl, {
+        method, headers: forwardHeaders, body: rawBody, redirect: "error",
+        signal: AbortSignal.timeout(isPolling ? env.AI_POLL_TIMEOUT_MS : env.AI_UPSTREAM_TIMEOUT_MS),
+      });
+    } catch (error) {
+      const timedOut = error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError");
+      const message = timedOut ? "上游请求超时" : truncateErrorText(error instanceof Error ? error.message : String(error)) || "上游连接失败";
+      await finishFailedBilling(message, { upstreamMs: Math.max(1, Date.now() - startedAt) });
+      return c.json({ error: message, message }, timedOut ? 504 : 502);
+    }
+
+    const responseHeaders = new Headers();
+    for (const name of ["content-type", "retry-after", "cache-control"]) {
+      const value = upstream.headers.get(name);
+      if (value) responseHeaders.set(name, value);
+    }
+    const respType = (upstream.headers.get("content-type") || "").toLowerCase();
+
+    if (!upstream.ok) {
+      const errorText = await upstream.text().catch(() => "");
+      const errorMessage = extractUpstreamErrorMessage(errorText, upstream.status);
+      await finishFailedBilling(errorMessage, { errorStatus: upstream.status });
+      return new Response(errorText || JSON.stringify({ error: errorMessage }), { status: upstream.status, headers: responseHeaders });
+    }
+
+    if (isPolling && respType.includes("application/json")) {
+      const text = await upstream.text();
+      let parsed: Record<string, unknown>;
+      try {
+        const value = JSON.parse(text);
+        if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("invalid response");
+        parsed = value as Record<string, unknown>;
+      } catch {
+        return new Response(text, { status: upstream.status, headers: responseHeaders });
+      }
+      if (route.kind === "task") {
+        await handleVideoPollTaskState(user.id, route.taskId, parsed);
         if (mapUpstreamTaskStatus(parsed) === "completed") {
           const savedVideoId = await persistCompletedVideoIfNeeded({
-            userId: user.id,
-            taskId,
-            model: modelName,
-            payload: parsed,
-            channelBaseUrl: channel.baseUrl,
-            channelApiFormat: channel.apiFormat,
-            channelApiKey: channel.apiKey,
+            userId: user.id, taskId: route.taskId, model: modelName, payload: parsed,
+            channelBaseUrl: channel.baseUrl, channelApiFormat: channel.apiFormat, channelApiKey: channel.apiKey,
           });
           if (savedVideoId) {
             responseHeaders.set("X-Cloud-Media-Ids", JSON.stringify([savedVideoId]));
-            await patchLedgerMetaByTaskId(user.id, taskId, { mediaIds: [savedVideoId] }).catch(() => undefined);
+            await patchLedgerMetaByTaskId(user.id, route.taskId, { mediaIds: [savedVideoId] }).catch(() => undefined);
           }
         }
+        if (channel.apiFormat === "gemini") rewriteGeminiVideoUris(parsed, channelId, route.taskId);
       }
-    } catch {
-      // ignore poll inspect error
+      return new Response(JSON.stringify(parsed), { status: upstream.status, headers: responseHeaders });
     }
-    return new Response(text, { status: upstream.status, headers: responseHeaders });
-  }
 
-  if (!upstream.ok) {
-    c.req.raw.signal?.removeEventListener("abort", handleAbort);
-    const elapsedMs = Math.max(1, Date.now() - startedAt);
-    const errorText = await upstream.text().catch(() => "");
-    const errorMessage = extractUpstreamErrorMessage(errorText, upstream.status);
-    const failureMetaPatch: Record<string, unknown> = {
-      durationMs: elapsedMs,
-      upstreamMs: elapsedMs,
-      errorStatus: upstream.status,
-      errorMessage,
-      ...(clientAborted ? { clientAborted: true } : {}),
-    };
-    if (preCharged > 0) {
-      await refundLedgerCharge({
-        userId: user.id,
-        ledgerId: preChargedLedgerId || undefined,
-        refundAmount: preCharged,
-        markFailed: true,
-        metaPatch: {
-          ...failureMetaPatch,
-          model: modelName,
-          refundDetail: "请求失败自动退回",
-        },
-      }).catch(() => undefined);
-    } else if (preChargedLedgerId) {
-      await patchLedgerMeta(preChargedLedgerId, {
-        taskStatus: "failed",
-        ...failureMetaPatch,
-      }).catch(() => undefined);
-    }
-    return new Response(errorText, { status: upstream.status, headers: responseHeaders });
-  }
+    if (!shouldTrackUsage || !channelModel) return new Response(upstream.body, { status: upstream.status, headers: responseHeaders });
 
-  if (!shouldTrackUsage || !channelModel) {
-    c.req.raw.signal?.removeEventListener("abort", handleAbort);
-    return new Response(upstream.body, { status: upstream.status, headers: responseHeaders });
-  }
-
-  // 图片生成成功校验实际出图张数并自动转存至云端对象存储（分段记录上游生成、拿图与云端存储耗时）
-  if (channelModel.capability === "image") {
-    if (respType.includes("application/json")) {
-      const text = await upstream.text();
-      const upstreamMs = Math.max(1, Date.now() - startedAt);
-      let imageTaskStatus: "completed" | "failed" = "completed";
-      let errorMessage = "";
-      let refundAmount = 0;
-      let refundDetail = "";
-      let actualReturnedCount: number | null = null;
-      let savedMediaIds: string[] = [];
-      let fetchImageMs = 0;
-      let cloudSaveMs = 0;
+    if (channelModel.capability === "image") {
+      const text = await upstream.text().catch(() => "");
+      const durationMs = Math.max(1, Date.now() - startedAt);
+      let parsed: unknown;
       try {
-        const parsed = JSON.parse(text);
-        const actualCount = countReturnedImages(parsed);
-        actualReturnedCount = actualCount;
-        const payloadError = extractErrorFromPayload(parsed);
-        if (actualCount === null && payloadError) {
-          imageTaskStatus = "failed";
-          errorMessage = payloadError;
-          if (preCharged > 0) {
-            refundAmount = preCharged;
-            refundDetail = "上游返回错误信息自动退回";
-          }
-        } else if (actualCount !== null && actualCount < requestedImageCount) {
-          if (actualCount <= 0) {
-            imageTaskStatus = "failed";
-            errorMessage = payloadError || "上游未返回有效图片（返回数量为 0）";
-          }
-          const partialRefund =
-            actualCount <= 0
-              ? preCharged
-              : roundCredits((preCharged * (requestedImageCount - actualCount)) / requestedImageCount);
-          if (partialRefund > 0) {
-            refundAmount = partialRefund;
-            refundDetail = actualCount <= 0 ? "未返回有效图片自动退回" : "按实际出图数量退回差额";
-          }
-        }
-        const persisted = await persistGeneratedImagesFromPayload({
-          userId: user.id,
-          payload: parsed,
-          model: modelName,
-          prompt: promptText,
-          clientTaskId: clientTaskId || undefined,
-        });
-        fetchImageMs = persisted.fetchImageMs;
-        cloudSaveMs = persisted.cloudSaveMs;
-        savedMediaIds = persisted.mediaIds.filter((id): id is string => Boolean(id));
-        if (savedMediaIds.length) {
-          responseHeaders.set("X-Cloud-Media-Ids", JSON.stringify(persisted.mediaIds));
-        }
-      } catch (parseError) {
-        imageTaskStatus = "failed";
-        errorMessage = extractUpstreamErrorMessage(text) || (parseError instanceof Error ? parseError.message : "上游响应解析失败");
-        if (preCharged > 0) {
-          refundAmount = preCharged;
-          refundDetail = "上游响应解析失败自动退回";
-        }
+        parsed = JSON.parse(text);
+      } catch {
+        await finishFailedBilling("上游图片响应解析失败", { upstreamMs: durationMs });
+        return c.json({ error: "上游图片响应解析失败" }, 502);
       }
-      c.req.raw.signal?.removeEventListener("abort", handleAbort);
-      const imageMetaPatch: Record<string, unknown> = {
-        durationMs: Math.max(1, Date.now() - startedAt),
-        upstreamMs,
-        fetchImageMs,
-        cloudSaveMs,
-        isStream: false,
-        taskStatus: imageTaskStatus,
-        ...(actualReturnedCount !== null ? { requested: requestedImageCount, actual: actualReturnedCount } : {}),
-        ...(refundDetail ? { refundDetail } : {}),
-        ...(errorMessage ? { errorMessage } : {}),
-        ...(clientAborted ? { clientAborted: true } : {}),
+      const actualCount = countReturnedImages(parsed);
+      const errorMessage = extractErrorFromPayload(parsed);
+      if (actualCount === null || actualCount <= 0) {
+        await finishFailedBilling(errorMessage || "上游未返回有效图片", { upstreamMs: durationMs });
+        return c.json({ error: errorMessage || "上游未返回有效图片" }, 502);
+      }
+      const partialRefund = actualCount < requestedImageCount && preCharged > 0
+        ? roundCredits(preCharged * (requestedImageCount - actualCount) / requestedImageCount)
+        : 0;
+      const persisted = await persistGeneratedImagesFromPayload({
+        userId: user.id, payload: parsed, model: modelName, prompt: promptText, clientTaskId: clientTaskId || undefined,
+      }).catch(() => ({ mediaIds: [], fetchImageMs: 0, cloudSaveMs: 0 }));
+      const savedMediaIds = persisted.mediaIds.filter((id): id is string => Boolean(id));
+      if (savedMediaIds.length) responseHeaders.set("X-Cloud-Media-Ids", JSON.stringify(savedMediaIds));
+      const imageMeta = {
+        model: modelName, count: requestedImageCount, actual: actualCount, durationMs, upstreamMs: durationMs,
+        fetchImageMs: persisted.fetchImageMs, cloudSaveMs: persisted.cloudSaveMs, taskStatus: "completed",
+        ...(partialRefund > 0 ? { refundDetail: "按实际出图数量退回差额" } : {}),
         ...(savedMediaIds.length ? { mediaIds: savedMediaIds } : {}),
+        ...(clientAborted ? { clientAborted: true } : {}),
       };
-      if (refundAmount > 0) {
-        await refundLedgerCharge({
-          userId: user.id,
-          ledgerId: preChargedLedgerId || undefined,
-          refundAmount,
-          markFailed: imageTaskStatus === "failed",
-          metaPatch: imageMetaPatch,
-        }).catch(() => undefined);
+      if (partialRefund > 0) {
+        await refundLedgerCharge({ userId: user.id, ledgerId: preChargedLedgerId, refundAmount: partialRefund, metaPatch: imageMeta }).catch(() => undefined);
       } else if (preChargedLedgerId) {
-        await patchLedgerMeta(preChargedLedgerId, imageMetaPatch).catch(() => undefined);
+        await patchLedgerMeta(preChargedLedgerId, imageMeta).catch(() => undefined);
       }
       return new Response(text, { status: upstream.status, headers: responseHeaders });
     }
-    if (respType.startsWith("text/")) {
-      const textBody = await upstream.text().catch(() => "");
-      c.req.raw.signal?.removeEventListener("abort", handleAbort);
-      const upstreamMs = Math.max(1, Date.now() - startedAt);
-      const errorMessage = extractUpstreamErrorMessage(textBody, upstream.status);
-      const failureMetaPatch: Record<string, unknown> = {
-        durationMs: upstreamMs,
-        upstreamMs,
-        isStream: false,
-        errorStatus: upstream.status,
-        errorMessage,
-        ...(clientAborted ? { clientAborted: true } : {}),
-      };
-      if (preCharged > 0) {
-        await refundLedgerCharge({
-          userId: user.id,
-          ledgerId: preChargedLedgerId || undefined,
-          refundAmount: preCharged,
-          markFailed: true,
-          metaPatch: {
-            ...failureMetaPatch,
-            model: modelName,
-            refundDetail: "请求返回异常文本自动退回",
-          },
-        }).catch(() => undefined);
-      } else if (preChargedLedgerId) {
-        await patchLedgerMeta(preChargedLedgerId, {
-          taskStatus: "failed",
-          ...failureMetaPatch,
-        }).catch(() => undefined);
-      }
-      return new Response(textBody, { status: upstream.status, headers: responseHeaders });
-    }
-    c.req.raw.signal?.removeEventListener("abort", handleAbort);
-    const upstreamMs = Math.max(1, Date.now() - startedAt);
-    if (preChargedLedgerId) {
-      await patchLedgerMeta(preChargedLedgerId, {
-        durationMs: upstreamMs,
-        upstreamMs,
-        isStream: false,
-        taskStatus: "completed",
-        ...(clientAborted ? { clientAborted: true } : {}),
-      }).catch(() => undefined);
-    }
-  }
 
-  // 视频创建成功记录 taskId 以便轮询更新状态及失败退费，并回写耗时与任务状态
-  if (channelModel.capability === "video" && respType.includes("application/json")) {
-    const text = await upstream.text();
-    let taskId = "";
-    let initialTaskStatus: "not_started" | "processing" | "completed" | "failed" = "processing";
-    let parsedPayload: Record<string, unknown> | null = null;
-    try {
-      const parsed = JSON.parse(text) as Record<string, unknown>;
-      parsedPayload = parsed;
-      taskId =
+    if (channelModel.capability === "video" && respType.includes("application/json")) {
+      const text = await upstream.text().catch(() => "");
+      let parsed: Record<string, unknown>;
+      try {
+        const value = JSON.parse(text);
+        if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("invalid response");
+        parsed = value as Record<string, unknown>;
+      } catch {
+        await finishFailedBilling("上游视频任务响应解析失败");
+        return c.json({ error: "上游视频任务响应解析失败" }, 502);
+      }
+      const taskId =
         (typeof parsed.id === "string" ? parsed.id : "") ||
-        (parsed.data && typeof parsed.data === "object" && typeof (parsed.data as { id?: unknown }).id === "string"
-          ? ((parsed.data as { id: string }).id)
-          : "") ||
+        (parsed.data && typeof parsed.data === "object" && typeof (parsed.data as { id?: unknown }).id === "string" ? (parsed.data as { id: string }).id : "") ||
         (typeof parsed.name === "string" ? parsed.name : "");
-      initialTaskStatus = mapUpstreamTaskStatus(parsed);
-      if (taskId && initialTaskStatus !== "failed") {
-        await db
-          .insert(aiBillingTasks)
-          .values({
-            id: nanoid(),
-            userId: user.id,
-            channelId,
-            model: modelName,
-            taskId,
-            chargedCredits: preCharged,
-            status: initialTaskStatus === "completed" ? "completed" : "pending",
-          })
-          .onConflictDoNothing();
+      const taskStatus = mapUpstreamTaskStatus(parsed);
+      if (!taskId || taskStatus === "failed") {
+        const message = extractErrorFromPayload(parsed) || "上游未创建有效的视频任务";
+        await finishFailedBilling(message);
+        return c.json({ error: message }, 502);
       }
-    } catch {
-      // ignore parse failure
-    }
-    const durationMs = Math.max(1, Date.now() - startedAt);
-    if (initialTaskStatus === "failed" || !taskId) {
-      const errorMessage = extractUpstreamErrorMessage(text, upstream.status);
-      if (preCharged > 0) {
-        await refundLedgerCharge({
-          userId: user.id,
-          ledgerId: preChargedLedgerId || undefined,
-          taskId: taskId || undefined,
-          refId: taskId || undefined,
-          refundAmount: preCharged,
-          markFailed: true,
-          metaPatch: {
-            durationMs,
-            isStream: false,
-            errorMessage,
-            ...(taskId ? { taskId } : {}),
-          },
-        }).catch(() => undefined);
-      } else if (preChargedLedgerId) {
-        await patchLedgerMeta(preChargedLedgerId, {
-          durationMs,
-          isStream: false,
-          taskStatus: "failed",
-          errorMessage,
-          ...(taskId ? { taskId } : {}),
-        }).catch(() => undefined);
+      const [insertedTask] = await db.insert(aiBillingTasks).values({
+        id: nanoid(), userId: user.id, channelId, model: modelName, taskId, chargedCredits: preCharged,
+        status: taskStatus === "completed" ? "completed" : "pending",
+      }).onConflictDoNothing().returning({ id: aiBillingTasks.id });
+      if (!insertedTask) {
+        await finishFailedBilling("上游任务编号冲突，已拦截结果");
+        return c.json({ error: "上游任务编号冲突，已拦截结果" }, 502);
       }
-    } else if (preChargedLedgerId) {
-      await patchLedgerMeta(preChargedLedgerId, {
-        durationMs,
-        isStream: false,
-        taskStatus: initialTaskStatus,
-        ...(taskId ? { taskId } : {}),
-      }).catch(() => undefined);
+      if (preChargedLedgerId) await patchLedgerMeta(preChargedLedgerId, { taskId, taskStatus }).catch(() => undefined);
+      return new Response(text, { status: upstream.status, headers: responseHeaders });
     }
-    return new Response(text, { status: upstream.status, headers: responseHeaders });
-  }
 
-  // 语音模型：使用 music-metadata 读取真实音频秒数并记录日志/扣费，同时自动转存云端
-  if (channelModel.capability === "audio") {
-    const buffer = await upstream.arrayBuffer();
-    c.req.raw.signal?.removeEventListener("abort", handleAbort);
-    const durationMs = Math.max(1, Date.now() - startedAt);
-    let duration = 0;
-    try {
-      const metadata = await parseBuffer(new Uint8Array(buffer), { mimeType: respType || undefined });
-      duration = metadata.format.duration || 0;
-    } catch (error) {
-      console.warn("[billing] 解析音频时长失败:", error);
+    if (channelModel.capability === "video") {
+      await finishFailedBilling("上游视频任务响应格式无效");
+      return c.json({ error: "上游视频任务响应格式无效" }, 502);
     }
-    const credits = pricing ? calculateAudioCredits(pricing as AudioModelPricing, duration) : 0;
-    const savedAudio = await persistCloudMediaBuffer({
-      userId: user.id,
-      kind: "audio",
-      buffer: Buffer.from(buffer),
-      mimeType: respType || "audio/mpeg",
-      durationMs: Math.round(duration * 1000) || null,
-      sourceType: "ai_generated",
-      meta: {
-        model: modelName,
-        ...(clientTaskId ? { clientTaskId } : {}),
-      },
-    }).catch(() => null);
-    const audioMeta = {
-      model: modelName,
-      durationSeconds: Math.round(duration * 100) / 100,
-      isStream: false,
-      durationMs,
-      taskStatus: "completed",
-      ...(clientAborted ? { clientAborted: true } : {}),
-      ...(savedAudio?.mediaId ? { mediaIds: [savedAudio.mediaId] } : {}),
-    };
-    if (preChargedLedgerId) {
-      await settleProcessingLedger({ ledgerId: preChargedLedgerId, userId: user.id, credits, metaPatch: audioMeta }).catch(() => undefined);
-    } else {
-      await adjustWalletCredits({
-        userId: user.id,
-        delta: -credits,
-        reason: "audio_gen",
-        allowNegative: true,
-        forceLedger: true,
-        meta: audioMeta,
-      }).catch(() => undefined);
-    }
-    if (savedAudio?.mediaId) {
-      responseHeaders.set("X-Cloud-Media-Ids", JSON.stringify([savedAudio.mediaId]));
-    }
-    return new Response(buffer, { status: upstream.status, headers: responseHeaders });
-  }
 
-  // 文本对话模型：即使前端刷新/退登断连，服务端仍在后台协程读完上游完整结果并写入账本以便回看恢复
-  if (channelModel.capability === "text") {
-    if (respType.includes("text/event-stream") && upstream.body) {
-      const decoder = new TextDecoder();
-      let sseBuffer = "";
-      let latestUsage: UsageTotals | null = null;
+    if (channelModel.capability === "audio") {
+      let bytes: Buffer;
+      try {
+        bytes = Buffer.from(await upstream.arrayBuffer());
+      } catch {
+        await finishFailedBilling("上游音频响应读取失败");
+        return c.json({ error: "上游音频响应读取失败" }, 502);
+      }
+      const audio = await readAudioOutput(bytes, respType, generation?.audioResponseFormat);
+      if (!audio) {
+        await finishFailedBilling("无法验证上游音频内容及真实时长");
+        return c.json({ error: "无法验证上游音频内容及真实时长" }, 502);
+      }
+      const durationMs = Math.max(1, Date.now() - startedAt);
+      const credits = pricing ? calculateAudioCharge(pricing as AudioModelPricing, audio.durationSeconds) : 0;
+      if (credits === null) {
+        await finishFailedBilling("语音计费数值超出可计算范围");
+        return c.json({ error: "语音计费数值超出可计算范围，未返回生成结果" }, 502);
+      }
+      const settlement = await settleReserved(credits, {
+        model: modelName, durationSeconds: Math.round(audio.durationSeconds * 100) / 100,
+        isStream: false, durationMs, taskStatus: "completed",
+      });
+      if (!settlement.ok) {
+        return c.json({ error: settlement.insufficient ? "积分余额不足，未返回生成结果" : "语音计费未完成，未返回生成结果" }, settlement.insufficient ? 402 : 502);
+      }
+      const savedAudio = await persistCloudMediaBuffer({
+        userId: user.id, kind: "audio", buffer: audio.buffer, mimeType: audio.mimeType,
+        durationMs: Math.round(audio.durationSeconds * 1000), sourceType: "ai_generated",
+        meta: { model: modelName, ...(clientTaskId ? { clientTaskId } : {}) },
+      }).catch(() => null);
+      if (savedAudio?.mediaId) responseHeaders.set("X-Cloud-Media-Ids", JSON.stringify([savedAudio.mediaId]));
+      if (respType.includes("application/json")) responseHeaders.set("content-type", respType);
+      else responseHeaders.set("content-type", audio.mimeType);
+      return new Response(new Uint8Array(bytes), { status: upstream.status, headers: responseHeaders });
+    }
+
+    if (channelModel.capability === "text") {
+      const isSse = respType.includes("text/event-stream");
+      let bytes: Uint8Array<ArrayBuffer>;
+      let responseText = "";
+      let usage: UsageTotals | null = null;
+      let resultText = "";
       let firstChunkMs: number | undefined;
       let firstContentMs: number | undefined;
-      let accumulatedText = "";
-      let fallbackFinalText = "";
-      const textPricing = pricing as TextModelPricing | undefined;
 
-      const inspectSseLine = (line: string) => {
-        if (!line.startsWith("data:")) return;
-        const raw = line.slice(5).trim();
-        if (!raw || raw === "[DONE]") return;
-        try {
-          const parsed = JSON.parse(raw);
-          if (firstChunkMs === undefined) firstChunkMs = Math.max(1, Date.now() - startedAt);
-          if (firstContentMs === undefined && hasStreamContentToken(parsed)) {
-            firstContentMs = Math.max(1, Date.now() - startedAt);
+      if (isSse) {
+        const chunks: Uint8Array[] = [];
+        const decoder = new TextDecoder();
+        let pending = "";
+        const inspectLine = (line: string) => {
+          if (!line.startsWith("data:")) return;
+          const raw = line.slice(5).trim();
+          if (!raw || raw === "[DONE]") return;
+          try {
+            const parsed = JSON.parse(raw);
+            if (firstContentMs === undefined && hasStreamContentToken(parsed)) firstContentMs = Math.max(1, Date.now() - startedAt);
+            const delta = extractStreamTextDelta(parsed);
+            if (delta) resultText = appendCappedText(resultText, delta);
+            else if (!resultText) resultText = appendCappedText(resultText, extractFinalTextFromPayload(parsed));
+            usage = extractUsageFromObject(parsed) || usage;
+          } catch {
+            // 无效事件由缺少 usage 的付费结算门槛拦截。
           }
-          const delta = extractStreamTextDelta(parsed);
-          if (delta) {
-            accumulatedText = appendCappedText(accumulatedText, delta);
-          } else if (!accumulatedText) {
-            const finalCandidate = extractFinalTextFromPayload(parsed);
-            if (finalCandidate) fallbackFinalText = appendCappedText("", finalCandidate);
-          }
-          const u = extractUsageFromObject(parsed);
-          if (u) latestUsage = u;
-        } catch {
-          // ignore non-json sse event
-        }
-      };
-
-      const reader = upstream.body.getReader();
-      let clientClosed = clientAborted;
-      let streamController: ReadableStreamDefaultController<Uint8Array> | null = null;
-
-      const clientStream = new ReadableStream<Uint8Array>({
-        start(controller) {
-          streamController = controller;
-        },
-        cancel() {
-          clientClosed = true;
-          clientAborted = true;
-        },
-      });
-
-      slotTransferredToStream = true;
-      void (async () => {
+        };
         try {
+          if (!upstream.body) throw new Error("上游未返回流式内容");
+          const reader = upstream.body.getReader();
           for (;;) {
             const { done, value } = await reader.read();
             if (done) break;
-            if (!clientClosed && streamController) {
-              try {
-                streamController.enqueue(value);
-              } catch {
-                clientClosed = true;
-                clientAborted = true;
-              }
-            }
-            sseBuffer += decoder.decode(value, { stream: true });
-            const lines = sseBuffer.split(/\r?\n/);
-            sseBuffer = lines.pop() || "";
-            for (const line of lines) {
-              inspectSseLine(line);
-            }
+            if (value.byteLength && firstChunkMs === undefined) firstChunkMs = Math.max(1, Date.now() - startedAt);
+            chunks.push(value);
+            pending += decoder.decode(value, { stream: true });
+            const lines = pending.split(/\r?\n/);
+            pending = lines.pop() || "";
+            for (const line of lines) inspectLine(line);
           }
-          if (sseBuffer.trim().startsWith("data:")) {
-            inspectSseLine(sseBuffer.trim());
-          }
-          if (!clientClosed && streamController) {
-            try {
-              streamController.close();
-            } catch {
-              // ignore already closed stream
-            }
-          }
-
-          const durationMs = Math.max(1, Date.now() - startedAt);
-          const firstTokenMs = Math.min(durationMs, Math.max(1, firstContentMs ?? firstChunkMs ?? durationMs));
-          const usageMeta = latestUsage ?? {};
-          const tokensPerSecond = latestUsage ? calcTokensPerSecond(latestUsage.outputTokens, durationMs, firstTokenMs) : undefined;
-          const credits = latestUsage && textPricing ? calculateTextCredits(textPricing, latestUsage) : 0;
-          const resultText = accumulatedText || fallbackFinalText;
-          const textMeta = {
-            model: modelName,
-            ...usageMeta,
-            isStream: true,
-            durationMs,
-            firstTokenMs,
-            ...(tokensPerSecond !== undefined ? { tokensPerSecond } : {}),
-            ...(clientAborted ? { clientAborted: true } : {}),
-            ...(resultText ? { resultText } : {}),
-            taskStatus: "completed",
-          };
-          if (preChargedLedgerId) {
-            await settleProcessingLedger({ ledgerId: preChargedLedgerId, userId: user.id, credits, metaPatch: textMeta }).catch(() => undefined);
-          } else {
-            await adjustWalletCredits({
-              userId: user.id,
-              delta: -credits,
-              reason: "text_gen",
-              allowNegative: true,
-              forceLedger: true,
-              meta: textMeta,
-            }).catch(() => undefined);
-          }
-        } catch (streamError) {
-          if (!clientClosed && streamController) {
-            try {
-              streamController.error(streamError);
-            } catch {
-              // ignore
-            }
-          }
-          if (preChargedLedgerId) {
-            const errorMessage = streamError instanceof Error ? streamError.message : "上游流式响应中断";
-            await patchLedgerMeta(preChargedLedgerId, {
-              durationMs: Math.max(1, Date.now() - startedAt),
-              isStream: true,
-              taskStatus: "failed",
-              errorMessage,
-              ...(clientAborted ? { clientAborted: true } : {}),
-            }).catch(() => undefined);
-          }
-        } finally {
-          c.req.raw.signal?.removeEventListener("abort", handleAbort);
-          releaseProxySlot?.();
+          pending += decoder.decode();
+          if (pending) inspectLine(pending);
+          const length = chunks.reduce((sum, chunk) => sum + chunk.byteLength, 0);
+          bytes = new Uint8Array(length);
+          let offset = 0;
+          for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
+        } catch {
+          await finishFailedBilling("上游流式响应读取失败");
+          return c.json({ error: "上游流式响应读取失败，未返回生成结果" }, 502);
         }
-      })();
-
-      return new Response(clientStream, {
-        status: upstream.status,
-        headers: responseHeaders,
-      });
-    }
-
-    if (respType.includes("application/json")) {
-      const text = await upstream.text();
-      c.req.raw.signal?.removeEventListener("abort", handleAbort);
-      const durationMs = Math.max(1, Date.now() - startedAt);
-      let usage: UsageTotals | null = null;
-      let resultText = "";
-      try {
-        const parsed = JSON.parse(text);
-        usage = extractUsageFromObject(parsed);
-        resultText = appendCappedText("", extractFinalTextFromPayload(parsed));
-      } catch {
-        // ignore parse failure
+      } else {
+        try {
+          bytes = new Uint8Array(await upstream.arrayBuffer());
+        } catch {
+          await finishFailedBilling("上游文本响应读取失败");
+          return c.json({ error: "上游文本响应读取失败，未返回生成结果" }, 502);
+        }
+        responseText = new TextDecoder().decode(bytes);
+        try {
+          const parsed = JSON.parse(responseText);
+          usage = extractUsageFromObject(parsed);
+          resultText = appendCappedText("", extractFinalTextFromPayload(parsed));
+        } catch {
+          await finishFailedBilling("上游文本响应解析失败");
+          return c.json({ error: "上游文本响应解析失败，未返回生成结果" }, 502);
+        }
       }
-      const tokensPerSecond = usage ? calcTokensPerSecond(usage.outputTokens, durationMs) : undefined;
-      const credits = usage && pricing ? calculateTextCredits(pricing as TextModelPricing, usage) : 0;
-      const jsonMeta = {
-        model: modelName,
-        ...(usage ?? {}),
-        isStream: false,
-        durationMs,
-        ...(tokensPerSecond !== undefined ? { tokensPerSecond } : {}),
+      const durationMs = Math.max(1, Date.now() - startedAt);
+
+      if (shouldBill && !usage) {
+        await finishFailedBilling("上游未返回可验证的 Token 用量");
+        return c.json({ error: "上游未返回可验证的 Token 用量，未返回生成结果" }, 502);
+      }
+      const credits = usage && pricing ? calculateTextCharge(pricing as TextModelPricing, usage) : 0;
+      if (credits === null) {
+        await finishFailedBilling("文本计费数值超出可计算范围");
+        return c.json({ error: "文本计费数值超出可计算范围，未返回生成结果" }, 502);
+      }
+      const firstTokenMs = Math.min(durationMs, Math.max(1, firstContentMs ?? firstChunkMs ?? durationMs));
+      const settlement = await settleReserved(credits, {
+        model: modelName, ...(usage ?? {}), isStream: isSse, durationMs,
+        ...(isSse ? { firstTokenMs } : {}),
+        ...(usage ? { tokensPerSecond: calcTokensPerSecond(usage.outputTokens, durationMs, isSse ? firstTokenMs : undefined) } : {}),
         ...(clientAborted ? { clientAborted: true } : {}),
         ...(resultText ? { resultText } : {}),
         taskStatus: "completed",
-      };
-      if (preChargedLedgerId) {
-        await settleProcessingLedger({ ledgerId: preChargedLedgerId, userId: user.id, credits, metaPatch: jsonMeta }).catch(() => undefined);
-      } else {
-        await adjustWalletCredits({
-          userId: user.id,
-          delta: -credits,
-          reason: "text_gen",
-          allowNegative: true,
-          forceLedger: true,
-          meta: jsonMeta,
-        }).catch(() => undefined);
+      });
+      if (!settlement.ok) {
+        return c.json({ error: settlement.insufficient ? "积分余额不足，未返回生成结果" : "文本计费未完成，未返回生成结果" }, settlement.insufficient ? 402 : 502);
       }
-      return new Response(text, { status: upstream.status, headers: responseHeaders });
+      return new Response(bytes, { status: upstream.status, headers: responseHeaders });
     }
-  }
 
-  return new Response(upstream.body, { status: upstream.status, headers: responseHeaders });
+    return new Response(upstream.body, { status: upstream.status, headers: responseHeaders });
   } finally {
-    if (!slotTransferredToStream) {
-      releaseProxySlot?.();
-    }
+    c.req.raw.signal?.removeEventListener("abort", handleAbort);
+    releaseProxySlot?.();
   }
 });

@@ -5,10 +5,10 @@ import i18n from "@/i18n";
 import { dataUrlToFile, readFileAsDataUrl } from "@/lib/image-utils";
 import { clampVideoSeconds, computeVideoSize, inferVideoRatio } from "@/lib/media-size";
 import { getMediaBlob, resolveMediaUrl, uploadMediaFile, type UploadedFile } from "@/services/file-storage";
-import { aiAxios, readCloudMediaIdsHeader } from "@/services/api/ai-http";
+import { aiAxios, isAiProxyUrl, readCloudMediaIdsHeader } from "@/services/api/ai-http";
 import { imageToDataUrl } from "@/services/image-storage";
 import { scheduleRefreshUserBalance } from "@/services/api/server";
-import { boolConfig, buildApiUrl, modelOptionName, resolveModelRequestConfig, resolveModelScript, withLocalProxy, type AiConfig } from "@/stores/use-config-store";
+import { boolConfig, buildApiUrl, modelOptionName, resolveModelRequestConfig, resolveModelScript, SERVER_MANAGED_API_KEY, withLocalProxy, type AiConfig } from "@/stores/use-config-store";
 import { runModelPlugin } from "./model-plugin";
 import type { ReferenceImage } from "@/types/image";
 import type { ReferenceAudio, ReferenceVideo } from "@/types/media";
@@ -131,8 +131,16 @@ async function createPluginVideoTask(config: AiConfig, model: string, script: st
                 signal: options?.signal,
             }),
         );
+        let finalResult = result;
+        if (config.apiKey === SERVER_MANAGED_API_KEY && result.url && isAiProxyUrl(result.url)) {
+            const contentUrl = new URL(result.url, window.location.href);
+            contentUrl.search = "";
+            const response = await aiAxios.get<Blob>(contentUrl.pathname, { responseType: "blob", signal: options?.signal });
+            await assertVideoBlob(response.data);
+            finalResult = { blob: response.data };
+        }
         const id = nanoid();
-        pluginVideoResults.set(id, result);
+        pluginVideoResults.set(id, finalResult);
         return { id, provider: "plugin", model };
     } finally {
         scheduleRefreshUserBalance();
@@ -347,7 +355,7 @@ async function pollGeminiVideoTask(config: AiConfig, task: VideoGenerationTask, 
             scheduleRefreshUserBalance();
             return { status: "failed", error: apiText("noPlayableVideo") };
         }
-        const url = uri.includes("key=") ? uri : `${uri}${uri.includes("?") ? "&" : "?"}key=${config.apiKey}`;
+        const url = uri.includes("key=") || isAiProxyUrl(uri) ? uri : `${uri}${uri.includes("?") ? "&" : "?"}key=${config.apiKey}`;
         const result = await videoResultFromUrl(url, options);
         return { status: "completed", result: cloudMediaId ? { ...result, storageKey: cloudMediaId } : result };
     } catch (error) {

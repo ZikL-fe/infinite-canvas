@@ -1,4 +1,5 @@
 /** 数据库表结构定义：用户、会话、对象存储媒体、素材、画布、系统配置、钱包账本、视频计费任务、兑换码及平台公告。 */
+import { sql } from 'drizzle-orm';
 import {
   bigint,
   boolean,
@@ -293,6 +294,8 @@ export const creditLedger = pgTable(
       .references(() => users.id, { onDelete: 'cascade' }),
     delta: doublePrecision('delta').notNull(),
     balanceAfter: doublePrecision('balance_after').notNull(),
+    reservedCredits: doublePrecision('reserved_credits').notNull().default(0),
+    reservationExpiresAt: timestamp('reservation_expires_at', { withTimezone: true }),
     reason: text('reason').notNull(),
     refId: text('ref_id'),
     meta: jsonb('meta').$type<Record<string, unknown>>().notNull().default({}),
@@ -303,6 +306,9 @@ export const creditLedger = pgTable(
   (table) => [
     index('credit_ledger_user_created_idx').on(table.userId, table.createdAt),
     index('credit_ledger_created_idx').on(table.createdAt),
+    index('credit_ledger_reservations_idx')
+      .on(table.userId, table.reservationExpiresAt)
+      .where(sql`${table.reservedCredits} > 0`),
   ],
 );
 

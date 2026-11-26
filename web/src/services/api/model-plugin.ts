@@ -42,6 +42,7 @@ function pluginHeaders(extra?: Record<string, string>, hasJsonBody = false): Rec
 
 function pluginUrl(config: AiConfig, path: string) {
     if (/^https?:/i.test(path)) return withLocalProxy(path);
+    if (path.startsWith("/api/")) return path;
     return buildApiUrl(config.baseUrl, path.startsWith("/") ? path : `/${path}`);
 }
 
@@ -306,9 +307,9 @@ async function generateImage({
   form.set("model", model);
   form.set("prompt", prompt);
   form.set("n", String(count));
-  form.set("size", size);
-  form.set("quality", quality);
-  form.set("background", background);
+  if (size) form.set("size", size);
+  if (quality) form.set("quality", quality);
+  if (background) form.set("background", background);
   form.set("response_format", "b64_json");
   const imageField = images.length > 1 ? "image[]" : "image";
   for (const dataUrl of images) {
@@ -711,7 +712,7 @@ async function generateVideo({
       if (!state.done) return null;
       const uri = state.response?.generateVideoResponse?.generatedSamples?.[0]?.video?.uri;
       if (!uri) throw new Error("Gemini did not return a video URI");
-      if (uri.includes("key=")) return { url: uri };
+      if (uri.includes("key=") || baseUrl.startsWith("/api/ai/proxy/")) return { url: uri };
       const separator = uri.includes("?") ? "&" : "?";
       return { url: uri + separator + "key=" + apiKey };
     },

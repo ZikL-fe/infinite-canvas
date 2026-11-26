@@ -6,24 +6,29 @@ import { useUserStore } from "@/stores/use-user-store";
 
 type RetriableAxiosConfig = InternalAxiosRequestConfig & { _aiRetried?: boolean };
 
-function isAiProxyUrl(url?: string) {
+export function isAiProxyUrl(url?: string) {
     if (!url) return false;
-    return url.includes("/api/ai/proxy/");
+    try {
+        const target = new URL(url, window.location.href);
+        return target.origin === window.location.origin && target.pathname.startsWith("/api/ai/proxy/");
+    } catch {
+        return false;
+    }
+}
+
+function isAiProxyRequest(config: InternalAxiosRequestConfig) {
+    return isAiProxyUrl(aiAxios.getUri(config));
 }
 
 function applyFreshAuthHeaders(headers: AxiosHeaders, token: string) {
-    if (headers.has("Authorization") || headers.has("authorization")) {
-        headers.set("Authorization", `Bearer ${token}`);
-    }
-    if (headers.has("x-goog-api-key") || headers.has("X-Goog-Api-Key")) {
-        headers.set("x-goog-api-key", token);
-    }
+    headers.set("Authorization", `Bearer ${token}`);
+    headers.delete("x-goog-api-key");
 }
 
 export const aiAxios = axios.create();
 
 aiAxios.interceptors.request.use((config) => {
-    if (isAiProxyUrl(config.url)) {
+    if (isAiProxyRequest(config)) {
         const token = useUserStore.getState().accessToken;
         if (token) {
             const headers = AxiosHeaders.from(config.headers);
@@ -41,7 +46,7 @@ aiAxios.interceptors.response.use(
             return Promise.reject(error);
         }
         const config = error.config as RetriableAxiosConfig | undefined;
-        if (!config || config._aiRetried || !isAiProxyUrl(config.url)) {
+        if (!config || config._aiRetried || !isAiProxyRequest(config)) {
             return Promise.reject(error);
         }
         config._aiRetried = true;
@@ -57,10 +62,9 @@ aiAxios.interceptors.response.use(
 );
 
 function withFreshFetchAuth(input: RequestInfo | URL, init: RequestInit | undefined, token: string): RequestInit | undefined {
-    if (!init?.headers) return init;
-    const headers = new Headers(init.headers);
-    if (headers.has("Authorization")) headers.set("Authorization", `Bearer ${token}`);
-    if (headers.has("x-goog-api-key")) headers.set("x-goog-api-key", token);
+    const headers = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined));
+    headers.set("Authorization", `Bearer ${token}`);
+    headers.delete("x-goog-api-key");
     return { ...init, headers };
 }
 
