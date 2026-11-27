@@ -8,7 +8,7 @@ import { useNavigate } from "react-router-dom";
 import { LoadingImage, LoadingVideo, MediaLoadBox } from "@/components/loading-media";
 import { useBatchZipDownload } from "@/hooks/use-batch-zip-download";
 import { useCopyText } from "@/hooks/use-copy-text";
-import { formatBytes, formatStoragePair, readFileAsDataUrl } from "@/lib/image-utils";
+import { detectImageMimeFromBlob, formatBytes, formatStoragePair, imageExtensionFromMime, readFileAsDataUrl } from "@/lib/image-utils";
 import { getMediaBlob } from "@/services/file-storage";
 import { deleteAssetsWithCloud, deleteAssetWithCloud, useCloudSyncing } from "@/services/cloud-sync";
 import { ensureImagePreview, getImageBlob, getImagePreviewRevision, previewUrlFor, subscribeImagePreviews, uploadImage } from "@/services/image-storage";
@@ -190,7 +190,10 @@ export default function AssetsPage() {
                 message.error(t("assets.downloadFailed"));
                 return;
             }
-            const ext = asset.data.mimeType?.split("/")[1]?.split("+")[0] || (asset.kind === "video" ? "mp4" : "png");
+            const ext =
+                asset.kind === "video"
+                    ? asset.data.mimeType?.split("/")[1]?.split("+")[0] || "mp4"
+                    : imageExtensionFromMime(await detectImageMimeFromBlob(blob, asset.data.mimeType));
             saveAs(blob, `${asset.title || "asset"}.${ext}`);
             message.success(t("common.downloaded"));
         } catch {
@@ -241,7 +244,10 @@ export default function AssetsPage() {
                         loadBlob: async () => new Blob([asset.data.content], { type: "text/plain;charset=utf-8" }),
                     };
                 }
-                const ext = asset.data.mimeType?.split("/")[1]?.split("+")[0] || (asset.kind === "video" ? "mp4" : "png");
+                const ext =
+                asset.kind === "video"
+                    ? asset.data.mimeType?.split("/")[1]?.split("+")[0] || "mp4"
+                    : imageExtensionFromMime(await detectImageMimeFromBlob(blob, asset.data.mimeType));
                 return {
                     filename: `${asset.title || "asset"}.${ext}`,
                     loadBlob: () => readAssetMediaBlob(asset),

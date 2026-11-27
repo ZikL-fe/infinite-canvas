@@ -1,10 +1,12 @@
 /** 本地图片 IndexedDB 存储、内存缩略图预览缓存与云端图片按需上传/回源服务。 */
 import localforage from "localforage";
+import { saveAs } from "file-saver";
 
 import { nanoid } from "nanoid";
 import i18n from "@/i18n";
 import { withLocalProxy } from "@/stores/use-config-store";
 import { createImageThumbnail } from "@/lib/image-thumbnail";
+import { detectImageMimeFromBlob, imageExtensionFromMime } from "@/lib/image-utils";
 import {
     clearCloudMediaUrlCache,
     evictCloudMediaUrlCache,
@@ -95,18 +97,20 @@ export async function uploadImage(input: string | Blob, options?: ImageReadOptio
 async function storeImage(blob: Blob, options?: ImageReadOptions): Promise<UploadedImage> {
     const storageKey = options?.existingStorageKey || `image:${nanoid()}`;
     const alreadyInS3 = Boolean(options?.existingStorageKey);
-    const url = URL.createObjectURL(blob);
+    const detectedMime = await detectImageMimeFromBlob(blob, blob.type);
+    const normalizedBlob = blob.type === detectedMime ? blob : new Blob([blob], { type: detectedMime });
+    const url = URL.createObjectURL(normalizedBlob);
     try {
         const meta = await loadImageMeta(url, options);
         if (!meta) throw new Error(i18n.t("common.imageReadFailed"));
         throwIfAborted(options?.signal);
-        await store.setItem(storageKey, blob);
+        await store.setItem(storageKey, normalizedBlob);
         throwIfAborted(options?.signal);
         objectUrls.set(storageKey, url);
-        await storeImagePreview(storageKey, blob);
+        await storeImagePreview(storageKey, normalizedBlob);
         if (!options?.localOnly) {
-            const cloudThumb = (await createImageThumbnail(blob, 480).catch(() => undefined)) || blob;
-            await uploadBlobToCloud(storageKey, blob, "image", {
+            const cloudThumb = (await createImageThumbnail(normalizedBlob, 480).catch(() => undefined)) || normalizedBlob;
+            await uploadBlobToCloud(storageKey, normalizedBlob, "image", {
                 width: meta.width,
                 height: meta.height,
                 filename: options?.filename,
@@ -115,7 +119,7 @@ async function storeImage(blob: Blob, options?: ImageReadOptions): Promise<Uploa
                 thumbnailBlob: cloudThumb,
             });
         }
-        return { url, storageKey, width: meta.width, height: meta.height, bytes: blob.size, mimeType: blob.type.startsWith("image/") ? blob.type : "" };
+        return { url, storageKey, width: meta.width, height: meta.height, bytes: normalizedBlob.size, mimeType: detectedMime };
     } catch (error) {
         URL.revokeObjectURL(url);
         await store.removeItem(storageKey).catch(() => undefined);
@@ -390,6 +394,41 @@ export function collectImageStorageKeys(value: unknown, keys = new Set<string>()
     if ("storageKey" in value && typeof value.storageKey === "string" && value.storageKey.startsWith("image:")) keys.add(value.storageKey);
     Object.values(value).forEach((item) => (Array.isArray(item) ? item.forEach((child) => collectImageStorageKeys(child, keys)) : collectImageStorageKeys(item, keys)));
     return keys;
+}
+
+/** 按真实图片 Blob 与二进制魔数推导扩展名并触发保存，避免出现 UUID 或错标后缀。 */
+export async function downloadImageResource({
+    source,
+    storageKey,
+    mimeType,
+    filenameBase,
+}: {
+    source: string;
+    storageKey?: string;
+    mimeType?: string;
+    filenameBase: string;
+}) {
+    let blob: Blob | null = null;
+    if (storageKey) {
+        blob = await getImageBlob(storageKey).catch(() => null);
+    }
+    if (!blob && source) {
+        try {
+            const response = await fetch(withLocalProxy(source));
+            if (response.ok) {
+                blob = await response.blob();
+            }
+        } catch {
+            // fallback to saveAs(source) below if CORS/network blocks blob fetch
+        }
+    }
+    if (blob && blob.size > 0) {
+        const realMime = await detectImageMimeFromBlob(blob, mimeType);
+        saveAs(blob, `${filenameBase}.${imageExtensionFromMime(realMime)}`);
+        return;
+    }
+    const fallbackMime = source.match(/^data:([^;]+)/)?.[1] || mimeType;
+    saveAs(source, `${filenameBase}.${imageExtensionFromMime(fallbackMime)}`);
 }
 
 export async function clearLocalImageAndWorkbenchCaches() {

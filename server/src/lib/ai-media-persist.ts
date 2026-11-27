@@ -110,6 +110,38 @@ export function checkStorageQuotaBlock(
   return { blocked: false };
 }
 
+/** 根据二进制魔数识别常见图片格式（GIF / PNG / JPEG / WebP），避免上游未返回或错标 Content-Type。 */
+export function detectImageMimeFromBuffer(buffer: Buffer): string | null {
+  if (buffer.byteLength >= 6) {
+    const head6 = buffer.subarray(0, 6).toString("ascii");
+    if (head6 === "GIF87a" || head6 === "GIF89a") return "image/gif";
+  }
+  if (
+    buffer.byteLength >= 8 &&
+    buffer[0] === 0x89 &&
+    buffer[1] === 0x50 &&
+    buffer[2] === 0x4e &&
+    buffer[3] === 0x47 &&
+    buffer[4] === 0x0d &&
+    buffer[5] === 0x0a &&
+    buffer[6] === 0x1a &&
+    buffer[7] === 0x0a
+  ) {
+    return "image/png";
+  }
+  if (buffer.byteLength >= 3 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) {
+    return "image/jpeg";
+  }
+  if (
+    buffer.byteLength >= 12 &&
+    buffer.subarray(0, 4).toString("ascii") === "RIFF" &&
+    buffer.subarray(8, 12).toString("ascii") === "WEBP"
+  ) {
+    return "image/webp";
+  }
+  return null;
+}
+
 /** 优先从文件名后缀、其次从 MIME 类型推导对象存储文件扩展名（含点号）。 */
 export function inferExtension(filename: string | undefined, mimeType: string) {
   const fromName = filename?.split(".").pop()?.toLowerCase().replace(/[^a-z0-9]/g, "");
@@ -195,12 +227,22 @@ function readWebpDimensions(buffer: Buffer): { width: number; height: number } |
   return null;
 }
 
-/** 解析 PNG / JPEG / WebP 二进制头部读取图片原始宽高（失败返回 null）。 */
+function readGifDimensions(buffer: Buffer): { width: number; height: number } | null {
+  if (buffer.byteLength < 10) return null;
+  const head = buffer.subarray(0, 6).toString("ascii");
+  if (head !== "GIF87a" && head !== "GIF89a") return null;
+  const width = buffer.readUInt16LE(6);
+  const height = buffer.readUInt16LE(8);
+  return width > 0 && height > 0 ? { width, height } : null;
+}
+
+/** 解析 PNG / JPEG / WebP / GIF 二进制头部读取图片原始宽高（失败返回 null）。 */
 export function inferImageDimensions(buffer: Buffer, mimeType: string) {
+  if (mimeType.includes("gif")) return readGifDimensions(buffer);
   if (mimeType.includes("png")) return readPngDimensions(buffer);
   if (mimeType.includes("jpeg") || mimeType.includes("jpg")) return readJpegDimensions(buffer);
   if (mimeType.includes("webp")) return readWebpDimensions(buffer);
-  return readPngDimensions(buffer) || readJpegDimensions(buffer) || readWebpDimensions(buffer);
+  return readPngDimensions(buffer) || readJpegDimensions(buffer) || readWebpDimensions(buffer) || readGifDimensions(buffer);
 }
 
 /** 若平台已配置对象存储且用户配额充足，则把服务端拿到的媒体 Buffer 自动转存到 S3 并入库。 */
@@ -299,7 +341,7 @@ function extractImageSources(payload: unknown): ExtractedImageSource[] {
       if (!item || typeof item !== "object") continue;
       const obj = item as Record<string, unknown>;
       if (typeof obj.b64_json === "string" && obj.b64_json) {
-        out.push({ kind: "b64", b64: obj.b64_json, mimeType: "image/png" });
+        out.push({ kind: "b64", b64: obj.b64_json, mimeType: "" });
       } else if (typeof obj.url === "string" && obj.url) {
         if (obj.url.startsWith("data:")) {
           const match = obj.url.match(/^data:([^;,]+);base64,(.+)$/);
@@ -360,20 +402,23 @@ export async function persistGeneratedImagesFromPayload(params: {
     try {
       const saved = await runMediaPersistTask(async () => {
         let buffer: Buffer;
-        let mimeType = "image/png";
+        let declaredMime = "";
         const fetchStartedAt = Date.now();
         if (src.kind === "b64") {
           buffer = Buffer.from(src.b64, "base64");
-          mimeType = src.mimeType || "image/png";
+          declaredMime = src.mimeType;
         } else {
           const fetched = await fetchMediaBufferWithLimits(src.url);
           fetchImageMs += Date.now() - fetchStartedAt;
-          if (!fetched || !fetched.mimeType.startsWith("image/")) {
+          if (!fetched) return null;
+          const sniffed = detectImageMimeFromBuffer(fetched.buffer);
+          if (!sniffed && !fetched.mimeType.startsWith("image/")) {
             return null;
           }
           buffer = fetched.buffer;
-          mimeType = fetched.mimeType || "image/png";
+          declaredMime = fetched.mimeType;
         }
+        const mimeType = detectImageMimeFromBuffer(buffer) || (declaredMime.startsWith("image/") ? declaredMime : "image/png");
         if (src.kind === "b64") {
           fetchImageMs += Date.now() - fetchStartedAt;
         }

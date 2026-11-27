@@ -4,7 +4,7 @@ import i18n from "@/i18n";
 import { buildApiUrl, resolveModelRequestConfig, resolveModelScript, withLocalProxy, type AiConfig, type ModelChannel } from "@/stores/use-config-store";
 import { normalizePluginImages, runModelPlugin } from "./model-plugin";
 import { nanoid } from "nanoid";
-import { dataUrlToFile } from "@/lib/image-utils";
+import { b64ToDataUrl, dataUrlToFile } from "@/lib/image-utils";
 import { buildImageReferencePromptText } from "@/lib/image-reference-prompt";
 import { aiAxios, fetchAiWithRefresh, isAiProxyUrl, readCloudMediaIdsHeader } from "@/services/api/ai-http";
 import { imageToDataUrl } from "@/services/image-storage";
@@ -281,7 +281,7 @@ function resolveGeminiImageSize(dimensions: { width: number; height: number } | 
 
 function resolveImageSource(item: Record<string, unknown>) {
     if (typeof item.b64_json === "string" && item.b64_json) {
-        return `data:image/png;base64,${item.b64_json}`;
+        return b64ToDataUrl(item.b64_json);
     }
     if (typeof item.url === "string" && item.url) {
         return item.url;

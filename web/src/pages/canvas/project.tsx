@@ -11,7 +11,7 @@ import { createVideoGenerationTask, isVideoTaskFailed, storeGeneratedVideo, wait
 import { defaultConfig, useConfigStore, useEffectiveConfig } from "@/stores/use-config-store";
 import { deleteCanvasProjectsWithCloud, ensureRuntimeConfigForGeneration, flushPendingCanvasSyncs, syncCloudWorkspace } from "@/services/cloud-sync";
 import { isCloudAuthenticated, isCloudSyncHydrated } from "@/services/cloud-media";
-import { ensureImagePreview, uploadImage } from "@/services/image-storage";
+import { downloadImageResource, ensureImagePreview, uploadImage } from "@/services/image-storage";
 import { uploadMediaFile, type UploadedFile } from "@/services/file-storage";
 import { nanoid } from "nanoid";
 import { getDataUrlByteSize, readImageMeta } from "@/lib/image-utils";
@@ -65,7 +65,6 @@ import {
     hasResumableVideoTask,
     hydrateAssistantImages,
     hydrateCanvasImages,
-    imageExtension,
     isAudioFile,
     isGenerationCanceled,
     recoverCloudInterruptedImages,
@@ -1979,13 +1978,27 @@ function InfiniteCanvasPage() {
 
     const downloadNodeImage = useCallback((node: CanvasNodeData) => {
         if ((node.type !== CanvasNodeType.Image && node.type !== CanvasNodeType.Video && node.type !== CanvasNodeType.Audio) || !node.metadata?.content) return;
-        saveAs(node.metadata.content, `canvas-${node.type}-${node.id}.${node.type === CanvasNodeType.Video ? "mp4" : node.type === CanvasNodeType.Audio ? audioExtension(node.metadata.mimeType) : imageExtension(node.metadata.content)}`);
+        if (node.type === CanvasNodeType.Image) {
+            void downloadImageResource({
+                source: node.metadata.content,
+                storageKey: node.metadata.storageKey,
+                mimeType: node.metadata.mimeType,
+                filenameBase: `canvas-${node.type}-${node.id}`,
+            });
+            return;
+        }
+        saveAs(node.metadata.content, `canvas-${node.type}-${node.id}.${node.type === CanvasNodeType.Video ? "mp4" : audioExtension(node.metadata.mimeType)}`);
     }, []);
 
     const downloadBatchImage = useCallback((node: CanvasNodeData, imageId: string) => {
         const image = node.metadata?.images?.find((item) => item.id === imageId);
         if (!image?.content) return;
-        saveAs(image.content, `canvas-image-${node.id}-${image.id}.${imageExtension(image.content)}`);
+        void downloadImageResource({
+            source: image.content,
+            storageKey: image.storageKey,
+            mimeType: image.mimeType,
+            filenameBase: `canvas-image-${node.id}-${image.id}`,
+        });
     }, []);
 
     const captureVideoNodeFrame = useCallback(

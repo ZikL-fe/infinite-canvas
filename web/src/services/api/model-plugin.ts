@@ -1,6 +1,7 @@
 import axios, { type AxiosRequestConfig } from "axios";
 
 import i18n from "@/i18n";
+import { b64ToDataUrl } from "@/lib/image-utils";
 import { aiAxios } from "@/services/api/ai-http";
 import { buildApiUrl, withLocalProxy, type AiConfig, type ModelCapability } from "@/stores/use-config-store";
 
@@ -1000,7 +1001,7 @@ export function normalizePluginImages(result: unknown): string[] {
                 const record = item as Record<string, unknown>;
                 if (typeof record.dataUrl === "string") return record.dataUrl;
                 if (typeof record.url === "string") return record.url;
-                if (typeof record.b64_json === "string") return `data:image/png;base64,${record.b64_json}`;
+                if (typeof record.b64_json === "string") return b64ToDataUrl(record.b64_json);
             }
             return "";
         })

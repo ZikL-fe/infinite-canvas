@@ -17,12 +17,12 @@ import { imageReferenceLabel } from "@/lib/image-reference-prompt";
 import { modelOptionLabel, useConfigStore, useEffectiveConfig, type AiConfig } from "@/stores/use-config-store";
 import { useThemeStore } from "@/stores/use-theme-store";
 import { nanoid } from "nanoid";
-import { formatBytes, formatDuration } from "@/lib/image-utils";
+import { formatBytes, formatDuration, imageExtensionFromMime } from "@/lib/image-utils";
 import { requestEdit, requestGeneration } from "@/services/api/image";
 import { storageApi } from "@/services/api/server";
 import { isCloudAuthenticated, WORKSPACE_CHANGED_EVENT, type WorkspaceChangeScope } from "@/services/cloud-media";
 import { ensureRuntimeConfigForGeneration } from "@/services/cloud-sync";
-import { ensureImagePreview, getImageBlob, getImagePreviewRevision, prefetchUncachedImageUrls, previewUrlFor, resolveImageUrl, resolvePickedImage, subscribeImagePreviews, uploadImage } from "@/services/image-storage";
+import { downloadImageResource, ensureImagePreview, getImageBlob, getImagePreviewRevision, prefetchUncachedImageUrls, previewUrlFor, resolveImageUrl, resolvePickedImage, subscribeImagePreviews, uploadImage } from "@/services/image-storage";
 import { deleteWorkbenchLogsWithCloud, imageWorkbenchLogStore, isWorkbenchLogDeleted, pushWorkbenchLogToCloud, syncWorkbenchLogsWithCloud } from "@/services/workbench-sync";
 import { useAssetStore } from "@/stores/use-asset-store";
 import { useWorkbenchAgentStore } from "@/stores/use-workbench-agent-store";
@@ -436,14 +436,19 @@ export default function ImagePage() {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [autoRunToken]);
 
-    const downloadImage = (image: GeneratedImage, index: number) => {
-        saveAs(image.dataUrl, `image-${index + 1}.png`);
+    const downloadImage = (image: GeneratedImage, index: number, filenameBase = `image-${index + 1}`) => {
+        void downloadImageResource({
+            source: image.dataUrl,
+            storageKey: image.storageKey,
+            mimeType: image.mimeType,
+            filenameBase,
+        });
     };
 
     const addResultToReferences = async (image: GeneratedImage, index: number, addToBatch?: boolean) => {
         try {
             const stored = await resolvePickedImage(image, { localOnly: true });
-            const nextRef: ReferenceImage = { id: nanoid(), name: `result-${index + 1}.png`, type: stored.mimeType, dataUrl: stored.url, storageKey: stored.storageKey };
+            const nextRef: ReferenceImage = { id: nanoid(), name: `result-${index + 1}.${imageExtensionFromMime(stored.mimeType)}`, type: stored.mimeType, dataUrl: stored.url, storageKey: stored.storageKey };
             if (addToBatch) {
                 if (batchScenario === "same-prompt") {
                     setBatchSamePromptSlots((prev) => [...prev, createSamePromptSlot([nextRef])]);
@@ -1177,7 +1182,7 @@ export default function ImagePage() {
         return res.ok ? res.blob() : null;
     };
 
-    const imageExtOf = (image: GeneratedImage) => image.mimeType?.split("/")[1]?.split("+")[0] || "png";
+    const imageExtOf = (image: GeneratedImage) => imageExtensionFromMime(image.mimeType);
 
     const downloadAllBatchResults = async () => {
         const entries = batchGroups.flatMap((group) =>
@@ -1665,7 +1670,7 @@ export default function ImagePage() {
                                                                 image={result.image}
                                                                 index={slotIdx}
                                                                 onEdit={(img, idx) => addResultToReferences(img, idx, true)}
-                                                                onDownload={(img, idx) => saveAs(img.dataUrl, `batch-${group.index + 1}-${idx + 1}.png`)}
+                                                                onDownload={(img, idx) => downloadImage(img, idx, `batch-${group.index + 1}-${idx + 1}`)}
                                                                 onSaveAsset={(img, idx) => saveResultToAssets(img, idx, group.prompt)}
                                                             />
                                                         ) : result.status === "failed" ? (

@@ -2,6 +2,7 @@
 import { saveAs } from "file-saver";
 
 import i18n from "@/i18n";
+import { detectImageMimeFromBlob, imageExtensionFromMime, replaceImageFilenameExtension } from "@/lib/image-utils";
 import { useUserStore, type BootstrapStatus, type LocalUser, type UserRole, type UserStatus } from "@/stores/use-user-store";
 import { fetchServer, requestServer } from "./server-http";
 import type {
@@ -125,7 +126,12 @@ export const authApi = {
 
 /** 根据云端媒体记录推导下载文件名。 */
 export function mediaDownloadFilename(record: Pick<MediaItem, "id" | "objectKey" | "mimeType" | "kind">) {
-    const ext = record.mimeType?.split("/")[1]?.split("+")[0] || (record.kind === "video" ? "mp4" : record.kind === "audio" ? "mp3" : "png");
+    const ext =
+        record.kind === "video"
+            ? record.mimeType?.split("/")[1]?.split("+")[0] || "mp4"
+            : record.kind === "audio"
+              ? record.mimeType?.split("/")[1]?.split("+")[0] || "mp3"
+              : imageExtensionFromMime(record.mimeType);
     return record.objectKey.split("/").pop() || `media-${record.id.replace(/:/g, "_")}.${ext}`;
 }
 
@@ -267,7 +273,12 @@ export const storageApi = {
     /** 通过鉴权下载接口拉取文件 Blob 并触发本地保存，避免直接打开跨域 S3 预签名链接。 */
     async downloadFile(record: Pick<MediaItem, "id" | "objectKey" | "mimeType" | "kind">, filename?: string) {
         const blob = await storageApi.downloadBlob(record.id);
-        saveAs(blob, filename || mediaDownloadFilename(record));
+        let resolvedName = filename || mediaDownloadFilename(record);
+        if (!filename && record.kind === "image") {
+            const realMime = await detectImageMimeFromBlob(blob, record.mimeType);
+            resolvedName = replaceImageFilenameExtension(resolvedName, realMime);
+        }
+        saveAs(blob, resolvedName);
     },
     async uploadBlobWithKey(
         mediaId: string,

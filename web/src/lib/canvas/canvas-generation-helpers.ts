@@ -12,8 +12,17 @@ import type { CanvasImageAngleParams } from "@/components/canvas/canvas-node-ang
 import type { ReferenceImage } from "@/types/image";
 import { CanvasNodeType, type CanvasAssistantSession, type CanvasConnection, type CanvasNodeData, type CanvasNodeMetadata } from "@/types/canvas";
 
-export function imageExtension(dataUrl: string) {
-    return dataUrl.match(/^data:image[/]([^;]+)/)?.[1] || dataUrl.match(/image[/]([^;]+)/)?.[1] || "png";
+export function imageExtension(dataUrl: string, mimeType?: string) {
+    if (mimeType?.includes("gif")) return "gif";
+    if (mimeType?.includes("webp")) return "webp";
+    if (mimeType?.includes("jpeg") || mimeType?.includes("jpg")) return "jpg";
+    const fromData = dataUrl.match(/^data:image[/]([^;]+)/)?.[1] || dataUrl.match(/image[/]([^;]+)/)?.[1];
+    if (fromData) return fromData === "jpeg" ? "jpg" : fromData;
+    const fromUrl = dataUrl.split("?")[0]?.match(/\.([a-z0-9]{2,5})$/i)?.[1]?.toLowerCase();
+    if (fromUrl && ["png", "jpg", "jpeg", "webp", "gif", "svg", "avif"].includes(fromUrl)) {
+        return fromUrl === "jpeg" ? "jpg" : fromUrl;
+    }
+    return "png";
 }
 
 export function audioExtension(mimeType?: string) {

@@ -4,6 +4,7 @@ import { saveAs } from "file-saver";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 
+import { detectImageMimeFromBytes, replaceImageFilenameExtension } from "@/lib/image-utils";
 import { createZip } from "@/lib/zip";
 
 export type BatchZipEntry = {
@@ -59,7 +60,15 @@ export function useBatchZipDownload() {
                     try {
                         const blob = await entry.loadBlob();
                         if (!blob || !blob.size) return null;
-                        return { name: dedupeZipName(entry.filename, usedNames), data: blob };
+                        let filename = entry.filename;
+                        if (blob.type.startsWith("image/") || /\.(png|jpe?g|webp|gif)$/i.test(filename)) {
+                            const head = new Uint8Array(await blob.slice(0, 16).arrayBuffer());
+                            const detectedMime = detectImageMimeFromBytes(head);
+                            if (detectedMime) {
+                                filename = replaceImageFilenameExtension(filename, detectedMime);
+                            }
+                        }
+                        return { name: dedupeZipName(filename, usedNames), data: blob };
                     } catch {
                         return null;
                     }
