@@ -1,7 +1,8 @@
-import { defaultConfig, resolveModelForCapability, type AiConfig } from "@/stores/use-config-store";
+import { defaultConfig, resolveModelForCapability, useConfigStore, type AiConfig } from "@/stores/use-config-store";
 import i18n from "@/i18n";
 import { storageApi } from "@/services/api/server";
 import { isCloudAuthenticated } from "@/services/cloud-media";
+import { ensureRuntimeConfigForGeneration } from "@/services/cloud-sync";
 import { ensureImagePreview, getImageBlob, prefetchUncachedImageUrls, resolveImageUrl, uploadImage } from "@/services/image-storage";
 import { prefetchUncachedMediaUrls, resolveMediaUrl } from "@/services/file-storage";
 import { imageMetadata, referenceUrl } from "@/lib/canvas/canvas-node-factory";
@@ -186,6 +187,34 @@ export function buildGenerationConfig(config: AiConfig, node: CanvasNodeData | u
         audioInstructions: node?.metadata?.audioInstructions || config.audioInstructions || defaultConfig.audioInstructions,
         count: String(node?.metadata?.count || (mode === "image" ? config.canvasImageCount || config.count : config.count) || defaultConfig.count),
     };
+}
+
+/** Ensure runtime channels are synced and resolve the node's model strictly for its capability. */
+export async function ensureReadyGenerationConfig(
+    generationConfig: AiConfig,
+    node: CanvasNodeData | undefined,
+    mode: CanvasNodeGenerationMode,
+    isReady: (config: AiConfig, model: string) => boolean,
+): Promise<AiConfig | null> {
+    if (isReady(generationConfig, generationConfig.model)) return generationConfig;
+    const resolveForMode = (cfg: AiConfig) => {
+        const latest = useConfigStore.getState().config;
+        return resolveModelForCapability(
+            {
+                ...cfg,
+                imageModel: latest.imageModel,
+                videoModel: latest.videoModel,
+                textModel: latest.textModel,
+                audioModel: latest.audioModel,
+            },
+            node?.metadata?.model ?? generationConfig.model,
+            mode,
+        );
+    };
+    const refreshed = await ensureRuntimeConfigForGeneration(generationConfig, generationConfig.model, (cfg) => isReady(cfg, resolveForMode(cfg)));
+    if (!refreshed) return null;
+    const resolvedModel = resolveForMode(refreshed);
+    return isReady(refreshed, resolvedModel) ? { ...refreshed, model: resolvedModel } : null;
 }
 
 export function hasResumableVideoTask(node: CanvasNodeData) {

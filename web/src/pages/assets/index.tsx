@@ -121,7 +121,13 @@ export default function AssetsPage() {
     };
 
     const saveAsset = async () => {
-        const values = await form.validateFields();
+        let values: AssetFormValues;
+        try {
+            values = await form.validateFields();
+        } catch (error) {
+            if (error && typeof error === "object" && "errorFields" in error) return;
+            throw error;
+        }
         const base = {
             title: values.title.trim(),
             coverUrl: values.coverUrl?.trim() || (values.kind === "image" && imageDraft ? imageDraft.dataUrl : ""),

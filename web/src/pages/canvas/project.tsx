@@ -9,7 +9,7 @@ import { requestEdit, requestGeneration, requestImageQuestion } from "@/services
 import { requestAudioGeneration, storeGeneratedAudio } from "@/services/api/audio";
 import { createVideoGenerationTask, isVideoTaskFailed, storeGeneratedVideo, waitForVideoGenerationTask } from "@/services/api/video";
 import { defaultConfig, useConfigStore, useEffectiveConfig } from "@/stores/use-config-store";
-import { deleteCanvasProjectsWithCloud, ensureRuntimeConfigForGeneration, flushPendingCanvasSyncs, syncCloudWorkspace } from "@/services/cloud-sync";
+import { deleteCanvasProjectsWithCloud, flushPendingCanvasSyncs, syncCloudWorkspace } from "@/services/cloud-sync";
 import { isCloudAuthenticated, isCloudSyncHydrated } from "@/services/cloud-media";
 import { downloadImageResource, ensureImagePreview, uploadImage } from "@/services/image-storage";
 import { uploadMediaFile, type UploadedFile } from "@/services/file-storage";
@@ -58,6 +58,7 @@ import {
     buildAnglePrompt,
     buildGenerationConfig,
     collectInterruptedImageTaskIds,
+    ensureReadyGenerationConfig,
     findRetrySourceNode,
     generationReferenceUrls,
     getGenerationCount,
@@ -371,18 +372,14 @@ function InfiniteCanvasPage() {
             markVideoPollActive(projectId, node.id);
             let controller: AbortController | undefined;
             try {
-                let generationConfig = buildGenerationConfig(effectiveConfig, node, "video");
-                if (!isAiConfigReady(generationConfig, generationConfig.model)) {
-                    const refreshed = await ensureRuntimeConfigForGeneration(generationConfig, generationConfig.model, isAiConfigReady);
-                    if (!refreshed) {
-                        if (silent) {
-                            commitNodes((prev) => prev.map((item) => (item.id === node.id ? { ...item, metadata: { ...item.metadata, status: NODE_STATUS_ERROR, errorDetails: t("workbench.configFirst") } } : item)));
-                            return;
-                        }
-                        openConfigDialog(true);
+                let generationConfig = await ensureReadyGenerationConfig(buildGenerationConfig(effectiveConfig, node, "video"), node, "video", isAiConfigReady);
+                if (!generationConfig) {
+                    if (silent) {
+                        commitNodes((prev) => prev.map((item) => (item.id === node.id ? { ...item, metadata: { ...item.metadata, status: NODE_STATUS_ERROR, errorDetails: t("workbench.configFirst") } } : item)));
                         return;
                     }
-                    generationConfig = refreshed;
+                    openConfigDialog(true);
+                    return;
                 }
                 setRunningNodeId(node.id);
                 commitNodes((prev) => prev.map((item) => (item.id === node.id ? { ...item, metadata: { ...item.metadata, status: NODE_STATUS_LOADING, errorDetails: undefined } } : item)));
@@ -784,7 +781,7 @@ function InfiniteCanvasPage() {
 
     const createConnectedNode = useCallback(
         (type: CanvasNodeType.Image | CanvasNodeType.Text | CanvasNodeType.Config | CanvasNodeType.Video | CanvasNodeType.Audio, pending: PendingConnectionCreate) => {
-            const metadata = type === CanvasNodeType.Config ? { model: effectiveConfig.imageModel || effectiveConfig.model, size: effectiveConfig.size, count: getGenerationCount(effectiveConfig.canvasImageCount || effectiveConfig.count) } : undefined;
+            const metadata = type === CanvasNodeType.Config ? { model: effectiveConfig.imageModel, size: effectiveConfig.size, count: getGenerationCount(effectiveConfig.canvasImageCount || effectiveConfig.count) } : undefined;
             const newNode = createCanvasNode(type, pending.position, metadata);
             const connection = normalizeConnection(pending.connection.nodeId, newNode.id, [...nodesRef.current, newNode], pending.connection.handleType);
             if (!connection) {
@@ -799,7 +796,7 @@ function InfiniteCanvasPage() {
             setPendingConnectionCreate(null);
             setConnecting(null);
         },
-        [effectiveConfig.canvasImageCount, effectiveConfig.count, effectiveConfig.imageModel, effectiveConfig.model, effectiveConfig.size, message, setConnecting, t],
+        [effectiveConfig.canvasImageCount, effectiveConfig.count, effectiveConfig.imageModel, effectiveConfig.size, message, setConnecting, t],
     );
 
     const cancelPendingConnectionCreate = useCallback(() => {
@@ -1008,7 +1005,7 @@ function InfiniteCanvasPage() {
             const configMetadata =
                 type === CanvasNodeType.Config
                     ? {
-                          model: effectiveConfig.imageModel || effectiveConfig.model,
+                          model: effectiveConfig.imageModel,
                           size: effectiveConfig.size,
                           count: getGenerationCount(effectiveConfig.canvasImageCount || effectiveConfig.count),
                       }
@@ -1031,7 +1028,7 @@ function InfiniteCanvasPage() {
                     : isBuiltinType(type) && type !== CanvasNodeType.Text && type !== CanvasNodeType.Audio && type !== CanvasNodeType.Group;
             if (wantsPanel) setDialogNodeId(newNode.id);
         },
-        [effectiveConfig.canvasImageCount, effectiveConfig.count, effectiveConfig.imageModel, effectiveConfig.model, effectiveConfig.size, getCanvasCenter],
+        [effectiveConfig.canvasImageCount, effectiveConfig.count, effectiveConfig.imageModel, effectiveConfig.size, getCanvasCenter],
     );
 
     const deleteNodes = useCallback(
@@ -2102,7 +2099,7 @@ function InfiniteCanvasPage() {
                     { x: textNode.position.x + textNode.width + gap + configSpec.width / 2, y: centerY },
                     {
                         generationMode: "text",
-                        model: effectiveConfig.textModel || effectiveConfig.model || defaultConfig.textModel,
+                        model: effectiveConfig.textModel,
                         count: 1,
                         composerContent: t("canvas.reverseComposer", { imageId: node.id, textId: textNode.id }),
                     },
@@ -2117,7 +2114,7 @@ function InfiniteCanvasPage() {
             setDialogNodeId(configNode.id);
             setContextMenu(null);
         },
-        [effectiveConfig.model, effectiveConfig.textModel, message, t],
+        [effectiveConfig.textModel, message, t],
     );
 
     const cropImageNode = useCallback(async (node: CanvasNodeData, crop: CanvasImageCropRect) => {
@@ -2187,13 +2184,13 @@ function InfiniteCanvasPage() {
         async (node: CanvasNodeData, payload: CanvasImageMaskEditPayload) => {
             if (!node.metadata?.content) return;
             let generationConfig = { ...buildGenerationConfig(effectiveConfig, node, "image"), count: "1", size: node.metadata?.size || "auto" };
-            if (payload.generate && !isAiConfigReady(generationConfig, generationConfig.model)) {
-                const refreshed = await ensureRuntimeConfigForGeneration(generationConfig, generationConfig.model, isAiConfigReady);
-                if (!refreshed) {
+            if (payload.generate) {
+                const readyConfig = await ensureReadyGenerationConfig(generationConfig, node, "image", isAiConfigReady);
+                if (!readyConfig) {
                     openConfigDialog(true);
                     return;
                 }
-                generationConfig = { ...refreshed, count: "1", size: node.metadata?.size || "auto" };
+                generationConfig = { ...readyConfig, count: "1", size: node.metadata?.size || "auto" };
             }
             const userPrompt = payload.prompt.trim();
             const prompt = t("canvas.projectPage.maskPrompt", { source: imageReferenceLabel(0), mask: imageReferenceLabel(1), prompt: userPrompt });
@@ -2284,15 +2281,12 @@ function InfiniteCanvasPage() {
     const generateAngleNode = useCallback(
         async (node: CanvasNodeData, params: CanvasImageAngleParams) => {
             if (!node.metadata?.content) return;
-            let generationConfig = { ...buildGenerationConfig(effectiveConfig, node, "image"), count: "1" };
-            if (!isAiConfigReady(generationConfig, generationConfig.model)) {
-                const refreshed = await ensureRuntimeConfigForGeneration(generationConfig, generationConfig.model, isAiConfigReady);
-                if (!refreshed) {
-                    openConfigDialog(true);
-                    return;
-                }
-                generationConfig = { ...refreshed, count: "1" };
+            const readyConfig = await ensureReadyGenerationConfig({ ...buildGenerationConfig(effectiveConfig, node, "image"), count: "1" }, node, "image", isAiConfigReady);
+            if (!readyConfig) {
+                openConfigDialog(true);
+                return;
             }
+            const generationConfig = { ...readyConfig, count: "1" };
             const childId = nanoid();
             const imageConfig = NODE_DEFAULT_SIZE[CanvasNodeType.Image];
             const title = buildAngleLabel(params);
@@ -2526,14 +2520,10 @@ function InfiniteCanvasPage() {
     const handleGenerateNode = useCallback(
         async (nodeId: string, mode: CanvasNodeGenerationMode, prompt: string) => {
             const sourceNode = nodesRef.current.find((node) => node.id === nodeId);
-            let generationConfig = buildGenerationConfig(effectiveConfig, sourceNode, mode);
-            if (!isAiConfigReady(generationConfig, generationConfig.model)) {
-                const refreshed = await ensureRuntimeConfigForGeneration(generationConfig, generationConfig.model, isAiConfigReady);
-                if (!refreshed) {
-                    openConfigDialog(true);
-                    return;
-                }
-                generationConfig = refreshed;
+            const generationConfig = await ensureReadyGenerationConfig(buildGenerationConfig(effectiveConfig, sourceNode, mode), sourceNode, mode, isAiConfigReady);
+            if (!generationConfig) {
+                openConfigDialog(true);
+                return;
             }
 
             // useBuiltinPanel.writeBackToSelf reuses built-in generation while writing the result back to the plugin node.
@@ -2981,7 +2971,8 @@ function InfiniteCanvasPage() {
             const sourceNode = findRetrySourceNode(node.id, nodesRef.current, connectionsRef.current) || node;
             const savedImageMetadata = node.type === CanvasNodeType.Image ? node.metadata : undefined;
             const hasSavedImageMetadata = Boolean(savedImageMetadata?.generationType);
-            let generationConfig =
+            const retryMode = node.type === CanvasNodeType.Text ? "text" : node.type === CanvasNodeType.Video ? "video" : node.type === CanvasNodeType.Audio ? "audio" : "image";
+            const baseGenerationConfig =
                 hasSavedImageMetadata && savedImageMetadata
                     ? {
                           ...effectiveConfig,
@@ -2991,15 +2982,13 @@ function InfiniteCanvasPage() {
                           background: savedImageMetadata.background ?? effectiveConfig.background,
                           count: "1",
                       }
-                    : { ...buildGenerationConfig(effectiveConfig, sourceNode, node.type === CanvasNodeType.Text ? "text" : node.type === CanvasNodeType.Video ? "video" : node.type === CanvasNodeType.Audio ? "audio" : "image"), count: "1" };
-            if (!isAiConfigReady(generationConfig, generationConfig.model)) {
-                const refreshed = await ensureRuntimeConfigForGeneration(generationConfig, generationConfig.model, isAiConfigReady);
-                if (!refreshed) {
-                    openConfigDialog(true);
-                    return;
-                }
-                generationConfig = refreshed;
+                    : { ...buildGenerationConfig(effectiveConfig, sourceNode, retryMode), count: "1" };
+            const readyConfig = await ensureReadyGenerationConfig(baseGenerationConfig, hasSavedImageMetadata ? undefined : sourceNode, retryMode, isAiConfigReady);
+            if (!readyConfig) {
+                openConfigDialog(true);
+                return;
             }
+            const generationConfig = { ...readyConfig, count: "1" };
 
             const context = hasSavedImageMetadata ? null : await hydrateNodeGenerationContext(buildNodeGenerationContext(sourceNode.id, nodesRef.current, connectionsRef.current, sourceNode.metadata?.prompt || node.metadata?.prompt || ""));
             const prompt = (savedImageMetadata?.prompt || context?.prompt || "").trim();
@@ -3233,7 +3222,7 @@ function InfiniteCanvasPage() {
                 },
                 {
                     prompt: "",
-                    model: effectiveConfig.imageModel || effectiveConfig.model,
+                    model: effectiveConfig.imageModel,
                     size: effectiveConfig.size,
                     count: getGenerationCount(effectiveConfig.canvasImageCount || effectiveConfig.count),
                 },
@@ -3249,7 +3238,7 @@ function InfiniteCanvasPage() {
             setSelectedConnectionId(null);
             setDialogNodeId(configNode.id);
         },
-        [effectiveConfig.canvasImageCount, effectiveConfig.count, effectiveConfig.imageModel, effectiveConfig.model, effectiveConfig.size, message, t],
+        [effectiveConfig.canvasImageCount, effectiveConfig.count, effectiveConfig.imageModel, effectiveConfig.size, message, t],
     );
 
     const insertAssistantImage = useCallback(

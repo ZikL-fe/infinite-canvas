@@ -8,6 +8,7 @@ export default {
         cancel: "取消",
         save: "保存",
         edit: "编辑",
+        actions: "操作",
         done: "完成",
         delete: "删除",
         copy: "复制",
@@ -616,6 +617,7 @@ export default {
         },
         channelEditor: {
             title: "编辑渠道",
+            createTitle: "新增渠道",
             name: "渠道名称",
             namePlaceholder: "同时作为对外展示的模型分组名",
             alias: "渠道别名（仅管理员可见）",

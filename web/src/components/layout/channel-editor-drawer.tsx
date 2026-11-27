@@ -15,12 +15,14 @@ type PricingTarget = { name: string; capability: ModelCapability; value?: ModelP
 export function ChannelEditorDrawer({
     open,
     channel,
+    isNew = false,
     onSave,
     onClose,
     onFetchModels,
 }: {
     open: boolean;
     channel: ModelChannel | null;
+    isNew?: boolean;
     onSave: (channel: ModelChannel) => void;
     onClose: () => void;
     onFetchModels?: (channel: ModelChannel) => Promise<string[]>;
@@ -74,7 +76,7 @@ export function ChannelEditorDrawer({
         <Drawer
             open={open}
             width={640}
-            title={t("config.channelEditor.title")}
+            title={t(isNew ? "config.channelEditor.createTitle" : "config.channelEditor.title")}
             onClose={onClose}
             styles={{ body: { paddingTop: 16 } }}
             extra={

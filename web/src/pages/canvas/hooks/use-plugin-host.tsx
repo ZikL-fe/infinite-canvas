@@ -2,11 +2,11 @@ import { useCallback, useEffect, useMemo, type Dispatch, type MutableRefObject, 
 import { useTranslation } from "react-i18next";
 
 import { requestEdit, requestGeneration, requestImageQuestion, type AiTextMessage } from "@/services/api/image";
-import { ensureRuntimeConfigForGeneration } from "@/services/cloud-sync";
 import { imageToDataUrl } from "@/services/image-storage";
 import { requestVideoGeneration, storeGeneratedVideo } from "@/services/api/video";
 import { decodeChannelModel, selectableModelsByCapability, type AiConfig, type ModelCapability } from "@/stores/use-config-store";
-import { buildGenerationConfig } from "@/lib/canvas/canvas-generation-helpers";
+import { buildGenerationConfig, ensureReadyGenerationConfig } from "@/lib/canvas/canvas-generation-helpers";
+import type { CanvasNodeGenerationMode } from "@/components/canvas/canvas-node-prompt-panel";
 import { buildNodeContext } from "@/lib/canvas/plugin-node-context";
 import { getNodeDefinition } from "@/lib/canvas/node-registry";
 import { ensurePluginsLoaded } from "@/lib/canvas/plugin-loader";
@@ -44,17 +44,16 @@ export function usePluginHost(params: PluginHostParams) {
         // Convert plugin reference images (data URLs or URLs) into the ReferenceImage[] expected by the host generation API.
         const toReferences = (refs?: string[]): ReferenceImage[] => (refs || []).filter(Boolean).map((src, index) => ({ id: `plugin-ref-${index}`, name: `ref-${index}.png`, type: "image/png", dataUrl: src }));
         // 若平台渠道尚未异步拉取完毕先尝试补拉一次，仍未就绪再打开配置框并抛错
-        const ensureReady = async (config: AiConfig) => {
-            if (isAiConfigReady(config, config.model)) return config;
-            const refreshed = await ensureRuntimeConfigForGeneration(config, config.model, isAiConfigReady);
-            if (refreshed) return refreshed;
+        const ensureReady = async (config: AiConfig, mode: CanvasNodeGenerationMode) => {
+            const ready = await ensureReadyGenerationConfig(config, undefined, mode, isAiConfigReady);
+            if (ready) return ready;
             openConfigDialog(true);
             throw new Error(t("canvas.plugins.aiConfigRequired"));
         };
         return {
             generateImage: async (prompt, options) => {
                 const rawConfig = { ...buildGenerationConfig(effectiveConfig, undefined, "image"), count: String(options?.count || 1), ...(options?.model ? { model: options.model } : {}), ...(options?.size ? { size: options.size } : {}) };
-                const config = await ensureReady(rawConfig);
+                const config = await ensureReady(rawConfig, "image");
                 const references = toReferences(options?.references);
                 const items = references.length ? await requestEdit(config, prompt, references, { signal: options?.signal }) : await requestGeneration(config, prompt, { signal: options?.signal });
                 const images = await Promise.all(items.map(async (item) => {
@@ -74,13 +73,13 @@ export function usePluginHost(params: PluginHostParams) {
                     ...(options?.size ? { size: options.size } : {}),
                     ...(options?.seconds ? { videoSeconds: options.seconds } : {}),
                 };
-                const config = await ensureReady(rawConfig);
+                const config = await ensureReady(rawConfig, "video");
                 const file = await storeGeneratedVideo(await requestVideoGeneration(config, prompt, toReferences(options?.references), { signal: options?.signal }));
                 return { url: file.url, mimeType: file.mimeType, width: file.width, height: file.height, durationMs: file.durationMs };
             },
             generateText: async (prompt, options) => {
                 const rawConfig = { ...buildGenerationConfig(effectiveConfig, undefined, "text"), ...(options?.model ? { model: options.model } : {}) };
-                const config = await ensureReady(rawConfig);
+                const config = await ensureReady(rawConfig, "text");
                 const messages: AiTextMessage[] = [...(options?.system ? [{ role: "system" as const, content: options.system }] : []), { role: "user" as const, content: prompt }];
                 const text = await requestImageQuestion(config, messages, (delta) => options?.onDelta?.(delta), { signal: options?.signal });
                 return { text };

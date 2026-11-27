@@ -8,6 +8,7 @@ export default {
         cancel: "Cancel",
         save: "Save",
         edit: "Edit",
+        actions: "Actions",
         done: "Done",
         delete: "Delete",
         copy: "Copy",
@@ -615,7 +616,8 @@ export default {
             systemPromptPlaceholder: "For example: You are a visual director specializing in cinematic, photorealistic imagery.",
         },
         channelEditor: {
-            title: "Edit provider",
+            title: "Edit Channel",
+            createTitle: "Add Channel",
             name: "Provider name",
             namePlaceholder: "Also used as public model group name",
             alias: "Channel alias (Admin only)",

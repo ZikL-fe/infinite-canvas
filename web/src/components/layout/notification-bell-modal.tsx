@@ -1,5 +1,5 @@
 import type { CSSProperties } from "react";
-import { Suspense, lazy, useEffect } from "react";
+import { Suspense, lazy, useEffect, useRef } from "react";
 import { Badge, Button, Empty, Modal, Spin, Tag, Timeline, Typography, theme as antdTheme } from "antd";
 import { Bell, Megaphone } from "lucide-react";
 import { useTranslation } from "react-i18next";
@@ -41,10 +41,34 @@ export function NotificationBellModal({ className, style }: NotificationBellModa
     const openModal = useNotificationStore((state) => state.openModal);
     const closeModalAndMarkRead = useNotificationStore((state) => state.closeModalAndMarkRead);
     const setActiveTab = useNotificationStore((state) => state.setActiveTab);
+    const contentRef = useRef<HTMLDivElement>(null);
+    const onCloseRef = useRef(closeModalAndMarkRead);
+    onCloseRef.current = closeModalAndMarkRead;
 
     useEffect(() => {
         void fetchNotifications();
     }, [fetchNotifications]);
+
+    useEffect(() => {
+        if (!modalOpen) return;
+        const raf = requestAnimationFrame(() => {
+            const modal = contentRef.current?.closest<HTMLElement>(".ant-modal");
+            (modal || contentRef.current)?.focus({ preventScroll: true });
+        });
+        const onKeyDown = (event: KeyboardEvent) => {
+            if (event.key !== "Escape" || event.isComposing || event.defaultPrevented) return;
+            const wraps = Array.from(document.querySelectorAll<HTMLElement>(".ant-modal-wrap")).filter((el) => el.style.display !== "none");
+            const ownWrap = contentRef.current?.closest<HTMLElement>(".ant-modal-wrap");
+            if (wraps.length && ownWrap && wraps[wraps.length - 1] !== ownWrap) return;
+            event.preventDefault();
+            onCloseRef.current();
+        };
+        window.addEventListener("keydown", onKeyDown);
+        return () => {
+            cancelAnimationFrame(raf);
+            window.removeEventListener("keydown", onKeyDown);
+        };
+    }, [modalOpen]);
 
     const { hasUnreadNotice, unreadTimelineCount, totalUnread } = getNotificationUnreadCounts({
         notice,
@@ -83,7 +107,8 @@ export function NotificationBellModal({ className, style }: NotificationBellModa
                 onCancel={closeModalAndMarkRead}
                 centered
                 width={660}
-                destroyOnHidden={false}
+                keyboard
+                destroyOnHidden
                 title={
                     <div className="pr-6">
                         <div className="text-lg font-semibold leading-tight" style={{ color: token.colorTextHeading }}>
@@ -103,6 +128,7 @@ export function NotificationBellModal({ className, style }: NotificationBellModa
                 }
             >
                 <div
+                    ref={contentRef}
                     className="mb-4 grid grid-cols-2 gap-1.5 rounded-full border p-1"
                     style={{
                         borderColor: token.colorBorderSecondary,

@@ -17,7 +17,7 @@ export function AdminChannelsPanel() {
     const [channels, setChannels] = useState<AdminChannelItem[]>([]);
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
-    const [editingChannel, setEditingChannel] = useState<ModelChannel | null>(null);
+    const [editingState, setEditingState] = useState<{ channel: ModelChannel; isNew: boolean } | null>(null);
 
     const loadChannels = useCallback(async () => {
         setLoading(true);
@@ -50,28 +50,32 @@ export function AdminChannelsPanel() {
     };
 
     const handleAddChannel = () => {
-        setEditingChannel(
-            createModelChannel({
+        setEditingState({
+            isNew: true,
+            channel: createModelChannel({
                 name: t("admin.messages.defaultChannelName", { index: channels.length + 1 }),
                 baseUrl: "https://api.openai.com",
                 apiKey: "",
                 enabled: true,
             }),
-        );
+        });
     };
 
     const handleEditChannel = (item: AdminChannelItem) => {
-        setEditingChannel({
-            id: item.id,
-            name: item.name,
-            alias: item.alias || "",
-            baseUrl: item.baseUrl,
-            apiKey: "",
-            apiFormat: item.apiFormat,
-            enabled: item.enabled,
-            hasApiKey: item.hasApiKey,
-            apiKeyPreview: item.apiKeyPreview,
-            models: item.models,
+        setEditingState({
+            isNew: false,
+            channel: {
+                id: item.id,
+                name: item.name,
+                alias: item.alias || "",
+                baseUrl: item.baseUrl,
+                apiKey: "",
+                apiFormat: item.apiFormat,
+                enabled: item.enabled,
+                hasApiKey: item.hasApiKey,
+                apiKeyPreview: item.apiKeyPreview,
+                models: item.models,
+            },
         });
     };
 
@@ -220,10 +224,11 @@ export function AdminChannelsPanel() {
             </Card>
 
             <ChannelEditorDrawer
-                open={Boolean(editingChannel)}
-                channel={editingChannel}
+                open={Boolean(editingState)}
+                channel={editingState?.channel ?? null}
+                isNew={editingState?.isNew}
                 onSave={(channel) => void handleSaveChannelDrawer(channel)}
-                onClose={() => setEditingChannel(null)}
+                onClose={() => setEditingState(null)}
                 onFetchModels={async (channel) => {
                     const res = await adminApi.fetchChannelModels({
                         id: channel.id,

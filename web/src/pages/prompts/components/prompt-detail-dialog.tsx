@@ -1,4 +1,5 @@
-import { Copy, FileText, FolderPlus } from "lucide-react";
+import { Check, Copy, FileText, FolderPlus } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
 import { Button, Modal, Space, Tag } from "antd";
 import { useTranslation } from "react-i18next";
 
@@ -6,11 +7,39 @@ import { formatPromptDate, type Prompt } from "@/services/api/prompts";
 
 export function PromptDetailDialog({ prompt, onClose, onCopy, onSaveAsset }: { prompt: Prompt | null; onClose: () => void; onCopy: (prompt: string) => void; onSaveAsset?: (prompt: Prompt) => void }) {
     const { i18n, t } = useTranslation();
+    const contentRef = useRef<HTMLDivElement>(null);
+    const onCloseRef = useRef(onClose);
+    onCloseRef.current = onClose;
+    const [savedKey, setSavedKey] = useState<string | null>(null);
+    const open = Boolean(prompt);
+    const promptKey = prompt ? `${prompt.sourceId}:${prompt.id}` : null;
+    const isSaved = Boolean(promptKey && savedKey === promptKey);
+
+    useEffect(() => {
+        if (!open) return;
+        const raf = requestAnimationFrame(() => {
+            const modal = contentRef.current?.closest<HTMLElement>(".ant-modal");
+            (modal || contentRef.current)?.focus({ preventScroll: true });
+        });
+        const onKeyDown = (event: KeyboardEvent) => {
+            if (event.key !== "Escape" || event.isComposing || event.defaultPrevented) return;
+            const wraps = Array.from(document.querySelectorAll<HTMLElement>(".ant-modal-wrap")).filter((el) => el.style.display !== "none");
+            const ownWrap = contentRef.current?.closest<HTMLElement>(".ant-modal-wrap");
+            if (wraps.length && ownWrap && wraps[wraps.length - 1] !== ownWrap) return;
+            event.preventDefault();
+            onCloseRef.current();
+        };
+        window.addEventListener("keydown", onKeyDown);
+        return () => {
+            cancelAnimationFrame(raf);
+            window.removeEventListener("keydown", onKeyDown);
+        };
+    }, [open]);
 
     return (
-        <Modal title={prompt?.title} open={Boolean(prompt)} onCancel={onClose} footer={null} width={720} centered styles={{ body: { height: "calc(85vh - 55px)", overflow: "hidden" } }}>
+        <Modal title={prompt?.title} open={open} onCancel={onClose} footer={null} width={720} centered keyboard destroyOnHidden styles={{ body: { height: "calc(85vh - 55px)", overflow: "hidden" } }}>
             {prompt ? (
-                <div className="flex h-full min-h-0 flex-col">
+                <div ref={contentRef} className="flex h-full min-h-0 flex-col">
                     <div className="shrink-0 space-y-3 pb-4">
                         {prompt.coverUrl ? <img src={prompt.coverUrl} alt={prompt.title} className="h-48 w-full rounded-lg object-cover sm:h-56" /> : <div className="grid h-48 w-full place-items-center rounded-lg bg-stone-100 text-stone-400 dark:bg-stone-900 dark:text-stone-600 sm:h-56"><FileText className="size-9" /></div>}
                         {prompt.referenceImageUrls.length > 1 ? <div className="grid grid-cols-6 gap-2">{prompt.referenceImageUrls.filter((url) => url !== prompt.coverUrl).slice(0, 6).map((url) => <img key={url} src={url} alt="" className="aspect-square w-full rounded-md object-cover" loading="lazy" />)}</div> : null}
@@ -34,8 +63,14 @@ export function PromptDetailDialog({ prompt, onClose, onCopy, onSaveAsset }: { p
                                 {t("common.copyPrompt")}
                             </Button>
                             {onSaveAsset ? (
-                                <Button icon={<FolderPlus className="size-4" />} onClick={() => onSaveAsset(prompt)}>
-                                    {t("common.addToAssets")}
+                                <Button
+                                    icon={isSaved ? <Check className="size-4" /> : <FolderPlus className="size-4" />}
+                                    onClick={() => {
+                                        onSaveAsset(prompt);
+                                        if (promptKey) setSavedKey(promptKey);
+                                    }}
+                                >
+                                    {t(isSaved ? "common.addedToAssets" : "common.addToAssets")}
                                 </Button>
                             ) : null}
                         </Space>

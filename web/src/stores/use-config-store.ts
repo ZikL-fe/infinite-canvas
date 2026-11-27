@@ -236,7 +236,6 @@ export function modelMatchesCapability(config: AiConfig, value: string, capabili
 
 export function resolveModelForCapability(config: AiConfig, currentModel: string | undefined, capability: ModelCapability) {
     const defaultModel = capability === "image" ? config.imageModel : capability === "video" ? config.videoModel : capability === "audio" ? config.audioModel : config.textModel;
-    const fallbackModel = capability === "image" ? defaultConfig.imageModel : capability === "video" ? defaultConfig.videoModel : capability === "audio" ? defaultConfig.audioModel : defaultConfig.textModel;
     for (const model of [currentModel, defaultModel]) {
         if (!model) continue;
         const configuredCapability = modelCapabilityOf(config, model);
@@ -244,7 +243,7 @@ export function resolveModelForCapability(config: AiConfig, currentModel: string
         // request. Only a known capability switch may choose another model.
         if (!configuredCapability || configuredCapability === capability) return model;
     }
-    return fallbackModel;
+    return "";
 }
 
 export function selectableModelsByCapability(config: AiConfig, capability?: ModelCapability) {
