@@ -1469,7 +1469,8 @@ export default function ImagePage() {
                                                         <Trash2 className="size-3.5" />
                                                     </button>
                                                 </div>
-                                            ))}
+                                                );
+                                            })}
                                             {!references.length ? <div className="flex min-w-full items-center justify-center text-sm text-stone-500">{isReferenceDragActive ? t("imageWorkbench.dropReferences") : t("imageWorkbench.noReferences")}</div> : null}
                                         </div>
                                     </div>

@@ -665,7 +665,8 @@ export default function VideoPage() {
                                                 <Trash2 className="size-3.5" />
                                             </button>
                                         </div>
-                                    ))}
+                                        );
+                                    })}
                                     {!references.length ? <div className="flex min-w-full items-center justify-center text-sm text-stone-500">{referenceDragTarget ? t("videoWorkbench.dropReferences") : t("videoWorkbench.noImages")}</div> : null}
                                 </div>
                             </div>

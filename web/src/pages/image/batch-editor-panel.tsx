@@ -209,7 +209,8 @@ function ImageDropBox({
                             </button>
                         ) : null}
                     </div>
-                ))}
+                    );
+                })}
                 {!images.length ? (
                     <div className="flex min-w-full items-center justify-center text-center text-xs text-stone-500">
                         {dragActive ? t("imageBatch.dropToBatchAdd") : emptyText}
@@ -828,7 +829,8 @@ export function BatchEditorPanel({
                                                         </button>
                                                     ) : null}
                                                 </div>
-                                            ))}
+                                                );
+                                            })}
                                         </div>
                                     ) : null}
                                 </div>
