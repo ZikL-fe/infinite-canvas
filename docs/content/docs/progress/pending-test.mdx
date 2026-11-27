@@ -7,6 +7,10 @@ description: Implemented changes that still need manual verification
 
 The current release needs manual verification in these areas:
 
+- 弱网/大画布进入及媒体节点加载反馈：
+  - 在浏览器开发者工具开启 `Slow 3G` 限速或清除本地缓存后直接刷新进入 `/canvas/:id`，确认云端同步及节点水合期间始终展示居中加载动画与阶段提示（「正在加载画布数据...」/「正在加载画布资源...」），不会空白假死或误跳回画布列表；
+  - 进入画布后观察尚未缓存的云端图片（含多图展开卡片）、视频与音频节点，确认下载/缓冲期间节点内显示加载动画，视频复用缩略图封面且加载或缓冲完成前转圈提示、完成后平滑显隐，本地已缓存媒体不出现多余闪烁；
+  - 断网或模拟单张图片/视频/音频加载失败时，确认节点内展示「资源加载失败」与「重试」按钮，恢复网络后点击「重试」可重新加载而不影响其他节点。
 - 高风险接口限流、验证码并发防护与后台可配置策略：
   - 进入 `/admin?tab=settings-auth`，检查「高风险接口防刷限流」表单默认值展示（总开关开启，登录 `20`、注册 `10`、发送邮箱验证码 `5`、兑换码核销 `10` 次/分钟），修改阈值保存后刷新确认持久化生效；
   - 将某项阈值改为较小值（如登录改为 `2` 次/分钟）或填 `0` 禁用，短时间连续请求 `/api/auth/login`、`/api/auth/register`、`/api/auth/send-register-code`、`/api/auth/forgot-password/send-code`、`/api/account/email/send-code`、`/api/account/change-password/send-code`、`/api/billing/redeem`、`/api/storage/redeem`，确认超限返回 `429` 且携带 `Retry-After` 响应头，同时验证画布同步、媒体上传与 AI 生图/对话并发请求不受限制；

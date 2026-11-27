@@ -1,10 +1,11 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { ReactNode } from "react";
-import { ChevronRight, Copy, Download, Group, Image as ImageIcon, Music2, Puzzle, RefreshCw, Star, Trash2, Video } from "lucide-react";
+import { ChevronRight, Copy, Download, Group, Image as ImageIcon, LoaderCircle, Music2, Puzzle, RefreshCw, Star, Trash2, Video } from "lucide-react";
 
-import { canvasThemes } from "@/lib/canvas-theme";
+import { canvasThemes, type CanvasTheme } from "@/lib/canvas-theme";
 import { formatBytes } from "@/lib/image-utils";
 import { pickImageSource } from "@/lib/image-thumbnail";
+import { getCachedCloudThumbnailUrl } from "@/services/cloud-media";
 import { ensureImagePreview, previewUrlFor, subscribeImagePreviews, getImagePreviewRevision } from "@/services/image-storage";
 import { getNodeDefinition } from "@/lib/canvas/node-registry";
 import { buildNodeContext } from "@/lib/canvas/plugin-node-context";
@@ -707,21 +708,210 @@ function EmptyImageContent({ theme }: NodeContentRendererProps) {
     );
 }
 
+function MediaLoadOverlay({ status, label, theme, onRetry }: { status: "loading" | "error"; label: string; theme: CanvasTheme; onRetry?: () => void }) {
+    const { t } = useTranslation();
+    return (
+        <div
+            className={`absolute inset-0 z-10 flex flex-col items-center justify-center gap-2.5 px-4 text-center ${status === "error" ? "pointer-events-auto" : "pointer-events-none"}`}
+            style={{
+                background: status === "error" ? theme.node.fill : "transparent",
+                color: status === "error" ? theme.node.text : theme.node.activeStroke,
+            }}
+        >
+            {status === "loading" ? (
+                <>
+                    <div className="size-8 animate-spin rounded-full border-2" style={{ borderColor: theme.node.stroke, borderTopColor: theme.node.activeStroke }} />
+                    <span className="text-[11px] font-medium tracking-wide" style={{ color: theme.node.muted }}>
+                        {label}
+                    </span>
+                </>
+            ) : (
+                <>
+                    <span className="text-xs leading-5" style={{ color: theme.node.muted }}>
+                        {label}
+                    </span>
+                    {onRetry ? (
+                        <button
+                            type="button"
+                            className="inline-flex h-8 items-center gap-1.5 rounded-full border px-3 text-xs font-medium transition hover:scale-[1.02]"
+                            style={{ background: theme.toolbar.panel, borderColor: theme.toolbar.border, color: theme.node.text }}
+                            onClick={(event) => {
+                                event.stopPropagation();
+                                onRetry();
+                            }}
+                            onMouseDown={(event) => event.stopPropagation()}
+                            onPointerDown={(event) => event.stopPropagation()}
+                        >
+                            <RefreshCw className="size-3.5" />
+                            {t("canvas.node.retry")}
+                        </button>
+                    ) : null}
+                </>
+            )}
+        </div>
+    );
+}
+
+function NodeMediaImage({
+    src,
+    logicalKey,
+    alt,
+    className,
+    loadingLabel,
+    errorLabel,
+    theme,
+}: {
+    src: string;
+    logicalKey: string;
+    alt: string;
+    className: string;
+    loadingLabel: string;
+    errorLabel: string;
+    theme: CanvasTheme;
+}) {
+    const imgRef = useRef<HTMLImageElement>(null);
+    const loadedKeyRef = useRef("");
+    const [reloadCount, setReloadCount] = useState(0);
+    const [loadState, setLoadState] = useState<{ key: string; status: "loading" | "loaded" | "error" }>({
+        key: `${logicalKey}:0`,
+        status: "loading",
+    });
+
+    const effectiveKey = `${logicalKey}:${reloadCount}`;
+    const isCurrent = loadState.key === effectiveKey;
+    const status = isCurrent ? loadState.status : loadedKeyRef.current === effectiveKey ? "loaded" : "loading";
+
+    useLayoutEffect(() => {
+        const img = imgRef.current;
+        if (img && img.complete && img.naturalWidth > 0) {
+            loadedKeyRef.current = effectiveKey;
+            setLoadState((prev) => (prev.key === effectiveKey && prev.status === "loaded" ? prev : { key: effectiveKey, status: "loaded" }));
+        }
+    }, [effectiveKey, src]);
+
+    return (
+        <div className="relative h-full w-full">
+            {status !== "loaded" ? <div className="absolute inset-0" style={{ background: theme.node.fill }} /> : null}
+            <img
+                ref={imgRef}
+                key={effectiveKey}
+                src={src}
+                alt={alt}
+                decoding="async"
+                draggable={false}
+                onDragStart={(event) => event.preventDefault()}
+                onLoad={() => {
+                    loadedKeyRef.current = effectiveKey;
+                    setLoadState({ key: effectiveKey, status: "loaded" });
+                }}
+                onError={() => {
+                    if (loadedKeyRef.current === effectiveKey) return;
+                    setLoadState({ key: effectiveKey, status: "error" });
+                }}
+                className={`${className} transition-opacity duration-200 ${status === "loaded" ? "opacity-100" : "opacity-0"}`}
+            />
+            {status === "loading" ? <MediaLoadOverlay status="loading" label={loadingLabel} theme={theme} /> : null}
+            {status === "error" ? (
+                <MediaLoadOverlay
+                    status="error"
+                    label={errorLabel}
+                    theme={theme}
+                    onRetry={() => {
+                        loadedKeyRef.current = "";
+                        setReloadCount((count) => count + 1);
+                    }}
+                />
+            ) : null}
+        </div>
+    );
+}
+
 function VideoNodeContent({ node, theme }: NodeContentRendererProps) {
     const { t } = useTranslation();
-    if (!node.metadata?.content)
+    const videoRef = useRef<HTMLVideoElement>(null);
+    const [reloadCount, setReloadCount] = useState(0);
+    const content = node.metadata?.content;
+    const storageKey = node.metadata?.storageKey;
+    const posterUrl = getCachedCloudThumbnailUrl(storageKey);
+    const videoKey = `${storageKey || content || ""}:${reloadCount}`;
+    const [state, setState] = useState<{ key: string; ready: boolean; buffering: boolean; error: boolean }>({
+        key: videoKey,
+        ready: false,
+        buffering: false,
+        error: false,
+    });
+
+    const isCurrent = state.key === videoKey;
+    const ready = isCurrent ? state.ready : false;
+    const buffering = isCurrent ? state.buffering : false;
+    const error = isCurrent ? state.error : false;
+
+    useLayoutEffect(() => {
+        const video = videoRef.current;
+        if (video && video.readyState >= 2) {
+            setState((prev) => (prev.key === videoKey && prev.ready ? prev : { key: videoKey, ready: true, buffering: false, error: false }));
+        }
+    }, [content, videoKey]);
+
+    if (!content)
         return (
             <div className="flex h-full w-full flex-col items-center justify-center gap-3" style={{ color: theme.node.placeholder }}>
                 <Video className="size-7 opacity-35" />
                 <span className="text-sm">{t("canvas.node.emptyVideo")}</span>
             </div>
         );
-    return <video src={node.metadata.content} controls className="h-full w-full rounded-[18px] bg-black object-contain" data-canvas-video={node.id} data-canvas-no-zoom />;
+    return (
+        <div className="relative h-full w-full overflow-hidden rounded-[18px] bg-black">
+            <video
+                key={videoKey}
+                ref={videoRef}
+                src={content}
+                poster={posterUrl}
+                controls
+                onLoadedData={() => setState({ key: videoKey, ready: true, buffering: false, error: false })}
+                onCanPlay={() => setState({ key: videoKey, ready: true, buffering: false, error: false })}
+                onPlaying={() => setState({ key: videoKey, ready: true, buffering: false, error: false })}
+                onWaiting={() => setState((prev) => ({ key: videoKey, ready: prev.key === videoKey ? prev.ready : false, buffering: true, error: false }))}
+                onError={() => setState({ key: videoKey, ready: false, buffering: false, error: true })}
+                className="h-full w-full bg-black object-contain"
+                data-canvas-video={node.id}
+                data-canvas-no-zoom
+            />
+            {error ? (
+                <MediaLoadOverlay status="error" label={t("canvas.node.mediaLoadFailed")} theme={theme} onRetry={() => setReloadCount((count) => count + 1)} />
+            ) : !ready || buffering ? (
+                <MediaLoadOverlay status="loading" label={t("canvas.node.loadingVideo")} theme={theme} />
+            ) : null}
+        </div>
+    );
 }
 
 function AudioNodeContent({ node, theme }: NodeContentRendererProps) {
     const { t } = useTranslation();
-    if (!node.metadata?.content)
+    const audioRef = useRef<HTMLAudioElement>(null);
+    const [reloadCount, setReloadCount] = useState(0);
+    const content = node.metadata?.content;
+    const audioKey = `${node.metadata?.storageKey || content || ""}:${reloadCount}`;
+    const [state, setState] = useState<{ key: string; ready: boolean; buffering: boolean; error: boolean }>({
+        key: audioKey,
+        ready: false,
+        buffering: false,
+        error: false,
+    });
+
+    const isCurrent = state.key === audioKey;
+    const ready = isCurrent ? state.ready : false;
+    const buffering = isCurrent ? state.buffering : false;
+    const error = isCurrent ? state.error : false;
+
+    useLayoutEffect(() => {
+        const audio = audioRef.current;
+        if (audio && audio.readyState >= 2) {
+            setState((prev) => (prev.key === audioKey && prev.ready ? prev : { key: audioKey, ready: true, buffering: false, error: false }));
+        }
+    }, [audioKey, content]);
+
+    if (!content)
         return (
             <div className="flex h-full w-full flex-col items-center justify-center gap-2" style={{ color: theme.node.placeholder }}>
                 <Music2 className="size-7 opacity-35" />
@@ -730,11 +920,41 @@ function AudioNodeContent({ node, theme }: NodeContentRendererProps) {
         );
     return (
         <div className="flex h-full w-full flex-col justify-center gap-3 px-4" style={{ background: theme.node.fill, color: theme.node.text }}>
-            <div className="flex min-w-0 items-center gap-2 text-sm opacity-70">
-                <Music2 className="size-4 shrink-0" />
-                <span className="truncate">{t("canvas.node.audio")}</span>
+            <div className="flex min-w-0 items-center justify-between gap-2 text-sm opacity-80">
+                <div className="flex min-w-0 items-center gap-2">
+                    {error ? null : !ready || buffering ? <LoaderCircle className="size-4 shrink-0 animate-spin" style={{ color: theme.node.activeStroke }} /> : <Music2 className="size-4 shrink-0" />}
+                    <span className="truncate">{error ? t("canvas.node.mediaLoadFailed") : !ready || buffering ? t("canvas.node.loadingAudio") : t("canvas.node.audio")}</span>
+                </div>
+                {error ? (
+                    <button
+                        type="button"
+                        className="inline-flex h-6 shrink-0 items-center gap-1 rounded-full border px-2 text-xs font-medium transition hover:scale-[1.02]"
+                        style={{ background: theme.toolbar.panel, borderColor: theme.toolbar.border, color: theme.node.text }}
+                        onClick={(event) => {
+                            event.stopPropagation();
+                            setReloadCount((count) => count + 1);
+                        }}
+                        onMouseDown={(event) => event.stopPropagation()}
+                        onPointerDown={(event) => event.stopPropagation()}
+                    >
+                        <RefreshCw className="size-3" />
+                        {t("canvas.node.retry")}
+                    </button>
+                ) : null}
             </div>
-            <audio src={node.metadata.content} controls className="w-full" data-canvas-no-zoom />
+            <audio
+                key={audioKey}
+                ref={audioRef}
+                src={content}
+                controls
+                onLoadedData={() => setState({ key: audioKey, ready: true, buffering: false, error: false })}
+                onCanPlay={() => setState({ key: audioKey, ready: true, buffering: false, error: false })}
+                onPlaying={() => setState({ key: audioKey, ready: true, buffering: false, error: false })}
+                onWaiting={() => setState((prev) => ({ key: audioKey, ready: prev.key === audioKey ? prev.ready : false, buffering: true, error: false }))}
+                onError={() => setState({ key: audioKey, ready: false, buffering: false, error: true })}
+                className="w-full"
+                data-canvas-no-zoom
+            />
         </div>
     );
 }
@@ -798,14 +1018,15 @@ function ImageContent({
                       .map((image, index) => <ExpandedImageCard key={image.id} node={node} image={image} index={index} scale={scale} onView={() => onViewBatchImage?.(image.id)} onSetPrimary={() => onSetBatchPrimary?.(image.id)} onDuplicate={() => onDuplicateBatchImage?.(image.id)} onDownload={() => onDownloadBatchImage?.(image.id)} onRetry={() => onRetryBatchImage?.(image.id)} onDelete={() => onDeleteBatchImage?.(image.id)} />)
                 : null}
             <div className="h-full w-full overflow-hidden rounded-3xl">
-                {primaryContent ? (
-                    <img
+                {primaryContent && primarySource ? (
+                    <NodeMediaImage
                         src={primarySource}
+                        logicalKey={primaryStorageKey || primaryContent}
                         alt={node.title}
-                        decoding="async"
-                        draggable={false}
-                        onDragStart={(event) => event.preventDefault()}
                         className={`pointer-events-none block h-full w-full select-none ${node.metadata?.freeResize ? "object-fill" : "object-contain"}`}
+                        loadingLabel={t("canvas.node.loadingImage")}
+                        errorLabel={t("canvas.node.mediaLoadFailed")}
+                        theme={theme}
                     />
                 ) : (
                     <ImageSlotStatus image={primaryImage} />
@@ -895,7 +1116,19 @@ function ExpandedImageCard({ node, image, index, scale, onView, onSetPrimary, on
                 onView();
             }}
         >
-            {image.content ? <img src={source} alt={node.title} decoding="async" draggable={false} className="pointer-events-none h-full w-full select-none object-contain" /> : <ImageSlotStatus image={image} />}
+            {image.content && source ? (
+                <NodeMediaImage
+                    src={source}
+                    logicalKey={image.storageKey || image.content}
+                    alt={node.title}
+                    className="pointer-events-none h-full w-full select-none object-contain"
+                    loadingLabel={t("canvas.node.loadingImage")}
+                    errorLabel={t("canvas.node.mediaLoadFailed")}
+                    theme={theme}
+                />
+            ) : (
+                <ImageSlotStatus image={image} />
+            )}
             {image.content ? (
                 <div className="pointer-events-none absolute inset-x-2 top-2 flex items-center gap-1 opacity-0 transition-opacity duration-150 group-hover/node:pointer-events-auto group-hover/node:opacity-100">
                     <button type="button" className="flex h-8 min-w-0 flex-1 items-center justify-center gap-1 rounded-lg border px-1.5 text-[10px] font-medium shadow-[0_6px_18px_rgba(15,23,42,.16)] backdrop-blur-md transition hover:scale-[1.02]" style={{ background: theme.toolbar.panel, borderColor: theme.toolbar.border, color: theme.toolbar.activeText }} title={t("common.download")} onClick={(event) => (event.stopPropagation(), onDownload())}>

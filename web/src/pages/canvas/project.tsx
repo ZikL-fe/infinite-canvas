@@ -9,7 +9,8 @@ import { requestEdit, requestGeneration, requestImageQuestion } from "@/services
 import { requestAudioGeneration, storeGeneratedAudio } from "@/services/api/audio";
 import { createVideoGenerationTask, isVideoTaskFailed, storeGeneratedVideo, waitForVideoGenerationTask } from "@/services/api/video";
 import { defaultConfig, useConfigStore, useEffectiveConfig } from "@/stores/use-config-store";
-import { deleteCanvasProjectsWithCloud, ensureRuntimeConfigForGeneration, flushPendingCanvasSyncs } from "@/services/cloud-sync";
+import { deleteCanvasProjectsWithCloud, ensureRuntimeConfigForGeneration, flushPendingCanvasSyncs, syncCloudWorkspace } from "@/services/cloud-sync";
+import { isCloudAuthenticated, isCloudSyncHydrated } from "@/services/cloud-media";
 import { ensureImagePreview, uploadImage } from "@/services/image-storage";
 import { uploadMediaFile, type UploadedFile } from "@/services/file-storage";
 import { nanoid } from "nanoid";
@@ -273,6 +274,7 @@ function InfiniteCanvasPage() {
     const [clearConfirmOpen, setClearConfirmOpen] = useState(false);
     const [assetPickerOpen, setAssetPickerOpen] = useState(false);
     const [projectLoaded, setProjectLoaded] = useState(false);
+    const [loadingPhase, setLoadingPhase] = useState<"data" | "media">("data");
     const [toolbarNodeId, setToolbarNodeId] = useState<string | null>(null);
     const [nodeImageSettingsOpen, setNodeImageSettingsOpen] = useState(false);
     const [dialogNodeId, setDialogNodeId] = useState<string | null>(null);
@@ -485,15 +487,10 @@ function InfiniteCanvasPage() {
     useEffect(() => {
         if (!hydrated) return;
         setProjectLoaded(false);
-        const project = openProject(projectId);
-        if (!project) {
-            navigate("/canvas", { replace: true });
-            return;
-        }
+        setLoadingPhase("data");
 
         let cancelled = false;
         let recoveryTimer: ReturnType<typeof setTimeout> | null = null;
-        lastSyncedAtRef.current = project.updatedAt;
         const startPolling = (initialProcessingIds: string[]) => {
             if (recoveryTimer) {
                 clearTimeout(recoveryTimer);
@@ -537,7 +534,8 @@ function InfiniteCanvasPage() {
                 : recovered.processingTaskIds;
             return { finalNodes, processingTaskIds };
         };
-        const restore = async (targetProject = project) => {
+        const restore = async (targetProject: NonNullable<ReturnType<typeof openProject>>) => {
+            setLoadingPhase("media");
             let workingNodes = targetProject.nodes;
             let workingConnections = targetProject.connections;
             let activeIds = getActiveGenerationNodeIds(projectId);
@@ -597,7 +595,22 @@ function InfiniteCanvasPage() {
             }
         };
         window.addEventListener("infinite-canvas:cloud-workspace-synced", onCloudSynced);
-        void restore();
+
+        const init = async () => {
+            let project = openProject(projectId);
+            if (!project && isCloudAuthenticated() && !isCloudSyncHydrated()) {
+                await syncCloudWorkspace().catch(() => undefined);
+                if (cancelled) return;
+                project = openProject(projectId);
+            }
+            if (!project) {
+                navigate("/canvas", { replace: true });
+                return;
+            }
+            lastSyncedAtRef.current = project.updatedAt;
+            await restore(project);
+        };
+        void init();
         return () => {
             cancelled = true;
             window.removeEventListener("infinite-canvas:cloud-workspace-synced", onCloudSynced);
@@ -3405,7 +3418,9 @@ function InfiniteCanvasPage() {
     }
     const retainedPreview = retainedPreviewRef.current;
 
-    if (!projectLoaded) return <CanvasRefreshShell />;
+    if (!projectLoaded) {
+        return <CanvasRefreshShell message={loadingPhase === "media" ? t("canvas.projectPage.loadingMedia") : t("canvas.projectPage.loadingData")} />;
+    }
 
     return (
         <main className="flex h-full min-h-0 overflow-hidden" style={{ background: theme.canvas.background, color: theme.node.text }}>
