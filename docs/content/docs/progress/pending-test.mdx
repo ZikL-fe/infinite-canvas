@@ -7,6 +7,9 @@ description: Implemented changes that still need manual verification
 
 The current release needs manual verification in these areas:
 
+- 生图工作台、视频创作台、成果页与我的资产媒体加载动画与失败重试：
+  - 在浏览器 DevTools 开启 `Slow 3G` 限速或清除图片缓存后，依次打开生图工作台（参考图、批量槽位图、历史缩略图与生成结果图）、视频创作台（参考图与视频播放器）、成果页（列表缩略图与详情抽屉原图/原视频）及我的资产（卡片封面、编辑预览与详情抽屉原图/原视频），确认图片/视频尚未加载完成时均展示与画布节点一致的加载动画，已缓存资源无闪烁，加载失败时显示错误提示与「重试」按钮且点击可重新拉取。
+
 - 后台管理与个人中心嵌套子路由、面板懒加载与 Vite 分包缓存：
   - 分别使用管理员与普通用户登录进入后台，确认左侧导航与顶部栏保持常驻，点击各菜单项时 URL 切换为对应子路由（如 `/admin/overview`、`/admin/dashboard`、`/admin/users`、`/admin/channels`、`/admin/settings-auth` 或 `/console/user-overview`、`/console/my-media`），且支持浏览器前进/后退切换；
   - 访问旧版链接（如 `/admin?tab=users`、`/console?tab=my-media`、`/config`）以及跨角色访问（管理员访问 `/console/*`、普通用户访问 `/admin/*`），确认能正确自动重定向并保留权限兜底；

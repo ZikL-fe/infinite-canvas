@@ -6,6 +6,7 @@ import { useTranslation } from "react-i18next";
 
 import { ImageSettingsPanel } from "@/components/image-settings-panel";
 import { CloudQuotaTag } from "@/components/layout/cloud-quota-tag";
+import { LoadingImage, MediaLoadBox } from "@/components/loading-media";
 import { ModelPicker } from "@/components/model-picker";
 import { PromptSelectDialog } from "@/components/prompts/prompt-select-dialog";
 import { AssetPickerModal, type InsertAssetPayload } from "@/components/canvas/asset-picker-modal";
@@ -1444,10 +1445,20 @@ export default function ImagePage() {
                                                 event.currentTarget.scrollLeft += event.deltaY;
                                             }}
                                         >
-                                            {references.map((item, index) => (
-                                                <div key={item.id} className="group relative size-20 shrink-0 overflow-hidden rounded-md border border-stone-200 dark:border-stone-800">
-                                                    <img src={previewUrlFor(item.storageKey) || item.dataUrl} alt={item.name} loading="lazy" decoding="async" className="size-full object-cover" />
-                                                    <span className="absolute left-1 top-1 rounded bg-black/60 px-1.5 py-0.5 text-[10px] font-medium text-white">{imageReferenceLabel(index)}</span>
+                                            {references.map((item, index) => {
+                                                const refSrc = previewUrlFor(item.storageKey) || item.dataUrl;
+                                                return (
+                                                    <div key={item.id} className="group relative size-20 shrink-0 overflow-hidden rounded-md border border-stone-200 dark:border-stone-800">
+                                                        <LoadingImage
+                                                            src={refSrc}
+                                                            pending={Boolean(item.storageKey && !refSrc)}
+                                                            alt={item.name}
+                                                            compact
+                                                            containerClassName="size-full"
+                                                            className="size-full object-cover"
+                                                            loading="lazy"
+                                                        />
+                                                        <span className="absolute left-1 top-1 rounded bg-black/60 px-1.5 py-0.5 text-[10px] font-medium text-white">{imageReferenceLabel(index)}</span>
                                                     <ReferenceOrderButtons index={index} total={references.length} onMove={(offset) => setReferences((value) => moveListItem(value, index, offset))} />
                                                     <button
                                                         type="button"
@@ -1617,15 +1628,21 @@ export default function ImagePage() {
                                                         <Tag className="m-0 shrink-0" color="blue">
                                                             #{group.index + 1}
                                                         </Tag>
-                                                        {group.references.slice(0, 4).map((ref, refIdx) => (
-                                                            <img
-                                                                key={ref.id}
-                                                                src={previewUrlFor(ref.storageKey) || ref.dataUrl}
-                                                                alt={ref.name}
-                                                                title={`${imageReferenceLabel(refIdx)}: ${ref.name}`}
-                                                                className="size-7 shrink-0 rounded border border-stone-200 object-cover dark:border-stone-700"
-                                                            />
-                                                        ))}
+                                                        {group.references.slice(0, 4).map((ref, refIdx) => {
+                                                            const refSrc = previewUrlFor(ref.storageKey) || ref.dataUrl;
+                                                            return (
+                                                                <LoadingImage
+                                                                    key={ref.id}
+                                                                    src={refSrc}
+                                                                    pending={Boolean(ref.storageKey && !refSrc)}
+                                                                    alt={ref.name}
+                                                                    title={`${imageReferenceLabel(refIdx)}: ${ref.name}`}
+                                                                    compact
+                                                                    containerClassName="size-7 shrink-0 rounded border border-stone-200 dark:border-stone-700"
+                                                                    className="size-full object-cover"
+                                                                />
+                                                            );
+                                                        })}
                                                         {group.references.length > 4 ? (
                                                             <Tag className="m-0 shrink-0">+{group.references.length - 4}</Tag>
                                                         ) : null}
@@ -1675,14 +1692,25 @@ export default function ImagePage() {
                                                 </Tag>
                                                 {task.references.length ? (
                                                     <div className="flex shrink-0 items-center gap-1.5">
-                                                        {task.references.map((ref, refIdx) => (
-                                                            <div key={`${ref.id}-${refIdx}`} className="relative size-11 overflow-hidden rounded border border-stone-200 dark:border-stone-700">
-                                                                <img src={previewUrlFor(ref.storageKey) || ref.dataUrl} alt={ref.name} loading="lazy" decoding="async" className="size-full object-cover" />
-                                                                <span className="absolute left-0.5 top-0.5 rounded bg-black/65 px-1 text-[9px] text-white">
-                                                                    {imageReferenceLabel(refIdx)}
-                                                                </span>
-                                                            </div>
-                                                        ))}
+                                                        {task.references.map((ref, refIdx) => {
+                                                            const refSrc = previewUrlFor(ref.storageKey) || ref.dataUrl;
+                                                            return (
+                                                                <div key={`${ref.id}-${refIdx}`} className="relative size-11 overflow-hidden rounded border border-stone-200 dark:border-stone-700">
+                                                                    <LoadingImage
+                                                                        src={refSrc}
+                                                                        pending={Boolean(ref.storageKey && !refSrc)}
+                                                                        alt={ref.name}
+                                                                        compact
+                                                                        containerClassName="size-full"
+                                                                        className="size-full object-cover"
+                                                                        loading="lazy"
+                                                                    />
+                                                                    <span className="absolute left-0.5 top-0.5 rounded bg-black/65 px-1 text-[9px] text-white">
+                                                                        {imageReferenceLabel(refIdx)}
+                                                                    </span>
+                                                                </div>
+                                                            );
+                                                        })}
                                                     </div>
                                                 ) : (
                                                     <Tag className="m-0 shrink-0">{t("imageBatch.textToImageTag")}</Tag>
@@ -1831,6 +1859,7 @@ function ResultImageCard({
     const [saving, setSaving] = useState(false);
     const [addingRef, setAddingRef] = useState(false);
     const previewSrc = previewUrlFor(image.storageKey);
+    const displaySrc = previewSrc || image.dataUrl;
     useEffect(() => {
         if (image.storageKey && !previewSrc) {
             void ensureImagePreview(image.storageKey);
@@ -1838,7 +1867,18 @@ function ResultImageCard({
     }, [image.storageKey, previewSrc]);
     return (
         <div className="overflow-hidden rounded-lg border border-stone-200 bg-background dark:border-stone-800">
-            <Image src={previewSrc || image.dataUrl} preview={{ src: image.dataUrl }} alt={t("imageWorkbench.resultAlt", { count: index + 1 })} className="aspect-square object-cover" />
+            {displaySrc ? (
+                <Image
+                    src={displaySrc}
+                    preview={{ src: image.dataUrl || displaySrc }}
+                    alt={t("imageWorkbench.resultAlt", { count: index + 1 })}
+                    rootClassName="block aspect-square w-full overflow-hidden"
+                    className="h-full w-full object-cover"
+                    placeholder={<MediaLoadBox kind="image" className="aspect-square w-full" />}
+                />
+            ) : (
+                <MediaLoadBox kind="image" className="aspect-square w-full" />
+            )}
             <div className="space-y-2 border-t border-stone-200 px-3 py-2.5 dark:border-stone-800">
                 <div className="flex min-w-0 gap-x-2 gap-y-1 text-xs text-stone-500 dark:text-stone-400">
                     <span>
@@ -2062,8 +2102,16 @@ function LogCard({ log, selected, active, onSelectedChange, onClick }: { log: Ge
                             <div className="mt-2 flex gap-1 overflow-hidden">
                                 {thumbnails.map((image) => {
                                     const thumbSrc = previewUrlFor(image.storageKey) || (!image.storageKey ? image.dataUrl : "");
-                                    return thumbSrc ? (
-                                        <img key={image.id} src={thumbSrc} alt="" loading="lazy" decoding="async" className="size-8 shrink-0 rounded-md object-cover" />
+                                    return thumbSrc || image.storageKey ? (
+                                        <LoadingImage
+                                            key={image.id}
+                                            src={thumbSrc}
+                                            pending={!thumbSrc && Boolean(image.storageKey)}
+                                            compact
+                                            containerClassName="size-8 shrink-0 rounded-md"
+                                            className="size-full object-cover"
+                                            loading="lazy"
+                                        />
                                     ) : (
                                         <div key={image.id} className="size-8 shrink-0 rounded-md bg-stone-100 dark:bg-stone-800" />
                                     );

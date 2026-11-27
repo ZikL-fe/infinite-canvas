@@ -5,6 +5,7 @@ import { AudioLines, CheckSquare, Copy, Download, Eye, FolderPlus, HardDrive, Im
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
 
+import { LoadingImage, LoadingVideo, MediaLoadBox } from "@/components/loading-media";
 import { useBatchZipDownload } from "@/hooks/use-batch-zip-download";
 import { useCopyText } from "@/hooks/use-copy-text";
 import { createImageThumbnail, createVideoThumbnail } from "@/lib/image-thumbnail";
@@ -498,7 +499,13 @@ export default function ResultsPage() {
                                                                 className="group relative block aspect-[4/3] w-full cursor-pointer overflow-hidden bg-stone-100 dark:bg-stone-900"
                                                                 onClick={() => void handleOpenPreview(item)}
                                                             >
-                                                                <img src={thumbSrc} alt={promptText || item.objectKey} loading="lazy" decoding="async" className="h-full w-full object-cover transition group-hover:scale-[1.02]" />
+                                                                <LoadingImage
+                                                                    src={thumbSrc}
+                                                                    alt={promptText || item.objectKey}
+                                                                    containerClassName="h-full w-full"
+                                                                    className="h-full w-full object-cover transition group-hover:scale-[1.02]"
+                                                                    loading="lazy"
+                                                                />
                                                             </button>
                                                         ) : (
                                                             <button
@@ -517,7 +524,13 @@ export default function ResultsPage() {
                                                             onClick={() => void handleOpenPreview(item)}
                                                         >
                                                             {thumbSrc ? (
-                                                                <img src={thumbSrc} alt={promptText || item.objectKey} loading="lazy" decoding="async" className="h-full w-full object-cover opacity-85 transition group-hover:scale-[1.02]" />
+                                                                <LoadingImage
+                                                                    src={thumbSrc}
+                                                                    alt={promptText || item.objectKey}
+                                                                    containerClassName="h-full w-full"
+                                                                    className="h-full w-full object-cover opacity-85 transition group-hover:scale-[1.02]"
+                                                                    loading="lazy"
+                                                                />
                                                             ) : (
                                                                 <Video className="size-8 text-stone-400" />
                                                             )}
@@ -655,10 +668,22 @@ export default function ResultsPage() {
                               <div className="space-y-5">
                                   {previewItem.kind === "image" ? (
                                       <div className="overflow-hidden rounded-lg bg-stone-100 dark:bg-stone-900">
-                                          <Image src={previewOriginalUrl} preview={{ src: previewOriginalUrl }} alt={drawerPrompt || previewItem.objectKey} className="max-h-[420px] w-full object-contain" />
+                                          <Image
+                                              src={previewOriginalUrl}
+                                              preview={{ src: previewOriginalUrl }}
+                                              alt={drawerPrompt || previewItem.objectKey}
+                                              rootClassName="block w-full"
+                                              className="max-h-[420px] w-full object-contain"
+                                              placeholder={<MediaLoadBox kind="image" className="h-64 w-full" />}
+                                          />
                                       </div>
                                   ) : previewItem.kind === "video" ? (
-                                      <video src={previewOriginalUrl} controls autoPlay className="aspect-video w-full rounded-lg bg-black" />
+                                      <LoadingVideo
+                                          src={previewOriginalUrl}
+                                          autoPlay
+                                          containerClassName="aspect-video w-full overflow-hidden rounded-lg bg-black"
+                                          className="aspect-video w-full bg-black"
+                                      />
                                   ) : previewItem.kind === "audio" ? (
                                       <div className="flex flex-col items-center gap-4 rounded-lg border border-stone-200 bg-stone-50 p-6 dark:border-stone-800 dark:bg-stone-900">
                                           <AudioLines className="size-10 text-stone-400" />

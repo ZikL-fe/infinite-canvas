@@ -5,6 +5,7 @@ import { saveAs } from "file-saver";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
 
+import { LoadingImage, LoadingVideo, MediaLoadBox } from "@/components/loading-media";
 import { useBatchZipDownload } from "@/hooks/use-batch-zip-download";
 import { useCopyText } from "@/hooks/use-copy-text";
 import { formatBytes, formatStoragePair, readFileAsDataUrl } from "@/lib/image-utils";
@@ -591,7 +592,7 @@ export default function AssetsPage() {
                         <Typography.Text strong>{t("assets.preview")}</Typography.Text>
                         <div className="mt-3 overflow-hidden rounded-lg border border-stone-200 bg-background dark:border-stone-800">
                             {coverUrl || imageDraft?.dataUrl ? (
-                                <img src={coverUrl || imageDraft?.dataUrl} alt="" className="aspect-[4/3] w-full object-cover" />
+                                <LoadingImage src={coverUrl || imageDraft?.dataUrl} alt="" containerClassName="aspect-[4/3] w-full" className="h-full w-full object-cover" />
                             ) : (
                                 <div className="flex aspect-[4/3] items-center justify-center bg-stone-100 p-5 text-center text-sm text-stone-500 dark:bg-stone-900">{content || t("assets.noCover")}</div>
                             )}
@@ -685,8 +686,15 @@ function AssetCard({ asset, selected, downloading, onSelectedChange, onOpen, onE
                         <Checkbox checked={selected} onChange={(event) => onSelectedChange(event.target.checked)} />
                     </div>
                     <button type="button" className="block w-full text-left" onClick={onOpen}>
-                        {cover ? (
-                            <img src={cover} alt={asset.title} loading="lazy" decoding="async" className="aspect-[4/3] w-full object-cover" />
+                        {cover || (asset.kind === "image" && storageKey && !previewReady) ? (
+                            <LoadingImage
+                                src={cover}
+                                pending={!cover && Boolean(storageKey)}
+                                alt={asset.title}
+                                containerClassName="aspect-[4/3] w-full"
+                                className="h-full w-full object-cover"
+                                loading="lazy"
+                            />
                         ) : (
                             <div className="flex aspect-[4/3] items-center justify-center bg-stone-100 p-5 text-center text-sm leading-6 text-stone-600 dark:bg-stone-900 dark:text-stone-300">{asset.kind === "text" ? asset.data.content : t("assets.noCover")}</div>
                         )}
@@ -749,12 +757,20 @@ function AssetDrawer({ asset, downloading, onClose, onCopy, onDownload }: { asse
     const { t } = useTranslation();
     useSyncExternalStore(subscribeImagePreviews, getImagePreviewRevision);
     const cover = asset ? asset.coverUrl || (asset.kind === "image" ? asset.data.dataUrl : "") : "";
+    const displayCover = asset ? assetCoverUrl(asset) || cover : "";
     return (
         <Drawer title={t("assets.details")} open={Boolean(asset)} size="large" onClose={onClose}>
             {asset ? (
                 <div className="space-y-5">
-                    {cover ? (
-                        <Image src={assetCoverUrl(asset)} preview={{ src: cover }} alt={asset.title} className="rounded-lg" />
+                    {displayCover ? (
+                        <Image
+                            src={displayCover}
+                            preview={{ src: cover || displayCover }}
+                            alt={asset.title}
+                            rootClassName="block w-full overflow-hidden rounded-lg"
+                            className="w-full rounded-lg"
+                            placeholder={<MediaLoadBox kind="image" className="aspect-[4/3] w-full rounded-lg" />}
+                        />
                     ) : (
                         <div className="rounded-lg border border-stone-200 bg-stone-50 p-5 text-sm leading-6 text-stone-600 dark:border-stone-800 dark:bg-stone-900 dark:text-stone-300">{asset.kind === "text" ? asset.data.content : t("assets.noCover")}</div>
                     )}
@@ -776,7 +792,11 @@ function AssetDrawer({ asset, downloading, onClose, onCopy, onDownload }: { asse
                         {asset.kind === "text" ? (
                             <Typography.Paragraph className="mt-2 whitespace-pre-wrap">{asset.data.content}</Typography.Paragraph>
                         ) : asset.kind === "video" ? (
-                            <video src={asset.data.url} controls className="mt-2 aspect-video w-full rounded-lg bg-black" />
+                            <LoadingVideo
+                                src={asset.data.url}
+                                containerClassName="mt-2 aspect-video w-full overflow-hidden rounded-lg bg-black"
+                                className="aspect-video w-full bg-black"
+                            />
                         ) : (
                             <Typography.Text className="mt-2 block">
                                 {asset.data.width}x{asset.data.height} · {formatBytes(asset.data.bytes)} · {asset.data.mimeType}

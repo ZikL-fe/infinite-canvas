@@ -5,6 +5,7 @@ import { ArrowLeft, ArrowRight, BookOpen, ClipboardPaste, Copy, Eraser, FolderPl
 import { nanoid } from "nanoid";
 import { Trans, useTranslation } from "react-i18next";
 
+import { LoadingImage } from "@/components/loading-media";
 import { imageReferenceLabel } from "@/lib/image-reference-prompt";
 import { previewUrlFor, uploadImage } from "@/services/image-storage";
 import type { ReferenceImage } from "@/types/image";
@@ -163,10 +164,20 @@ function ImageDropBox({
                     void handleFiles(event.dataTransfer.files);
                 }}
             >
-                {images.map((item, idx) => (
-                    <div key={item.id} className="group relative size-16 shrink-0 overflow-hidden rounded border border-stone-200 dark:border-stone-700">
-                        <img src={previewUrlFor(item.storageKey) || item.dataUrl} alt={item.name} loading="lazy" decoding="async" className="size-full object-cover" />
-                        <span className="absolute left-0.5 top-0.5 rounded bg-black/65 px-1 text-[10px] font-medium text-white">
+                {images.map((item, idx) => {
+                    const itemSrc = previewUrlFor(item.storageKey) || item.dataUrl;
+                    return (
+                        <div key={item.id} className="group relative size-16 shrink-0 overflow-hidden rounded border border-stone-200 dark:border-stone-700">
+                            <LoadingImage
+                                src={itemSrc}
+                                pending={Boolean(item.storageKey && !itemSrc)}
+                                alt={item.name}
+                                compact
+                                containerClassName="size-full"
+                                className="size-full object-cover"
+                                loading="lazy"
+                            />
+                            <span className="absolute left-0.5 top-0.5 rounded bg-black/65 px-1 text-[10px] font-medium text-white">
                             {showOrdinal ? `#${idx + 1}` : imageReferenceLabel(idx)}
                         </span>
                         {images.length > 1 && !disabled ? (
@@ -780,16 +791,21 @@ export function BatchEditorPanel({
 
                                     {denseRefs.length ? (
                                         <div className="hover-scrollbar mt-2 flex gap-1.5 overflow-x-auto pb-1">
-                                            {denseRefs.map((ref, refIdx) => (
-                                                <div
-                                                    key={ref.id}
-                                                    className="group relative size-14 shrink-0 overflow-hidden rounded border border-stone-200 dark:border-stone-700"
-                                                >
-                                                    <img
-                                                        src={previewUrlFor(ref.storageKey) || ref.dataUrl}
-                                                        alt={ref.name}
-                                                        className="size-full object-cover"
-                                                    />
+                                            {denseRefs.map((ref, refIdx) => {
+                                                const refSrc = previewUrlFor(ref.storageKey) || ref.dataUrl;
+                                                return (
+                                                    <div
+                                                        key={ref.id}
+                                                        className="group relative size-14 shrink-0 overflow-hidden rounded border border-stone-200 dark:border-stone-700"
+                                                    >
+                                                        <LoadingImage
+                                                            src={refSrc}
+                                                            pending={Boolean(ref.storageKey && !refSrc)}
+                                                            alt={ref.name}
+                                                            compact
+                                                            containerClassName="size-full"
+                                                            className="size-full object-cover"
+                                                        />
                                                     <span className="absolute left-0.5 top-0.5 rounded bg-black/65 px-1 text-[10px] text-white">
                                                         {imageReferenceLabel(refIdx)}
                                                     </span>

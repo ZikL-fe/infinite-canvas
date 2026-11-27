@@ -7,6 +7,7 @@ import { useTranslation } from "react-i18next";
 
 import { AssetPickerModal, type InsertAssetPayload } from "@/components/canvas/asset-picker-modal";
 import { CloudQuotaTag } from "@/components/layout/cloud-quota-tag";
+import { LoadingImage, LoadingVideo } from "@/components/loading-media";
 import { ModelPicker } from "@/components/model-picker";
 import { PromptSelectDialog } from "@/components/prompts/prompt-select-dialog";
 import { VideoSettingsPanel, normalizeVideoResolutionValue, normalizeVideoSizeValue, videoModeLabel, videoSizeLabel } from "@/components/video-settings-panel";
@@ -645,10 +646,20 @@ export default function VideoPage() {
                                     onDragLeave={handleReferenceDragLeave}
                                     onDrop={handleReferenceDrop}
                                 >
-                                    {references.map((item, index) => (
-                                        <div key={item.id} className="group relative size-20 shrink-0 overflow-hidden rounded-md border border-stone-200 dark:border-stone-800">
-                                            <img src={previewUrlFor(item.storageKey) || item.dataUrl} alt={item.name} loading="lazy" decoding="async" className="size-full object-cover" />
-                                            <span className="absolute left-1 top-1 rounded bg-black/60 px-1.5 py-0.5 text-[10px] font-medium text-white">{index + 1}</span>
+                                    {references.map((item, index) => {
+                                        const refSrc = previewUrlFor(item.storageKey) || item.dataUrl;
+                                        return (
+                                            <div key={item.id} className="group relative size-20 shrink-0 overflow-hidden rounded-md border border-stone-200 dark:border-stone-800">
+                                                <LoadingImage
+                                                    src={refSrc}
+                                                    pending={Boolean(item.storageKey && !refSrc)}
+                                                    alt={item.name}
+                                                    compact
+                                                    containerClassName="size-full"
+                                                    className="size-full object-cover"
+                                                    loading="lazy"
+                                                />
+                                                <span className="absolute left-1 top-1 rounded bg-black/60 px-1.5 py-0.5 text-[10px] font-medium text-white">{index + 1}</span>
                                             <ReferenceOrderButtons index={index} total={references.length} onMove={(offset) => setReferences((value) => moveListItem(value, index, offset))} />
                                             <button type="button" className="absolute right-1 top-1 hidden size-6 items-center justify-center rounded bg-black/60 text-white group-hover:flex" onClick={() => setReferences((value) => value.filter((ref) => ref.id !== item.id))} aria-label={t("videoWorkbench.removeImage")}>
                                                 <Trash2 className="size-3.5" />
@@ -759,7 +770,13 @@ function ResultVideoCard({ video, onDownload, onSaveAsset }: { video: GeneratedV
     const { t } = useTranslation();
     return (
         <div className="overflow-hidden rounded-lg border border-stone-200 bg-background dark:border-stone-800">
-            <video src={video.url} controls className="aspect-video w-full bg-black object-contain" />
+            <LoadingVideo
+                src={video.url}
+                pending={Boolean(video.storageKey && !video.url)}
+                poster={previewUrlFor(video.storageKey)}
+                containerClassName="aspect-video w-full bg-black"
+                className="aspect-video w-full bg-black object-contain"
+            />
             <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 border-t border-stone-200 px-3 py-2.5 dark:border-stone-800">
                 <div className="flex min-w-0 flex-wrap gap-x-2 gap-y-1 text-xs text-stone-500 dark:text-stone-400">
                     <span>
