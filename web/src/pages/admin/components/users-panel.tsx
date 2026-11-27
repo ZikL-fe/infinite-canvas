@@ -363,6 +363,47 @@ export function AdminUsersPanel() {
                                 ),
                         },
                         {
+                            title: t("admin.usersTab.colInviter"),
+                            key: "invitedBy",
+                            width: 175,
+                            render: (_, record) => {
+                                const inviter = record.invitedBy;
+                                if (!inviter) {
+                                    return <Typography.Text type="secondary">—</Typography.Text>;
+                                }
+                                const label = inviter.username ? `@${inviter.username}` : inviter.id;
+                                const tooltipText = [
+                                    inviter.displayName,
+                                    inviter.username ? `@${inviter.username}` : null,
+                                    `ID: ${inviter.id}`,
+                                ]
+                                    .filter(Boolean)
+                                    .join(" · ");
+                                return (
+                                    <Space size={4}>
+                                        <Tooltip title={tooltipText}>
+                                            <button
+                                                type="button"
+                                                className="max-w-[130px] cursor-pointer truncate border-0 bg-transparent p-0 text-left text-xs font-medium hover:underline"
+                                                onClick={() => setDetailUserId(inviter.id)}
+                                            >
+                                                {label}
+                                            </button>
+                                        </Tooltip>
+                                        <Tooltip title={t("admin.usersTab.copyInviterId", { id: inviter.id })}>
+                                            <Button
+                                                size="small"
+                                                type="text"
+                                                icon={<Copy className="size-3" />}
+                                                className="!h-5 !w-5 !min-w-0 !p-0"
+                                                onClick={() => copyText(inviter.id, t("admin.usersTab.copiedInviterId"))}
+                                            />
+                                        </Tooltip>
+                                    </Space>
+                                );
+                            },
+                        },
+                        {
                             title: t("admin.usersTab.colRole"),
                             dataIndex: "role",
                             width: 85,

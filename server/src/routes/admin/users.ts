@@ -110,6 +110,7 @@ adminUsersRoutes.get("/users", async (c) => {
         storageQuotaBytes: true,
         storageQuotaExpiresAt: true,
         webdavConfig: true,
+        invitedByUserId: true,
         lastLoginAt: true,
         createdAt: true,
       },
@@ -119,7 +120,8 @@ adminUsersRoutes.get("/users", async (c) => {
   ]);
 
   const userIds = rows.map((row) => row.id);
-  const [mediaCounts, projectCounts, wallets, quotaMap] = userIds.length
+  const inviterIds = [...new Set(rows.map((row) => row.invitedByUserId).filter((id): id is string => Boolean(id)))];
+  const [mediaCounts, projectCounts, wallets, quotaMap, inviters] = userIds.length
     ? await Promise.all([
         db
           .select({ userId: mediaObjects.userId, count: count() })
@@ -136,12 +138,19 @@ adminUsersRoutes.get("/users", async (c) => {
           .from(creditWallets)
           .where(inArray(creditWallets.userId, userIds)),
         getUsersStorageQuotaMap(rows),
+        inviterIds.length
+          ? db.query.users.findMany({
+              where: inArray(users.id, inviterIds),
+              columns: { id: true, username: true, displayName: true },
+            })
+          : [],
       ])
-    : [[], [], [], new Map()];
+    : [[], [], [], new Map(), []];
 
   const mediaMap = new Map(mediaCounts.map((item) => [item.userId, Number(item.count)]));
   const projectMap = new Map(projectCounts.map((item) => [item.userId, Number(item.count)]));
   const walletMap = new Map(wallets.map((item) => [item.userId, roundCredits(item.balance)]));
+  const inviterMap = new Map(inviters.map((item) => [item.id, item]));
 
   return c.json({
     items: rows.map((row) => {
@@ -149,6 +158,7 @@ adminUsersRoutes.get("/users", async (c) => {
       return {
         ...row,
         isInitialAdmin: row.id === initialAdminId,
+        invitedBy: row.invitedByUserId ? (inviterMap.get(row.invitedByUserId) ?? null) : null,
         storageQuotaBytes: quota?.storageQuotaBytes ?? row.storageQuotaBytes,
         storageQuotaExpiresAt: quota?.storageQuotaExpiresAt
           ? quota.storageQuotaExpiresAt.toISOString()
@@ -204,6 +214,7 @@ adminUsersRoutes.get("/users/:id/detail", async (c) => {
       storageCleanedAt: true,
       lowBalanceAlertEnabled: true,
       lowBalanceThreshold: true,
+      invitedByUserId: true,
       lastLoginAt: true,
       createdAt: true,
       updatedAt: true,
@@ -215,6 +226,7 @@ adminUsersRoutes.get("/users/:id/detail", async (c) => {
 
   const [
     initialAdminId,
+    inviterRow,
     creditBalance,
     consumption,
     quotaSummary,
@@ -229,6 +241,12 @@ adminUsersRoutes.get("/users/:id/detail", async (c) => {
     sessionRows,
   ] = await Promise.all([
     getInitialAdminUserId(),
+    target.invitedByUserId
+      ? db.query.users.findFirst({
+          where: eq(users.id, target.invitedByUserId),
+          columns: { id: true, username: true, displayName: true },
+        })
+      : null,
     getWalletBalance(targetId),
     queryConsumptionMetrics(days, targetId),
     getUserStorageQuotaSummary(target),
@@ -283,6 +301,7 @@ adminUsersRoutes.get("/users/:id/detail", async (c) => {
     user: {
       ...target,
       isInitialAdmin: target.id === initialAdminId,
+      invitedBy: inviterRow ?? null,
       creditBalance,
       storageQuotaBytes: quotaSummary.storageQuotaBytes,
       storageQuotaExpiresAt: quotaSummary.storageQuotaExpiresAt ? quotaSummary.storageQuotaExpiresAt.toISOString() : null,

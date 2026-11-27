@@ -195,8 +195,15 @@ export type StorageQuotaDetail = {
     grants: StorageGrantItem[];
 };
 
+export type AdminUserInviter = {
+    id: string;
+    username: string | null;
+    displayName: string | null;
+};
+
 export type AdminUserItem = LocalUser & {
     isInitialAdmin?: boolean;
+    invitedBy?: AdminUserInviter | null;
     baseStorageQuotaBytes?: number;
     baseStorageQuotaExpiresAt?: string | null;
     storageGrantsQuotaBytes?: number;

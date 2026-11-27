@@ -410,6 +410,24 @@ export function UserDetailDrawer({
                                                 <Descriptions.Item label={t("userDetail.fields.lastLoginAt")}>
                                                     {u.lastLoginAt ? new Date(u.lastLoginAt).toLocaleString(locale) : t("userDetail.fields.noRecord")}
                                                 </Descriptions.Item>
+                                                <Descriptions.Item label={t("userDetail.fields.inviter")} span={2}>
+                                                    {u.invitedBy ? (
+                                                        <Space wrap size={8}>
+                                                            <span>
+                                                                {u.invitedBy.displayName && u.invitedBy.displayName !== u.invitedBy.username
+                                                                    ? `${u.invitedBy.displayName}${u.invitedBy.username ? ` (@${u.invitedBy.username})` : ""}`
+                                                                    : u.invitedBy.username
+                                                                      ? `@${u.invitedBy.username}`
+                                                                      : ""}
+                                                            </span>
+                                                            <Typography.Text copyable className="font-mono text-xs">
+                                                                {u.invitedBy.id}
+                                                            </Typography.Text>
+                                                        </Space>
+                                                    ) : (
+                                                        <Typography.Text type="secondary">{t("userDetail.fields.noInviter")}</Typography.Text>
+                                                    )}
+                                                </Descriptions.Item>
                                             </Descriptions>
 
                                             <div>
