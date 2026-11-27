@@ -7,6 +7,10 @@ description: Implemented changes that still need manual verification
 
 The current release needs manual verification in these areas:
 
+- 服务端静态资源 Gzip 压缩与首屏主包拆包回归：
+  - 在一体化 Docker 部署环境刷新首页与各子页面，通过浏览器 Network 面板确认 JS/CSS 静态资源与普通 JSON 接口返回 `Content-Encoding: gzip` 响应头，同时验证 `/api/ai/*` 文本 SSE 流式输出仍逐字实时透传、`/api/storage/download/*` 与 `/api/storage/thumbnail/*` 媒体下载正常；
+  - 检查首页首屏不再加载 `AgentPanel` 与 `Streamdown` 异步分包，浅色/深色模式下 Ant Design 表格/弹窗/表单配色正常，打开系统公告弹窗（含 Markdown 全局通知）可正常渲染。
+
 - GIF / 多格式图片二进制魔数识别与真实后缀下载修复：
   - 使用返回 GIF（或 WebP / JPEG）动图的模型或插件在生图工作台与画布中生成图片后，分别测试单张下载、批量 ZIP 打包下载、保存到「我的资产」后再下载，以及从「成果 / 我的云端媒体」下载，确认上传入库的 `mimeType` 与对象存储后缀为 `.gif`（而非 `.png`），且下载到本地的文件名不再出现随机 UUID、扩展名为 `.gif` 并可正常连续播放动画。
 

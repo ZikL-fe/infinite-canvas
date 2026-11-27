@@ -1,9 +1,10 @@
 import type { CSSProperties } from "react";
-import { useEffect } from "react";
+import { Suspense, lazy, useEffect } from "react";
 import { Badge, Button, Empty, Modal, Spin, Tag, Timeline, Typography, theme as antdTheme } from "antd";
 import { Bell, Megaphone } from "lucide-react";
 import { useTranslation } from "react-i18next";
-import { Streamdown } from "streamdown";
+
+const Streamdown = lazy(() => import("@/components/markdown-streamdown"));
 
 import {
     getNotificationUnreadCounts,
@@ -193,12 +194,20 @@ export function NotificationBellModal({ className, style }: NotificationBellModa
                                     </div>
                                 ) : null}
                                 <div className="agent-streamdown text-sm leading-relaxed" style={{ color: token.colorText }}>
-                                    <Streamdown
-                                        controls={{ code: { copy: true, download: false }, table: { copy: true, download: false, fullscreen: false } }}
-                                        linkSafety={{ enabled: false }}
+                                    <Suspense
+                                        fallback={
+                                            <div className="flex justify-center py-6">
+                                                <Spin />
+                                            </div>
+                                        }
                                     >
-                                        {notice.content}
-                                    </Streamdown>
+                                        <Streamdown
+                                            controls={{ code: { copy: true, download: false }, table: { copy: true, download: false, fullscreen: false } }}
+                                            linkSafety={{ enabled: false }}
+                                        >
+                                            {notice.content}
+                                        </Streamdown>
+                                    </Suspense>
                                 </div>
                                 {!notice.title && notice.updatedAt ? (
                                     <div className="mt-3 border-t pt-2 text-right text-xs" style={{ borderColor: token.colorBorderSecondary, color: token.colorTextSecondary }}>

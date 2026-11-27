@@ -2,6 +2,7 @@
 import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { Hono } from "hono";
+import { compress } from "hono/compress";
 import { serveStatic } from "hono/bun";
 import { cors } from "hono/cors";
 
@@ -25,6 +26,20 @@ await cleanupOrphanedProcessingTasks().catch((error) => {
 });
 
 const app = new Hono();
+
+const compressMiddleware = compress();
+app.use("*", async (c, next) => {
+  const path = c.req.path;
+  // 跳过 AI 流式代理（SSE）与二进制媒体流，避免引入流缓冲或无效 CPU 压缩开销
+  if (
+    path.startsWith("/api/ai/") ||
+    path.startsWith("/api/storage/download/") ||
+    path.startsWith("/api/storage/thumbnail/")
+  ) {
+    return next();
+  }
+  return compressMiddleware(c, next);
+});
 
 if (env.CORS_ORIGIN) {
   const origins = env.CORS_ORIGIN.split(",")
