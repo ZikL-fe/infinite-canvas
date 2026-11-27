@@ -245,9 +245,9 @@ export default function AssetsPage() {
                     };
                 }
                 const ext =
-                asset.kind === "video"
-                    ? asset.data.mimeType?.split("/")[1]?.split("+")[0] || "mp4"
-                    : imageExtensionFromMime(await detectImageMimeFromBlob(blob, asset.data.mimeType));
+                    asset.kind === "video"
+                        ? asset.data.mimeType?.split("/")[1]?.split("+")[0] || "mp4"
+                        : imageExtensionFromMime(asset.data.mimeType);
                 return {
                     filename: `${asset.title || "asset"}.${ext}`,
                     loadBlob: () => readAssetMediaBlob(asset),
