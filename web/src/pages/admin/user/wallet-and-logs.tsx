@@ -566,15 +566,16 @@ export function MyWalletPanel({ compact = false, onOpenLogs }: { compact?: boole
     );
 }
 
-export function UsageLogsPanel({ defaultScope = "self" }: { defaultScope?: "all" | "self" }) {
+export function UsageLogsPanel({ defaultScope }: { defaultScope?: "all" | "self" }) {
     const { t, i18n } = useTranslation();
     const locale = i18n.resolvedLanguage || undefined;
     const { message } = App.useApp();
     const { token } = antdTheme.useToken();
     const user = useUserStore((state) => state.user);
     const isAdmin = user?.role === "admin";
+    const resolvedDefaultScope = defaultScope ?? (isAdmin ? "all" : "self");
 
-    const [scope, setScope] = useState<"all" | "self">(isAdmin ? defaultScope : "self");
+    const [scope, setScope] = useState<"all" | "self">(isAdmin ? resolvedDefaultScope : "self");
     const [items, setItems] = useState<CreditLedgerItem[]>([]);
     const [total, setTotal] = useState(0);
     const [page, setPage] = useState(1);
@@ -591,9 +592,9 @@ export function UsageLogsPanel({ defaultScope = "self" }: { defaultScope?: "all"
     const [detailItem, setDetailItem] = useState<CreditLedgerItem | null>(null);
 
     useEffect(() => {
-        setScope(isAdmin ? defaultScope : "self");
+        setScope(isAdmin ? resolvedDefaultScope : "self");
         setPage(1);
-    }, [defaultScope, isAdmin]);
+    }, [resolvedDefaultScope, isAdmin]);
 
     const loadLogs = useCallback(
         async (

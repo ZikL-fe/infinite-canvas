@@ -4,10 +4,11 @@ import { App, Button, Card, Col, Descriptions, Progress, Row, Statistic, Tag, To
 import type { TFunction } from "i18next";
 import { RefreshCw } from "lucide-react";
 import { useTranslation } from "react-i18next";
+import { useNavigate } from "react-router-dom";
 
 import { formatCompactCredits, formatExactCredits } from "@/lib/format-number";
 import { formatBytes } from "@/pages/admin/admin-utils";
-import { AnnouncementsCard, ConsumptionTrendCard } from "@/pages/admin/user-panels";
+import { AnnouncementsCard, ConsumptionTrendCard } from "@/pages/admin/user/overview";
 import { adminApi, type AdminChannelItem, type AdminOverview, type S3Provider } from "@/services/api/server";
 import { useUserStore } from "@/stores/use-user-store";
 
@@ -22,8 +23,9 @@ function getKindLabel(kind: string, t: TFunction) {
     return kind;
 }
 
-export function AdminOverviewPanel({ onManageAnnouncements }: { onManageAnnouncements: () => void }) {
+export function AdminOverviewPanel({ onManageAnnouncements }: { onManageAnnouncements?: () => void }) {
     const { t } = useTranslation();
+    const navigate = useNavigate();
     const { message } = App.useApp();
     const user = useUserStore((state) => state.user);
 
@@ -156,7 +158,11 @@ export function AdminOverviewPanel({ onManageAnnouncements }: { onManageAnnounce
                         items={overview?.announcements ?? []}
                         loading={loading}
                         extra={
-                            <Button type="link" size="small" onClick={onManageAnnouncements}>
+                            <Button
+                                type="link"
+                                size="small"
+                                onClick={() => (onManageAnnouncements ? onManageAnnouncements() : navigate("/admin/settings-announcements"))}
+                            >
                                 {t("admin.overviewTab.manageAnnouncements")}
                             </Button>
                         }

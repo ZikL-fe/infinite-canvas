@@ -1,12 +1,13 @@
 import { Button, Drawer, Input, Segmented, Select, Space, Tag } from "antd";
 import { Code2, Coins, ListPlus, Trash2 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { Suspense, lazy, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { defaultBaseUrlForApiFormat, guessCapability, normalizeChannelModels, type ApiCallFormat, type ChannelModel, type ModelCapability, type ModelChannel, type ModelPricing } from "@/stores/use-config-store";
 import { formatModelPricingSummary, ModelPricingModal } from "./model-pricing-modal";
-import { ModelScriptEditor } from "./model-script-editor";
 import { ModelSelectModal } from "./model-select-modal";
+
+const ModelScriptEditor = lazy(() => import("./model-script-editor").then((m) => ({ default: m.ModelScriptEditor })));
 
 type ScriptTarget = { name: string; capability: ModelCapability; value: string };
 type PricingTarget = { name: string; capability: ModelCapability; value?: ModelPricing };
@@ -142,14 +143,18 @@ export function ChannelEditorDrawer({
 
             <ModelSelectModal open={selectOpen} channel={draft} selectedNames={draft.models.map((model) => model.name)} onConfirm={applySelection} onClose={() => setSelectOpen(false)} onFetchModels={onFetchModels} />
 
-            <ModelScriptEditor
-                open={Boolean(scriptTarget)}
-                capability={scriptTarget?.capability || "text"}
-                modelName={scriptTarget?.name || ""}
-                value={scriptTarget?.value || ""}
-                onSave={(script) => scriptTarget && setScript(scriptTarget.name, script)}
-                onClose={() => setScriptTarget(null)}
-            />
+            {scriptTarget ? (
+                <Suspense fallback={null}>
+                    <ModelScriptEditor
+                        open
+                        capability={scriptTarget.capability}
+                        modelName={scriptTarget.name}
+                        value={scriptTarget.value}
+                        onSave={(script) => setScript(scriptTarget.name, script)}
+                        onClose={() => setScriptTarget(null)}
+                    />
+                </Suspense>
+            ) : null}
 
             <ModelPricingModal
                 open={Boolean(pricingTarget)}

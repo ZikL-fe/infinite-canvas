@@ -335,7 +335,7 @@ export default function AssetsPage() {
                                                         <Tag
                                                             color="red"
                                                             className="m-0 cursor-pointer"
-                                                            onClick={() => navigate(user.role === "admin" ? "/admin?tab=my-media" : "/console?tab=my-media")}
+                                                            onClick={() => navigate(user.role === "admin" ? "/admin/my-media" : "/console/my-media")}
                                                         >
                                                             {t("assets.quotaExpiredAction")}
                                                         </Tag>
@@ -343,7 +343,7 @@ export default function AssetsPage() {
                                                         <Tag
                                                             color="red"
                                                             className="m-0 cursor-pointer"
-                                                            onClick={() => navigate(user.role === "admin" ? "/admin?tab=my-media" : "/console?tab=my-media")}
+                                                            onClick={() => navigate(user.role === "admin" ? "/admin/my-media" : "/console/my-media")}
                                                         >
                                                             {t("assets.quotaExceededAction")}
                                                         </Tag>
@@ -352,7 +352,7 @@ export default function AssetsPage() {
                                                         type="link"
                                                         size="small"
                                                         className="!h-auto !p-0 text-xs"
-                                                        onClick={() => navigate(user.role === "admin" ? "/admin?tab=my-media" : "/console?tab=my-media")}
+                                                        onClick={() => navigate(user.role === "admin" ? "/admin/my-media" : "/console/my-media")}
                                                     >
                                                         {t("assets.manageCloudMedia")}
                                                     </Button>

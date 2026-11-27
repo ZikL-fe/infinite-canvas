@@ -1,5 +1,5 @@
 import type { CSSProperties } from "react";
-import { useState } from "react";
+import { Suspense, lazy, useState } from "react";
 import { App, Dropdown, Modal, Popover, Progress, Spin, Tooltip, type MenuProps, theme as antdTheme } from "antd";
 import { AlertTriangle, Coins, HardDrive, Keyboard, Loader2, LogIn, LogOut, Puzzle, Shield, User } from "lucide-react";
 import { useTranslation } from "react-i18next";
@@ -20,11 +20,14 @@ import {
     type AlertSeverity,
 } from "@/lib/quota-alerts";
 import { canvasThemes } from "@/lib/canvas-theme";
-import { MyWalletPanel } from "@/pages/admin/user-panels";
 import { authApi } from "@/services/api/server";
 import { flushPendingCanvasSyncs } from "@/services/cloud-sync";
 import { useThemeStore } from "@/stores/use-theme-store";
 import { useUserStore } from "@/stores/use-user-store";
+
+const MyWalletPanel = lazy(() =>
+    import("@/pages/admin/user/wallet-and-logs").then((m) => ({ default: m.MyWalletPanel })),
+);
 
 type UserStatusActionsProps = {
     variant?: "default" | "canvas";
@@ -116,7 +119,7 @@ export function UserStatusActions({ variant = "default", onOpenShortcuts, onOpen
                   label: profilePending
                       ? t("topNav.storageItemLoading")
                       : t("topNav.storageItem", { pair: formatStoragePair(user.storageUsedBytes, user.storageQuotaBytes) }),
-                  onClick: () => navigate(user.role === "admin" ? "/admin?tab=my-media" : "/console?tab=my-media"),
+                  onClick: () => navigate(user.role === "admin" ? "/admin/my-media" : "/console/my-media"),
               },
               {
                   key: "console",
@@ -214,7 +217,7 @@ export function UserStatusActions({ variant = "default", onOpenShortcuts, onOpen
                                             type="button"
                                             className="cursor-pointer bg-transparent p-0 text-xs transition-opacity hover:opacity-80"
                                             style={{ color: token.colorPrimary }}
-                                            onClick={() => navigate(user.role === "admin" ? "/admin?tab=my-media" : "/console?tab=my-media")}
+                                            onClick={() => navigate(user.role === "admin" ? "/admin/my-media" : "/console/my-media")}
                                         >
                                             {t("topNav.manage")}
                                         </button>
@@ -334,13 +337,23 @@ export function UserStatusActions({ variant = "default", onOpenShortcuts, onOpen
             </div>
 
             <Modal open={walletOpen} title={t("topNav.myWalletTitle")} onCancel={() => setWalletOpen(false)} footer={null} width={920} destroyOnHidden>
-                <MyWalletPanel
-                    compact
-                    onOpenLogs={() => {
-                        setWalletOpen(false);
-                        navigate(user?.role === "admin" ? "/admin?tab=usage-logs" : "/console?tab=usage-logs");
-                    }}
-                />
+                {walletOpen ? (
+                    <Suspense
+                        fallback={
+                            <div className="flex min-h-[240px] items-center justify-center">
+                                <Spin />
+                            </div>
+                        }
+                    >
+                        <MyWalletPanel
+                            compact
+                            onOpenLogs={() => {
+                                setWalletOpen(false);
+                                navigate(user?.role === "admin" ? "/admin/usage-logs" : "/console/usage-logs");
+                            }}
+                        />
+                    </Suspense>
+                ) : null}
             </Modal>
         </>
     );

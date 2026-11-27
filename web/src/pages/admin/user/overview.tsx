@@ -277,7 +277,11 @@ export function UserOverviewPanel({ onOpenWallet, onOpenMedia }: { onOpenWallet?
     const { t, i18n } = useTranslation();
     const locale = i18n.resolvedLanguage || undefined;
     const { message } = App.useApp();
+    const navigate = useNavigate();
     const user = useUserStore((state) => state.user);
+    const basePath = user?.role === "admin" ? "/admin" : "/console";
+    const openWallet = onOpenWallet ?? (() => navigate(`${basePath}/wallet`));
+    const openMedia = onOpenMedia ?? (() => navigate(`${basePath}/my-media`));
     const [days, setDays] = useState(7);
     const daysRef = useRef(days);
     daysRef.current = days;
@@ -352,11 +356,9 @@ export function UserOverviewPanel({ onOpenWallet, onOpenMedia }: { onOpenWallet?
                             title={creditAlertCopy.title}
                             description={creditAlertCopy.description}
                             action={
-                                onOpenWallet ? (
-                                    <Button size="small" type="primary" onClick={onOpenWallet}>
-                                        {t("userPanels.overview.goRedeem")}
-                                    </Button>
-                                ) : undefined
+                                <Button size="small" type="primary" onClick={openWallet}>
+                                    {t("userPanels.overview.goRedeem")}
+                                </Button>
                             }
                         />
                     ) : null}
@@ -367,11 +369,9 @@ export function UserOverviewPanel({ onOpenWallet, onOpenMedia }: { onOpenWallet?
                             title={storageAlertCopy.title}
                             description={storageAlertCopy.description}
                             action={
-                                onOpenMedia ? (
-                                    <Button size="small" onClick={onOpenMedia}>
-                                        {t("userPanels.overview.goManageStorage")}
-                                    </Button>
-                                ) : undefined
+                                <Button size="small" onClick={openMedia}>
+                                    {t("userPanels.overview.goManageStorage")}
+                                </Button>
                             }
                         />
                     ) : null}
@@ -387,11 +387,9 @@ export function UserOverviewPanel({ onOpenWallet, onOpenMedia }: { onOpenWallet?
                                     title={t("userPanels.overview.currentCredits")}
                                     value={formatCompactCredits(data?.creditBalance ?? 0)}
                                     suffix={
-                                        onOpenWallet ? (
-                                            <Button type="link" size="small" onClick={onOpenWallet}>
-                                                {t("userPanels.overview.goRedeem")}
-                                            </Button>
-                                        ) : null
+                                        <Button type="link" size="small" onClick={openWallet}>
+                                            {t("userPanels.overview.goRedeem")}
+                                        </Button>
                                     }
                                 />
                             </div>

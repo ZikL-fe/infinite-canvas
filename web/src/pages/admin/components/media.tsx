@@ -9,7 +9,7 @@ import { getMediaThumbBytes } from "@/lib/image-utils";
 import { formatBytes } from "@/pages/admin/admin-utils";
 import { MediaPreviewModal } from "@/pages/admin/components/media-preview-modal";
 import { ADMIN_TABLE_CLASS, ADMIN_TABLE_SCROLL, TableRowActions } from "@/pages/admin/components/table-row-actions";
-import { getMediaModuleOptions, MediaModuleTags, WorkspaceSizeCell } from "@/pages/admin/user-panels";
+import { getMediaModuleOptions, MediaModuleTags, WorkspaceSizeCell } from "@/pages/admin/user/shared";
 import { adminApi, type MediaItem, type WorkspaceDataItem } from "@/services/api/server";
 import { notifyCloudWorkspaceChanged, WORKSPACE_CHANGED_EVENT } from "@/services/cloud-media";
 import { syncCloudWorkspace } from "@/services/cloud-sync";

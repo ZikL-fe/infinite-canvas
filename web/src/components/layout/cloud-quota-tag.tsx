@@ -21,7 +21,7 @@ export function CloudQuotaTag() {
             <Tag
                 color={exceeded ? "red" : "blue"}
                 className="m-0 cursor-pointer"
-                onClick={() => navigate(user.role === "admin" ? "/admin?tab=my-media" : "/console?tab=my-media")}
+                onClick={() => navigate(user.role === "admin" ? "/admin/my-media" : "/console/my-media")}
             >
                 <span className="inline-flex items-center gap-1">
                     <HardDrive className="size-3" />

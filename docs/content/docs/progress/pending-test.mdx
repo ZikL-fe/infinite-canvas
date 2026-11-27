@@ -7,6 +7,11 @@ description: Implemented changes that still need manual verification
 
 The current release needs manual verification in these areas:
 
+- 后台管理与个人中心嵌套子路由、面板懒加载与 Vite 分包缓存：
+  - 分别使用管理员与普通用户登录进入后台，确认左侧导航与顶部栏保持常驻，点击各菜单项时 URL 切换为对应子路由（如 `/admin/overview`、`/admin/dashboard`、`/admin/users`、`/admin/channels`、`/admin/settings-auth` 或 `/console/user-overview`、`/console/my-media`），且支持浏览器前进/后退切换；
+  - 访问旧版链接（如 `/admin?tab=users`、`/console?tab=my-media`、`/config`）以及跨角色访问（管理员访问 `/console/*`、普通用户访问 `/admin/*`），确认能正确自动重定向并保留权限兜底；
+  - 通过浏览器 Network 面板检查首次进入 `/admin/overview` 时不再提前拉取 ECharts 与 CodeMirror chunk，仅在切换到「数据看板」、打开渠道「脚本编辑」或点击顶部「积分钱包」弹窗时按需加载对应独立分包（`vendor-echarts` / `vendor-codemirror` / `vendor-antd` / `vendor-react`）。
+
 - 管理后台用户列表与详情邀请人信息展示：
   - 使用邀请码或邀请链接注册新账号后，进入 `/admin?tab=users`，核对「邀请人」列展示对应邀请人的 `@用户名`（非邀请注册用户显示 `—`），悬停可查看完整昵称/用户名/用户 ID，点击复制图标可一键复制邀请人 ID，点击邀请人用户名可直接打开邀请人的「用户详情」抽屉；
   - 打开被邀请用户的「用户详情」抽屉，核对「概览 -> 邀请人」展示邀请人名称/`@用户名` 及可复制的邀请人用户 ID。

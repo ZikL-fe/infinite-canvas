@@ -1,40 +1,54 @@
-/** 后台管理与个人后台入口页：管理员固定使用 /admin（平台管理在上），普通用户固定使用 /console。 */
-import { useCallback, useEffect, useState, type ReactNode } from "react";
-import { Button, Drawer, Menu, Result, Typography, theme as antdTheme } from "antd";
+/** 后台管理与个人后台布局壳：管理员固定使用 /admin/*，普通用户固定使用 /console/*，兼容旧 ?tab= 链接。 */
+import { Suspense, useEffect, useState, type ReactNode } from "react";
+import { Button, Drawer, Menu, Result, Spin, Typography, theme as antdTheme } from "antd";
 import type { MenuProps } from "antd";
 import { BarChart3, Coins, Cpu, Database, FolderKanban, Gift, HardDrive, LayoutDashboard, Mail, Megaphone, Menu as MenuIcon, ScrollText, Settings2, Shield, Sliders, UserCheck, Users, Wifi } from "lucide-react";
 import { useTranslation } from "react-i18next";
-import { Navigate, useLocation, useNavigate, useSearchParams } from "react-router-dom";
+import { Navigate, Outlet, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 
-import { AppConfigPanel } from "@/components/layout/app-config-modal";
 import { VersionReleaseModal } from "@/components/layout/version-release-modal";
-import { AdminAnnouncementsPanel } from "@/pages/admin/components/announcements-panel";
-import { AnalyticsDashboardPanel } from "@/pages/admin/components/analytics-dashboard-panel";
-import { AdminChannelsPanel } from "@/pages/admin/components/channels-panel";
-import { AdminMediaMonitorPanel } from "@/pages/admin/components/media-monitor-panel";
-import { AdminOverviewPanel } from "@/pages/admin/components/overview-panel";
-import { AdminRedeemCodesPanel } from "@/pages/admin/components/redeem-codes-panel";
-import { AdminStorageSettingsPanel } from "@/pages/admin/components/storage-settings-panel";
-import { AdminSystemSettingsPanel } from "@/pages/admin/components/system-settings-panel";
-import { AdminUsersPanel } from "@/pages/admin/components/users-panel";
-import { MyMediaPanel, MyWalletPanel, ProfileSecurityPanel, UsageLogsPanel, UserOverviewPanel } from "@/pages/admin/user-panels";
 import { useUserStore } from "@/stores/use-user-store";
 
 type NavTabItem = {
     key: string;
     label: ReactNode;
     pageTitle?: string;
-    render?: () => ReactNode;
     children?: NavTabItem[];
 };
 
 const PERSONAL_TAB_KEYS = new Set(["user-overview", "user-dashboard", "usage-logs", "profile", "wallet", "my-media", "config"]);
+const ADMIN_ONLY_TAB_KEYS = new Set([
+    "overview",
+    "dashboard",
+    "channels",
+    "users",
+    "redeem-codes",
+    "media",
+    "storage",
+    "settings-auth",
+    "settings-invite",
+    "settings-mail",
+    "settings-webdav",
+    "settings-storage-expiry",
+    "settings-announcements",
+    "settings-analytics",
+]);
 
-function flattenTabItems(items: NavTabItem[]): Array<{ key: string; label: ReactNode; pageTitle?: string; render?: () => ReactNode }> {
+function normalizeTab(tab: string) {
+    if (tab === "settings") return "settings-auth";
+    if (tab === "announcements") return "settings-announcements";
+    return tab;
+}
+
+function isKnownTab(tab: string) {
+    return PERSONAL_TAB_KEYS.has(tab) || ADMIN_ONLY_TAB_KEYS.has(tab);
+}
+
+function flattenTabItems(items: NavTabItem[]): Array<{ key: string; label: ReactNode; pageTitle?: string }> {
     return items.flatMap((item) =>
         Array.isArray(item.children)
             ? flattenTabItems(item.children)
-            : [{ key: item.key, label: item.label, pageTitle: item.pageTitle, render: item.render }],
+            : [{ key: item.key, label: item.label, pageTitle: item.pageTitle }],
     );
 }
 
@@ -51,67 +65,40 @@ function toMenuItem(item: NavTabItem): NonNullable<MenuProps["items"]>[number] {
           };
 }
 
+function PanelFallback() {
+    return (
+        <div className="flex min-h-[40vh] w-full items-center justify-center">
+            <Spin size="large" />
+        </div>
+    );
+}
+
 export default function AdminPage() {
     const { t } = useTranslation();
     const { token } = antdTheme.useToken();
     const navigate = useNavigate();
     const { pathname, search } = useLocation();
-    const [searchParams, setSearchParams] = useSearchParams();
+    const [searchParams] = useSearchParams();
     const user = useUserStore((state) => state.user);
     const isAdmin = user?.role === "admin";
     const isAdminRoute = pathname.startsWith("/admin");
 
-    const requestedTab = searchParams.get("tab") || "";
+    const basePath = isAdmin ? "/admin" : "/console";
     const defaultTab = isAdmin ? "overview" : "user-overview";
-    const normalizeTab = useCallback((tab: string) => {
-        if (tab === "settings") return "settings-auth";
-        if (tab === "announcements") return "settings-announcements";
-        return tab;
-    }, []);
+    const routePrefix = isAdminRoute ? "/admin" : "/console";
+    const rawSubpath = pathname.startsWith(`${routePrefix}/`) ? pathname.slice(routePrefix.length + 1).split("/")[0] : "";
+    const normalizedSubpath = normalizeTab(rawSubpath);
+    const requestedTab = searchParams.get("tab") || "";
+    const resolvedTab = isKnownTab(normalizedSubpath) ? normalizedSubpath : defaultTab;
 
-    const [activeTab, setActiveTab] = useState(() => normalizeTab(requestedTab || defaultTab));
-    const [openMenuKeys, setOpenMenuKeys] = useState<string[]>(() => {
-        const initial = normalizeTab(requestedTab || defaultTab);
-        return initial.startsWith("settings-") ? ["settings"] : [];
-    });
+    const [openMenuKeys, setOpenMenuKeys] = useState<string[]>(() => (resolvedTab.startsWith("settings-") ? ["settings"] : []));
     const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
-    const switchTab = useCallback(
-        (nextTab: string) => {
-            const resolved = normalizeTab(nextTab);
-            setActiveTab(resolved);
-            if (resolved.startsWith("settings-")) {
-                setOpenMenuKeys((prev) => (prev.includes("settings") ? prev : [...prev, "settings"]));
-            }
-            setSearchParams(
-                (prev) => {
-                    const next = new URLSearchParams(prev);
-                    next.set("tab", resolved);
-                    return next;
-                },
-                { replace: true },
-            );
-        },
-        [normalizeTab, setSearchParams],
-    );
-
     useEffect(() => {
-        if (requestedTab) {
-            const resolved = normalizeTab(requestedTab);
-            setActiveTab(resolved);
-            if (resolved.startsWith("settings-")) {
-                setOpenMenuKeys((prev) => (prev.includes("settings") ? prev : [...prev, "settings"]));
-            }
-        } else {
-            setActiveTab(isAdmin ? "overview" : "user-overview");
+        if (resolvedTab.startsWith("settings-")) {
+            setOpenMenuKeys((prev) => (prev.includes("settings") ? prev : [...prev, "settings"]));
         }
-    }, [isAdmin, normalizeTab, requestedTab]);
-
-    useEffect(() => {
-        if (!isAdmin && !PERSONAL_TAB_KEYS.has(activeTab)) {
-            switchTab("user-overview");
-        }
-    }, [activeTab, isAdmin, switchTab]);
+    }, [resolvedTab]);
 
     if (!user) {
         return (
@@ -129,12 +116,36 @@ export default function AdminPage() {
         );
     }
 
+    // 兼容旧版 ?tab= 查询参数链接，统一重定向到新的嵌套子路由
+    if (requestedTab) {
+        const nextParams = new URLSearchParams(searchParams);
+        nextParams.delete("tab");
+        const nextQuery = nextParams.toString();
+        const candidate = normalizeTab(requestedTab);
+        const safeTab = isKnownTab(candidate) && (isAdmin || PERSONAL_TAB_KEYS.has(candidate)) ? candidate : defaultTab;
+        return <Navigate to={`${basePath}/${safeTab}${nextQuery ? `?${nextQuery}` : ""}`} replace />;
+    }
+
+    if (!rawSubpath || !isKnownTab(normalizedSubpath)) {
+        return <Navigate to={`${basePath}/${defaultTab}${search}`} replace />;
+    }
+
+    if (normalizedSubpath !== rawSubpath) {
+        const safeTab = isAdmin || PERSONAL_TAB_KEYS.has(normalizedSubpath) ? normalizedSubpath : defaultTab;
+        return <Navigate to={`${basePath}/${safeTab}${search}`} replace />;
+    }
+
     if (isAdmin && !isAdminRoute) {
-        return <Navigate to={`/admin${search}`} replace />;
+        return <Navigate to={`/admin/${normalizedSubpath}${search}`} replace />;
     }
 
     if (!isAdmin && isAdminRoute) {
-        return <Navigate to={`/console${search}`} replace />;
+        const safeTab = PERSONAL_TAB_KEYS.has(normalizedSubpath) ? normalizedSubpath : "user-overview";
+        return <Navigate to={`/console/${safeTab}${search}`} replace />;
+    }
+
+    if (!isAdmin && !PERSONAL_TAB_KEYS.has(normalizedSubpath)) {
+        return <Navigate to="/console/user-overview" replace />;
     }
 
     const personalTabs: NavTabItem[] = [
@@ -146,7 +157,6 @@ export default function AdminPage() {
                     {t("admin.nav.userOverview")}
                 </span>
             ),
-            render: () => <UserOverviewPanel onOpenWallet={() => switchTab("wallet")} onOpenMedia={() => switchTab("my-media")} />,
         },
         {
             key: "user-dashboard",
@@ -156,7 +166,6 @@ export default function AdminPage() {
                     {t("admin.nav.dashboard")}
                 </span>
             ),
-            render: () => <AnalyticsDashboardPanel scope="self" />,
         },
         ...(!isAdmin
             ? [
@@ -168,7 +177,6 @@ export default function AdminPage() {
                               {t("admin.nav.usageLogs")}
                           </span>
                       ),
-                      render: () => <UsageLogsPanel defaultScope="self" />,
                   },
               ]
             : []),
@@ -180,7 +188,6 @@ export default function AdminPage() {
                     {t("admin.nav.wallet")}
                 </span>
             ),
-            render: () => <MyWalletPanel />,
         },
         {
             key: "profile",
@@ -190,7 +197,6 @@ export default function AdminPage() {
                     {t("admin.nav.profile")}
                 </span>
             ),
-            render: () => <ProfileSecurityPanel />,
         },
         {
             key: "my-media",
@@ -200,7 +206,6 @@ export default function AdminPage() {
                     {t("admin.nav.myMedia")}
                 </span>
             ),
-            render: () => <MyMediaPanel />,
         },
         {
             key: "config",
@@ -211,7 +216,6 @@ export default function AdminPage() {
                 </span>
             ),
             pageTitle: t("config.title"),
-            render: () => <AppConfigPanel />,
         },
     ];
 
@@ -224,7 +228,6 @@ export default function AdminPage() {
                     {t("admin.overviewTab.tabLabel")}
                 </span>
             ),
-            render: () => <AdminOverviewPanel onManageAnnouncements={() => switchTab("settings-announcements")} />,
         },
         {
             key: "dashboard",
@@ -234,7 +237,6 @@ export default function AdminPage() {
                     {t("admin.nav.dashboard")}
                 </span>
             ),
-            render: () => <AnalyticsDashboardPanel scope="all" />,
         },
         {
             key: "usage-logs",
@@ -244,7 +246,6 @@ export default function AdminPage() {
                     {t("admin.nav.usageLogs")}
                 </span>
             ),
-            render: () => <UsageLogsPanel defaultScope="all" />,
         },
         {
             key: "channels",
@@ -254,7 +255,6 @@ export default function AdminPage() {
                     {t("admin.channelsTab.tabLabel")}
                 </span>
             ),
-            render: () => <AdminChannelsPanel />,
         },
         {
             key: "users",
@@ -264,7 +264,6 @@ export default function AdminPage() {
                     {t("admin.usersTab.tabLabel")}
                 </span>
             ),
-            render: () => <AdminUsersPanel />,
         },
         {
             key: "redeem-codes",
@@ -274,7 +273,6 @@ export default function AdminPage() {
                     {t("admin.redeemTab.tabLabel")}
                 </span>
             ),
-            render: () => <AdminRedeemCodesPanel />,
         },
         {
             key: "media",
@@ -284,7 +282,6 @@ export default function AdminPage() {
                     {t("admin.mediaTab.tabLabel")}
                 </span>
             ),
-            render: () => <AdminMediaMonitorPanel />,
         },
         {
             key: "storage",
@@ -294,7 +291,6 @@ export default function AdminPage() {
                     {t("admin.storageTab.tabLabel")}
                 </span>
             ),
-            render: () => <AdminStorageSettingsPanel />,
         },
         {
             key: "settings",
@@ -314,7 +310,6 @@ export default function AdminPage() {
                         </span>
                     ),
                     pageTitle: t("admin.settingsTab.auth.pageTitle"),
-                    render: () => <AdminSystemSettingsPanel section="auth" />,
                 },
                 {
                     key: "settings-invite",
@@ -325,7 +320,6 @@ export default function AdminPage() {
                         </span>
                     ),
                     pageTitle: t("admin.settingsTab.invite.pageTitle"),
-                    render: () => <AdminSystemSettingsPanel section="invite" />,
                 },
                 {
                     key: "settings-mail",
@@ -336,7 +330,6 @@ export default function AdminPage() {
                         </span>
                     ),
                     pageTitle: t("admin.settingsTab.mail.pageTitle"),
-                    render: () => <AdminSystemSettingsPanel section="mail" />,
                 },
                 {
                     key: "settings-webdav",
@@ -347,7 +340,6 @@ export default function AdminPage() {
                         </span>
                     ),
                     pageTitle: t("admin.settingsTab.webdav.pageTitle"),
-                    render: () => <AdminSystemSettingsPanel section="webdav" />,
                 },
                 {
                     key: "settings-storage-expiry",
@@ -358,7 +350,6 @@ export default function AdminPage() {
                         </span>
                     ),
                     pageTitle: t("admin.settingsTab.storageExpiry.pageTitle"),
-                    render: () => <AdminSystemSettingsPanel section="storage-expiry" />,
                 },
                 {
                     key: "settings-announcements",
@@ -369,7 +360,6 @@ export default function AdminPage() {
                         </span>
                     ),
                     pageTitle: t("admin.settingsTab.announcements.pageTitle"),
-                    render: () => <AdminAnnouncementsPanel />,
                 },
                 {
                     key: "settings-analytics",
@@ -380,14 +370,13 @@ export default function AdminPage() {
                         </span>
                     ),
                     pageTitle: t("admin.settingsTab.analytics.pageTitle"),
-                    render: () => <AdminSystemSettingsPanel section="analytics" />,
                 },
             ],
         },
     ];
 
     const allSections = flattenTabItems(isAdmin ? [...adminTabs, ...personalTabs] : personalTabs);
-    const activeSection = allSections.find((item) => item.key === activeTab) ?? allSections[0];
+    const activeSection = allSections.find((item) => item.key === resolvedTab) ?? allSections[0];
 
     const menuItems: MenuProps["items"] = isAdmin
         ? [
@@ -405,7 +394,7 @@ export default function AdminPage() {
         : personalTabs.map(toMenuItem);
 
     const handleMenuSelect: MenuProps["onClick"] = ({ key }) => {
-        switchTab(key);
+        navigate(`${basePath}/${key}`);
         setMobileMenuOpen(false);
     };
 
@@ -429,7 +418,7 @@ export default function AdminPage() {
                     </div>
                     <Menu
                         mode="inline"
-                        selectedKeys={[activeSection?.key || activeTab]}
+                        selectedKeys={[activeSection?.key || resolvedTab]}
                         openKeys={openMenuKeys}
                         onOpenChange={(keys) => setOpenMenuKeys(keys)}
                         items={menuItems}
@@ -469,7 +458,11 @@ export default function AdminPage() {
                         </div>
                     </div>
 
-                    <div className="w-full min-w-0">{activeSection?.render?.()}</div>
+                    <div className="w-full min-w-0">
+                        <Suspense fallback={<PanelFallback />}>
+                            <Outlet />
+                        </Suspense>
+                    </div>
                 </main>
             </div>
 
@@ -493,7 +486,7 @@ export default function AdminPage() {
             >
                 <Menu
                     mode="inline"
-                    selectedKeys={[activeSection?.key || activeTab]}
+                    selectedKeys={[activeSection?.key || resolvedTab]}
                     openKeys={openMenuKeys}
                     onOpenChange={(keys) => setOpenMenuKeys(keys)}
                     items={menuItems}

@@ -58,4 +58,31 @@ export default defineConfig({
         __APP_VERSION__: JSON.stringify(localVersion),
         __APP_RELEASES__: JSON.stringify(parseChangelog(localChangelog)),
     },
+    build: {
+        rollupOptions: {
+            output: {
+                manualChunks(id) {
+                    if (!id.includes("node_modules")) return;
+                    if (
+                        id.includes("/react/") ||
+                        id.includes("/react-dom/") ||
+                        id.includes("/react-router/") ||
+                        id.includes("/react-router-dom/") ||
+                        id.includes("/scheduler/")
+                    ) {
+                        return "vendor-react";
+                    }
+                    if (id.includes("/echarts/") || id.includes("/zrender/")) {
+                        return "vendor-echarts";
+                    }
+                    if (id.includes("/@codemirror/") || id.includes("/@uiw/react-codemirror/") || id.includes("/@lezer/")) {
+                        return "vendor-codemirror";
+                    }
+                    if (id.includes("/antd/") || id.includes("/@ant-design/") || id.includes("/rc-") || id.includes("/@rc-component/")) {
+                        return "vendor-antd";
+                    }
+                },
+            },
+        },
+    },
 });
