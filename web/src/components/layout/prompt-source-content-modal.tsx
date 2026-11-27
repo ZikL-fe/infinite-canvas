@@ -1,5 +1,5 @@
 import { App, Button, Empty, Modal, Space, Table, Tag } from "antd";
-import { Copy, Eye, FolderPlus, RefreshCw } from "lucide-react";
+import { Copy, Eye, FileText, FolderPlus, RefreshCw } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 
@@ -76,7 +76,7 @@ export function PromptSourceContentModal({ source, onClose }: { source: PromptSo
                             title: t("config.promptSources.content.cover"),
                             dataIndex: "coverUrl",
                             width: 72,
-                            render: (coverUrl: string) => (coverUrl ? <img src={coverUrl} alt="" className="size-12 rounded object-cover" /> : <div className="size-12 rounded bg-stone-100 dark:bg-stone-800" />),
+                            render: (coverUrl: string) => <PromptThumb src={coverUrl} />,
                         },
                         {
                             title: t("config.promptSources.content.titleColumn"),
@@ -95,7 +95,7 @@ export function PromptSourceContentModal({ source, onClose }: { source: PromptSo
                             render: (tags: string[]) => (
                                 <div className="flex flex-wrap gap-1">
                                     {tags.slice(0, 4).map((tag) => (
-                                        <Tag key={tag} className="m-0">
+                                        <Tag key={tag} className="m-0 max-w-full truncate">
                                             {tag}
                                         </Tag>
                                     ))}
@@ -125,6 +125,18 @@ export function PromptSourceContentModal({ source, onClose }: { source: PromptSo
             <PromptDetailDialog prompt={detail} onClose={() => setDetail(null)} onCopy={(prompt) => copyText(prompt, t("common.promptCopied"))} onSaveAsset={saveAsset} />
         </>
     );
+}
+
+function PromptThumb({ src }: { src: string }) {
+    const [failedSrc, setFailedSrc] = useState("");
+    if (!src || failedSrc === src) {
+        return (
+            <div className="grid size-12 place-items-center rounded bg-stone-100 text-stone-400 dark:bg-stone-800 dark:text-stone-500">
+                <FileText className="size-4" />
+            </div>
+        );
+    }
+    return <img src={src} alt="" referrerPolicy="no-referrer" loading="lazy" onError={() => setFailedSrc(src)} className="size-12 rounded object-cover" />;
 }
 
 async function refreshSourceItems(sourceId: string) {

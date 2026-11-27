@@ -1,4 +1,4 @@
-import { ArrowRight } from "lucide-react";
+import { ArrowRight, FileText } from "lucide-react";
 import { type ReactNode, useEffect, useState } from "react";
 import { App, Button, Image, Tag } from "antd";
 import { useNavigate } from "react-router-dom";
@@ -28,8 +28,10 @@ export default function IndexPage() {
     const navigate = useNavigate();
     const [primaryTool] = navigationTools;
     const [promptShowcase, setPromptShowcase] = useState<Prompt[]>([]);
+    const [failedUrls, setFailedUrls] = useState<Record<string, true>>({});
     const [previewIndex, setPreviewIndex] = useState(0);
     const [previewOpen, setPreviewOpen] = useState(false);
+    const markFailed = (url: string) => setFailedUrls((prev) => (prev[url] ? prev : { ...prev, [url]: true }));
 
     useEffect(() => {
         void fetchPrompts({ pageSize: 12 })
@@ -84,11 +86,24 @@ export default function IndexPage() {
                                     index === 3 && "md:col-span-2",
                                 )}
                             >
-                                <img src={item.coverUrl} alt={item.title} className="h-full w-full object-cover transition duration-500 group-hover:scale-[1.03]" />
+                                {item.coverUrl && !failedUrls[item.coverUrl] ? (
+                                    <img
+                                        src={item.coverUrl}
+                                        alt={item.title}
+                                        referrerPolicy="no-referrer"
+                                        loading="lazy"
+                                        onError={() => markFailed(item.coverUrl)}
+                                        className="h-full w-full object-cover transition duration-500 group-hover:scale-[1.03]"
+                                    />
+                                ) : (
+                                    <span className="grid h-full w-full place-items-center pb-14 text-stone-400 dark:text-stone-600">
+                                        <FileText className="size-8" />
+                                    </span>
+                                )}
                                 <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/70 via-black/35 to-transparent p-4 text-white">
                                     <div className="mb-2 flex flex-wrap gap-1.5">
                                         {item.tags.slice(0, 2).map((tag) => (
-                                            <Tag key={tag} variant="filled" className="m-0 bg-white/15 text-[11px] text-white backdrop-blur">
+                                            <Tag key={tag} variant="filled" className="m-0 max-w-full truncate bg-white/15 text-[11px] text-white backdrop-blur">
                                                 {tag}
                                             </Tag>
                                         ))}
@@ -111,7 +126,7 @@ export default function IndexPage() {
             >
                 <div className="hidden">
                     {promptShowcase.map((item) => (
-                        <Image key={item.id} src={item.coverUrl} alt={item.title} />
+                        <Image key={item.id} src={item.coverUrl} alt={item.title} referrerPolicy="no-referrer" />
                     ))}
                 </div>
             </Image.PreviewGroup>

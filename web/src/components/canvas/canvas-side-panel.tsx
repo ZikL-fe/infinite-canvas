@@ -5,6 +5,7 @@ import { BookOpen, Check, ChevronRight, Download, Eye, FileText, Image as ImageI
 import { motion } from "motion/react";
 import { useTranslation } from "react-i18next";
 
+import { LoadingImage } from "@/components/loading-media";
 import { canvasThemes, type CanvasTheme } from "@/lib/canvas-theme";
 import { exportCanvasNodes } from "@/lib/canvas/canvas-export";
 import { getNodeDefinition } from "@/lib/canvas/node-registry";
@@ -13,8 +14,8 @@ import { PromptDetailDialog } from "@/pages/prompts/components/prompt-detail-dia
 import { fetchSourcePrompts, type Prompt } from "@/services/api/prompts";
 import { uploadMediaFile } from "@/services/file-storage";
 import { deleteAssetWithCloud } from "@/services/cloud-sync";
-import { previewUrlFor, subscribeImagePreviews, getImagePreviewRevision, uploadImage } from "@/services/image-storage";
-import { useAssetStore, type Asset, type AssetKind } from "@/stores/use-asset-store";
+import { ensureImagePreview, previewUrlFor, subscribeImagePreviews, getImagePreviewRevision, uploadImage } from "@/services/image-storage";
+import { assetCoverUrl, useAssetStore, type Asset, type AssetKind } from "@/stores/use-asset-store";
 import { usePromptSourceStore } from "@/stores/use-prompt-source-store";
 import { CANVAS_SIDE_PANEL_MAX_WIDTH, CANVAS_SIDE_PANEL_MIN_WIDTH, CANVAS_SIDE_PANEL_MOTION_MS, useCanvasSidePanelStore } from "@/stores/use-canvas-side-panel-store";
 import { useThemeStore } from "@/stores/use-theme-store";
@@ -394,6 +395,7 @@ function buildInsertPayload(asset: Asset): InsertAssetPayload {
 const CanvasAssetsTab = memo(function CanvasAssetsTab({ onInsert, theme }: { onInsert: (payload: InsertAssetPayload) => void; theme: CanvasTheme }) {
     const { message } = App.useApp();
     const { t } = useTranslation();
+    useSyncExternalStore(subscribeImagePreviews, getImagePreviewRevision);
     const assets = useAssetStore((state) => state.assets);
     const addAsset = useAssetStore((state) => state.addAsset);
     const [keyword, setKeyword] = useState("");
@@ -547,12 +549,40 @@ function AssetCard({ asset, theme, onInsert, onRemove }: { asset: Asset; theme: 
 }
 
 function AssetCover({ asset }: { asset: Asset }) {
+    const storageKey = asset.kind === "image" ? asset.data.storageKey : undefined;
+    const previewReady = previewUrlFor(storageKey);
+    const [failedVideoUrl, setFailedVideoUrl] = useState("");
+
+    useEffect(() => {
+        if (storageKey && !previewReady) {
+            void ensureImagePreview(storageKey);
+        }
+    }, [previewReady, storageKey]);
+
     if (asset.kind === "text") return <div className="size-full overflow-hidden whitespace-pre-wrap break-words p-2.5 text-[11px] leading-snug opacity-80">{asset.data.content}</div>;
     if (asset.kind === "video") {
-        if (asset.coverUrl) return <img src={asset.coverUrl} alt="" loading="lazy" decoding="async" className="size-full object-cover transition duration-300 group-hover:scale-[1.04]" />;
-        return <video src={`${asset.data.url}#t=0.1`} muted playsInline preload="metadata" className="size-full object-cover transition duration-300 group-hover:scale-[1.04]" />;
+        if (asset.coverUrl) {
+            return <LoadingImage src={asset.coverUrl} alt="" compact loading="lazy" containerClassName="size-full" className="size-full object-cover transition duration-300 group-hover:scale-[1.04]" />;
+        }
+        if (!asset.data.url || failedVideoUrl === asset.data.url) {
+            return (
+                <div className="grid size-full place-items-center text-stone-400">
+                    <Video className="size-6 opacity-60" />
+                </div>
+            );
+        }
+        return <video src={`${asset.data.url}#t=0.1`} muted playsInline preload="metadata" onError={() => setFailedVideoUrl(asset.data.url)} className="size-full object-cover transition duration-300 group-hover:scale-[1.04]" />;
     }
-    return <img src={asset.coverUrl || asset.data.dataUrl} alt="" loading="lazy" decoding="async" className="size-full object-cover transition duration-300 group-hover:scale-[1.04]" />;
+    const rawCover = assetCoverUrl(asset);
+    const cover = storageKey ? previewReady || (!/^https?:\/\//i.test(rawCover) ? rawCover : "") : rawCover;
+    if (!cover && !storageKey) {
+        return (
+            <div className="grid size-full place-items-center text-stone-400">
+                <ImageIcon className="size-6 opacity-60" />
+            </div>
+        );
+    }
+    return <LoadingImage src={cover} pending={!cover && Boolean(storageKey)} alt="" compact loading="lazy" containerClassName="size-full" className="size-full object-cover transition duration-300 group-hover:scale-[1.04]" />;
 }
 
 // ---------------------------------------------------------------------------

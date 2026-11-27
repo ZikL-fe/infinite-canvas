@@ -1,5 +1,5 @@
 /** 管理后台媒体监控面板：查看全站云端媒体对象与用户画布/工作台数据，支持预览与清理。 */
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
 import { App, Button, Card, Input, Select, Table, Tabs, Tag, Typography } from "antd";
 import type { TFunction } from "i18next";
 import { AudioLines, FileIcon, ImageIcon, RefreshCw, Video } from "lucide-react";
@@ -13,6 +13,7 @@ import { getMediaModuleOptions, MediaModuleTags, WorkspaceSizeCell } from "@/pag
 import { adminApi, type MediaItem, type WorkspaceDataItem } from "@/services/api/server";
 import { notifyCloudWorkspaceChanged, WORKSPACE_CHANGED_EVENT } from "@/services/cloud-media";
 import { syncCloudWorkspace } from "@/services/cloud-sync";
+import { ensureImagePreview, getImagePreviewRevision, previewUrlFor, subscribeImagePreviews } from "@/services/image-storage";
 
 function getKindLabel(kind: string, t: TFunction) {
     if (kind === "image" || kind === "video" || kind === "audio" || kind === "file") {
@@ -21,10 +22,71 @@ function getKindLabel(kind: string, t: TFunction) {
     return kind;
 }
 
+function MediaKindIcon({ kind }: { kind: string }) {
+    if (kind === "video") return <Video className="size-4" />;
+    if (kind === "audio") return <AudioLines className="size-4" />;
+    if (kind === "image") return <ImageIcon className="size-4" />;
+    return <FileIcon className="size-4" />;
+}
+
+/** 媒体监控行缩略图：首屏加载展示微加载态，直链失败时回退同源缩略图缓存与类型占位图标。 */
+function MediaPreviewThumb({ record }: { record: MediaItem }) {
+    const imgRef = useRef<HTMLImageElement>(null);
+    const localPreview = previewUrlFor(record.id) || "";
+    const [failedPrimaryKey, setFailedPrimaryKey] = useState("");
+    const [failedFallbackKey, setFailedFallbackKey] = useState("");
+    const [loadedId, setLoadedId] = useState("");
+
+    const primaryKey = record.thumbnailUrl ? `${record.id}:${record.thumbnailUrl}` : "";
+    const primaryFailed = Boolean(primaryKey) && failedPrimaryKey === primaryKey;
+    const fallbackFailed = Boolean(localPreview) && failedFallbackKey === `${record.id}:${localPreview}`;
+    const src = !primaryFailed && record.thumbnailUrl ? record.thumbnailUrl : !fallbackFailed ? localPreview : "";
+    const loaded = Boolean(src) && loadedId === record.id;
+
+    useLayoutEffect(() => {
+        const img = imgRef.current;
+        if (src && img && img.complete && img.naturalWidth > 0) {
+            setLoadedId(record.id);
+        }
+    }, [record.id, src]);
+
+    if (!src) {
+        return (
+            <div className="flex size-8 shrink-0 items-center justify-center rounded bg-black/5 text-stone-400 dark:bg-white/10">
+                <MediaKindIcon kind={record.kind} />
+            </div>
+        );
+    }
+
+    return (
+        <div className="relative flex size-8 shrink-0 items-center justify-center overflow-hidden rounded bg-black/5 text-stone-400 dark:bg-white/10">
+            <img
+                ref={imgRef}
+                src={src}
+                alt={record.objectKey}
+                decoding="async"
+                onLoad={() => setLoadedId(record.id)}
+                onError={() => {
+                    if (loadedId === record.id) setLoadedId("");
+                    if (!primaryFailed && primaryKey && src === record.thumbnailUrl) {
+                        setFailedPrimaryKey(primaryKey);
+                        if (record.kind === "image" && !localPreview) void ensureImagePreview(record.id);
+                    } else {
+                        setFailedFallbackKey(`${record.id}:${src}`);
+                    }
+                }}
+                className={`size-full object-cover transition-opacity duration-150 ${loaded ? "opacity-100" : "opacity-0"}`}
+            />
+            {!loaded ? <span className="pointer-events-none absolute size-3.5 animate-spin rounded-full border-2 border-stone-300 border-t-stone-600 dark:border-stone-700 dark:border-t-stone-200" /> : null}
+        </div>
+    );
+}
+
 export function AdminMediaMonitorPanel() {
     const { t, i18n } = useTranslation();
     const locale = i18n.resolvedLanguage || undefined;
     const { message } = App.useApp();
+    useSyncExternalStore(subscribeImagePreviews, getImagePreviewRevision);
 
     const [subTab, setSubTab] = useState<"media" | "canvas" | "image_workbench" | "video_workbench">("media");
     const [totalStorageBytes, setTotalStorageBytes] = useState(0);
@@ -66,6 +128,11 @@ export function AdminMediaMonitorPanel() {
                 setMediaTotal(res.total);
                 setMediaFilteredBytes(typeof res.filteredBytes === "number" ? res.filteredBytes : null);
                 if (res.workspaceStats) setWorkspaceStats(res.workspaceStats);
+                for (const row of res.items) {
+                    if (row.kind === "image" && !row.thumbnailUrl) {
+                        void ensureImagePreview(row.id);
+                    }
+                }
                 if (notifySuccess) message.success(t("common.refreshed"));
             } catch (error) {
                 message.error(error instanceof Error ? error.message : t("admin.messages.loadMediaFailed"));
@@ -265,14 +332,7 @@ export function AdminMediaMonitorPanel() {
                                             title: t("admin.mediaTab.colPreview"),
                                             key: "preview",
                                             width: 64,
-                                            render: (_, record) =>
-                                                record.thumbnailUrl ? (
-                                                    <img src={record.thumbnailUrl} alt={record.objectKey} className="size-8 shrink-0 rounded object-cover" />
-                                                ) : (
-                                                    <div className="flex size-8 shrink-0 items-center justify-center rounded bg-black/5 text-stone-400 dark:bg-white/10">
-                                                        {record.kind === "video" ? <Video className="size-4" /> : record.kind === "audio" ? <AudioLines className="size-4" /> : record.kind === "image" ? <ImageIcon className="size-4" /> : <FileIcon className="size-4" />}
-                                                    </div>
-                                                ),
+                                            render: (_, record) => <MediaPreviewThumb record={record} />,
                                         },
                                         {
                                             title: t("admin.mediaTab.colObjectKey"),

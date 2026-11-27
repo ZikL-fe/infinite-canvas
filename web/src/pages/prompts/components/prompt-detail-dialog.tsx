@@ -11,9 +11,12 @@ export function PromptDetailDialog({ prompt, onClose, onCopy, onSaveAsset }: { p
     const onCloseRef = useRef(onClose);
     onCloseRef.current = onClose;
     const [savedKey, setSavedKey] = useState<string | null>(null);
+    const [failedUrls, setFailedUrls] = useState<Record<string, true>>({});
     const open = Boolean(prompt);
     const promptKey = prompt ? `${prompt.sourceId}:${prompt.id}` : null;
     const isSaved = Boolean(promptKey && savedKey === promptKey);
+    const showCover = Boolean(prompt?.coverUrl) && !failedUrls[prompt!.coverUrl];
+    const markFailed = (url: string) => setFailedUrls((prev) => (prev[url] ? prev : { ...prev, [url]: true }));
 
     useEffect(() => {
         if (!open) return;
@@ -41,13 +44,36 @@ export function PromptDetailDialog({ prompt, onClose, onCopy, onSaveAsset }: { p
             {prompt ? (
                 <div ref={contentRef} className="flex h-full min-h-0 flex-col">
                     <div className="shrink-0 space-y-3 pb-4">
-                        {prompt.coverUrl ? <img src={prompt.coverUrl} alt={prompt.title} className="h-48 w-full rounded-lg object-cover sm:h-56" /> : <div className="grid h-48 w-full place-items-center rounded-lg bg-stone-100 text-stone-400 dark:bg-stone-900 dark:text-stone-600 sm:h-56"><FileText className="size-9" /></div>}
-                        {prompt.referenceImageUrls.length > 1 ? <div className="grid grid-cols-6 gap-2">{prompt.referenceImageUrls.filter((url) => url !== prompt.coverUrl).slice(0, 6).map((url) => <img key={url} src={url} alt="" className="aspect-square w-full rounded-md object-cover" loading="lazy" />)}</div> : null}
+                        {showCover ? (
+                            <div className="h-48 w-full overflow-hidden rounded-lg sm:h-56">
+                                <img src={prompt.coverUrl} alt={prompt.title} referrerPolicy="no-referrer" onError={() => markFailed(prompt.coverUrl)} className="h-full w-full object-cover" />
+                            </div>
+                        ) : (
+                            <div className="grid h-48 w-full place-items-center rounded-lg bg-stone-100 text-stone-400 dark:bg-stone-900 dark:text-stone-600 sm:h-56">
+                                <FileText className="size-9" />
+                            </div>
+                        )}
+                        {prompt.referenceImageUrls.length > 1 ? (
+                            <div className="grid grid-cols-6 gap-2">
+                                {prompt.referenceImageUrls
+                                    .filter((url) => url !== prompt.coverUrl)
+                                    .slice(0, 6)
+                                    .map((url) =>
+                                        failedUrls[url] ? (
+                                            <div key={url} className="grid aspect-square w-full place-items-center rounded-md bg-stone-100 text-stone-400 dark:bg-stone-900 dark:text-stone-600">
+                                                <FileText className="size-4" />
+                                            </div>
+                                        ) : (
+                                            <img key={url} src={url} alt="" referrerPolicy="no-referrer" onError={() => markFailed(url)} className="aspect-square w-full rounded-md object-cover" loading="lazy" />
+                                        ),
+                                    )}
+                            </div>
+                        ) : null}
                     </div>
                     <div className="min-h-0 min-w-0 flex-1 overflow-y-auto border-y border-stone-200 py-4 pr-2 dark:border-stone-800">
                         <div className="flex flex-wrap gap-1.5">
                             {prompt.tags.map((tag) => (
-                                <Tag key={tag} className="m-0">
+                                <Tag key={tag} className="m-0 max-w-full truncate">
                                     {tag}
                                 </Tag>
                             ))}
