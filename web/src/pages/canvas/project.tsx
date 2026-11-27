@@ -505,19 +505,21 @@ function InfiniteCanvasPage() {
                 const result = await recoverCloudInterruptedImages(nodesRef.current, activeNow);
                 if (cancelled) return;
                 if (result.nodes !== nodesRef.current) {
-                    const updated =
-                        !result.requestFailed && attempts >= 120 && result.processingTaskIds.length > 0
-                            ? resetInterruptedGeneration(result.nodes, activeNow)
-                            : result.nodes;
+                    const updated = !result.requestFailed
+                        ? resetInterruptedGeneration(result.nodes, activeNow, result.processingTaskIds)
+                        : result.nodes;
                     setNodes(updated);
                     updated.filter(hasResumableVideoTask).forEach((n) => void pollVideoNodeTask(n, true));
+                } else if (!result.requestFailed && result.processingTaskIds.length === 0) {
+                    const updated = resetInterruptedGeneration(nodesRef.current, activeNow);
+                    if (updated !== nodesRef.current) setNodes(updated);
                 }
                 const nextPendingIds = result.requestFailed
                     ? collectInterruptedImageTaskIds(nodesRef.current, activeNow)
                     : result.processingTaskIds;
-                if (nextPendingIds.length > 0 && attempts < 120) {
-                    recoveryTimer = setTimeout(() => void pollPendingImages(), 2500);
-                } else if (nextPendingIds.length > 0) {
+                if (nextPendingIds.length > 0) {
+                    recoveryTimer = setTimeout(() => void pollPendingImages(), attempts < 48 ? 2500 : 10_000);
+                } else {
                     setNodes((prev) => resetInterruptedGeneration(prev, getActiveGenerationNodeIds(projectId)));
                 }
             };

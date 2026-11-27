@@ -16,7 +16,6 @@ import {
 import { AiRequestError, parseAiProxyRoute, readAiGenerationRequest } from "../lib/ai-request.ts";
 import { ConcurrencyLimitError, createConcurrencyLimiter } from "../lib/concurrency.ts";
 import {
-  adjustWalletCredits,
   calculateImageCredits,
   calculateVideoCredits,
   hasNonZeroPricing,
@@ -44,6 +43,40 @@ const aiProxyLimiter = createConcurrencyLimiter({
   queueTimeoutMs: env.AI_PROXY_QUEUE_WAIT_MS,
 });
 const videoPersistInFlight = new Map<string, Promise<string | null>>();
+
+let shuttingDown = false;
+const shutdownAbortController = new AbortController();
+const inFlightSyncRequests = new Set<Promise<void>>();
+const VIDEO_MONITOR_INTERVAL_MS = 30_000;
+const VIDEO_MONITOR_INITIAL_DELAY_MS = 10_000;
+let videoMonitorTimer: ReturnType<typeof setInterval> | null = null;
+let videoMonitorInitialTimer: ReturnType<typeof setTimeout> | null = null;
+let videoMonitorRunning = false;
+
+function trackInFlightSyncRequest() {
+  let resolveDone!: () => void;
+  const done = new Promise<void>((resolve) => {
+    resolveDone = resolve;
+  });
+  inFlightSyncRequests.add(done);
+  return () => {
+    inFlightSyncRequests.delete(done);
+    resolveDone();
+  };
+}
+
+/** 优雅停机：拒绝新生成请求、立即中止在途同步上游请求，并等待释放/退费事务落盘。 */
+export async function beginAiShutdown(maxWaitMs = 8000) {
+  shuttingDown = true;
+  if (!shutdownAbortController.signal.aborted) {
+    shutdownAbortController.abort(new Error("服务正在更新重启，请求已中止并退回积分"));
+  }
+  if (!inFlightSyncRequests.size) return;
+  await Promise.race([
+    Promise.allSettled([...inFlightSyncRequests]),
+    new Promise<void>((resolve) => setTimeout(resolve, maxWaitMs)),
+  ]);
+}
 
 type UsageTotals = {
   inputTokens: number;
@@ -632,6 +665,121 @@ async function handleVideoPollTaskState(userId: string, taskId: string, payload:
   }
 }
 
+async function pollPendingVideoTasksOnce() {
+  if (shuttingDown || videoMonitorRunning) return;
+  videoMonitorRunning = true;
+  try {
+    const pendingTasks = await db.query.aiBillingTasks.findMany({
+      where: eq(aiBillingTasks.status, "pending"),
+      limit: 100,
+    });
+    if (!pendingTasks.length) return;
+    const channels = await getPlatformChannels();
+    const channelMap = new Map(channels.filter((ch) => ch.enabled).map((ch) => [ch.id, ch]));
+
+    for (const task of pendingTasks) {
+      if (shuttingDown) break;
+      const channel = channelMap.get(task.channelId);
+      if (!channel || !channel.baseUrl.trim() || !channel.apiKey.trim()) continue;
+      const subPath =
+        channel.apiFormat === "gemini"
+          ? `/v1beta/${task.taskId}`
+          : `/v1/videos/${encodeURIComponent(task.taskId)}`;
+      let pollUrl: string;
+      try {
+        pollUrl = buildUpstreamUrl(channel.baseUrl, subPath);
+      } catch {
+        continue;
+      }
+      try {
+        const res = await fetch(pollUrl, {
+          headers: upstreamHeaders(channel),
+          redirect: "error",
+          signal: AbortSignal.any([
+            AbortSignal.timeout(env.AI_POLL_TIMEOUT_MS),
+            shutdownAbortController.signal,
+          ]),
+        });
+        if (res.status === 404 || res.status === 410) {
+          const durationMs = Math.max(1, Date.now() - task.createdAt.getTime());
+          const [updated] = await db
+            .update(aiBillingTasks)
+            .set({ status: "refunded", updatedAt: new Date() })
+            .where(and(eq(aiBillingTasks.id, task.id), eq(aiBillingTasks.status, "pending")))
+            .returning();
+          if (updated && updated.chargedCredits > 0) {
+            await refundLedgerCharge({
+              userId: task.userId,
+              taskId: task.taskId,
+              refId: task.taskId,
+              refundAmount: updated.chargedCredits,
+              markFailed: true,
+              metaPatch: {
+                durationMs,
+                errorMessage: "上游视频任务不存在或已过期",
+                refundDetail: "上游视频任务不存在自动退回积分",
+              },
+            });
+          } else {
+            await patchLedgerMetaByTaskId(task.userId, task.taskId, {
+              taskStatus: "failed",
+              durationMs,
+              errorMessage: "上游视频任务不存在或已过期",
+            }).catch(() => undefined);
+          }
+          continue;
+        }
+        if (!res.ok) continue;
+        const parsed = (await res.json().catch(() => null)) as Record<string, unknown> | null;
+        if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) continue;
+        await handleVideoPollTaskState(task.userId, task.taskId, parsed);
+        if (mapUpstreamTaskStatus(parsed) === "completed") {
+          const savedVideoId = await persistCompletedVideoIfNeeded({
+            userId: task.userId,
+            taskId: task.taskId,
+            model: task.model,
+            payload: parsed,
+            channelBaseUrl: channel.baseUrl,
+            channelApiFormat: channel.apiFormat,
+            channelApiKey: channel.apiKey,
+          });
+          if (savedVideoId) {
+            await patchLedgerMetaByTaskId(task.userId, task.taskId, { mediaIds: [savedVideoId] }).catch(() => undefined);
+          }
+        }
+      } catch {
+        // 瞬时网络异常不判失败，等待下一轮巡检继续跟进
+      }
+    }
+  } finally {
+    videoMonitorRunning = false;
+  }
+}
+
+/** 启动后台异步视频任务巡检：容器重启或用户离线期间持续跟踪直到上游返回终态。 */
+export function startVideoTaskMonitor() {
+  if (videoMonitorTimer || videoMonitorInitialTimer) return;
+  videoMonitorInitialTimer = setTimeout(() => {
+    videoMonitorInitialTimer = null;
+    void pollPendingVideoTasksOnce();
+    videoMonitorTimer = setInterval(() => {
+      void pollPendingVideoTasksOnce();
+    }, VIDEO_MONITOR_INTERVAL_MS);
+  }, VIDEO_MONITOR_INITIAL_DELAY_MS);
+}
+
+/** 停止后台视频任务巡检定时器。 */
+export function stopVideoTaskMonitor() {
+  if (videoMonitorInitialTimer) {
+    clearTimeout(videoMonitorInitialTimer);
+    videoMonitorInitialTimer = null;
+  }
+  if (videoMonitorTimer) {
+    clearInterval(videoMonitorTimer);
+    videoMonitorTimer = null;
+  }
+}
+
 aiRoutes.all("/proxy/:channelId/*", async (c) => {
   const authHeader = c.req.header("Authorization");
   const bearerToken = authHeader?.startsWith("Bearer ") ? authHeader.slice(7).trim() : "";
@@ -741,15 +889,24 @@ aiRoutes.all("/proxy/:channelId/*", async (c) => {
   if (generation?.streaming) forwardHeaders.set("Accept", "text/event-stream");
   const rawBody = generation?.rawBody;
   const isPolling = route.kind === "task";
+  if (shuttingDown && !isPolling) {
+    return c.json({ error: "服务正在更新重启，请稍后重试", message: "服务正在更新重启，请稍后重试" }, 503);
+  }
 
   // 非轮询生成请求先申请全局并发槽位，排队满或超时快速返回 429 且不预扣积分
   let releaseProxySlot: (() => void) | null = null;
   if (!isPolling) {
     try {
-      releaseProxySlot = await aiProxyLimiter.acquire(c.req.raw.signal);
+      const queueSignal = c.req.raw.signal
+        ? AbortSignal.any([c.req.raw.signal, shutdownAbortController.signal])
+        : shutdownAbortController.signal;
+      releaseProxySlot = await aiProxyLimiter.acquire(queueSignal);
     } catch (error) {
       if (error instanceof ConcurrencyLimitError) {
         if (error.code === "ABORTED") {
+          if (shuttingDown) {
+            return c.json({ error: "服务正在更新重启，请稍后重试", message: "服务正在更新重启，请稍后重试" }, 503);
+          }
           return c.json({ error: "请求已取消", message: "请求已取消" }, 499);
         }
         return c.json({ error: error.message, message: error.message }, 429);
@@ -758,6 +915,7 @@ aiRoutes.all("/proxy/:channelId/*", async (c) => {
     }
   }
 
+  const finishSyncTracking = isPolling ? undefined : trackInFlightSyncRequest();
   let clientAborted = Boolean(c.req.raw.signal?.aborted);
   const handleAbort = () => { clientAborted = true; };
   c.req.raw.signal?.addEventListener("abort", handleAbort, { once: true });
@@ -768,68 +926,69 @@ aiRoutes.all("/proxy/:channelId/*", async (c) => {
     proxyResourcesReleased = true;
     c.req.raw.signal?.removeEventListener("abort", handleAbort);
     releaseProxySlot?.();
+    finishSyncTracking?.();
   };
 
   try {
     let preCharged = 0;
     let preChargedLedgerId = "";
-    const isReservedCapability = channelModel?.capability === "text" || channelModel?.capability === "audio";
 
     if (shouldTrackUsage && channelModel) {
+      let reserveCredits = 0;
+      let ledgerReason: "text_gen" | "audio_gen" | "image_gen" | "video_gen" = "text_gen";
+      let expiresAt: Date | null = new Date(Date.now() + env.AI_UPSTREAM_TIMEOUT_MS);
+      let extraMeta: Record<string, unknown> = { isStream: Boolean(generation?.streaming), taskStatus: "processing" };
+
       if (channelModel.capability === "image") {
         preCharged = pricing ? calculateImageCredits(pricing as ImageModelPricing, requestedImageCount, resolutionTier, sizeStr) : 0;
-        const deduct = await adjustWalletCredits({
-          userId: user.id, delta: -preCharged, reason: "image_gen", forceLedger: true,
-          meta: { model: modelName, count: requestedImageCount, resolutionTier, size: sizeStr, isStream: false, taskStatus: "processing", ...(clientTaskId ? { clientTaskId } : {}) },
-        });
-        if (!deduct.ok) {
-          const msg = "积分不足（当前可用余额 " + deduct.balance + "，本次预计需要 " + preCharged + "）";
-          return c.json({ error: msg, message: msg }, 402);
-        }
-        preChargedLedgerId = deduct.ledgerId;
+        reserveCredits = preCharged;
+        ledgerReason = "image_gen";
+        expiresAt = null;
+        extraMeta = { count: requestedImageCount, resolutionTier, size: sizeStr, isStream: false, taskStatus: "processing" };
       } else if (channelModel.capability === "video") {
         preCharged = pricing ? calculateVideoCredits(pricing as VideoModelPricing, { seconds, hasReferenceVideo, referenceVideoSeconds }) : 0;
-        const deduct = await adjustWalletCredits({
-          userId: user.id, delta: -preCharged, reason: "video_gen", forceLedger: true,
-          meta: { model: modelName, seconds, hasReferenceVideo, ...(referenceVideoSeconds !== undefined ? { referenceVideoSeconds } : {}), isStream: false, taskStatus: "not_started", provider: channel.apiFormat, ...(clientTaskId ? { clientTaskId } : {}) },
-        });
-        if (!deduct.ok) {
-          const msg = "积分不足（当前可用余额 " + deduct.balance + "，本次需要 " + preCharged + "）";
-          return c.json({ error: msg, message: msg }, 402);
-        }
-        preChargedLedgerId = deduct.ledgerId;
-      } else if (isReservedCapability) {
-        const reservation = await reserveProcessingLedger({
-          userId: user.id,
-          reason: channelModel.capability === "audio" ? "audio_gen" : "text_gen",
-          priced: shouldBill,
-          reserveCredits: generation?.estimatedReserveCredits,
-          expiresAt: new Date(Date.now() + env.AI_UPSTREAM_TIMEOUT_MS),
-          meta: { model: modelName, isStream: Boolean(generation?.streaming), taskStatus: "processing", ...(clientTaskId ? { clientTaskId } : {}) },
-        });
-        if (!reservation.ok) {
-          const msg =
-            reservation.required > 0 && reservation.balance > 0
-              ? `积分余额不足（当前可用 ${reservation.balance}，本次至少需要预留 ${reservation.required}）`
-              : "积分余额不足或已被其他请求占用，请先充值";
-          return c.json({ error: msg, message: msg, balance: reservation.balance, required: reservation.required }, 402);
-        }
-        preChargedLedgerId = reservation.ledgerId;
+        reserveCredits = preCharged;
+        ledgerReason = "video_gen";
+        expiresAt = null;
+        extraMeta = {
+          seconds,
+          hasReferenceVideo,
+          ...(referenceVideoSeconds !== undefined ? { referenceVideoSeconds } : {}),
+          isStream: false,
+          taskStatus: "not_started",
+          provider: channel.apiFormat,
+        };
+      } else if (channelModel.capability === "audio") {
+        reserveCredits = generation?.estimatedReserveCredits ?? 0;
+        ledgerReason = "audio_gen";
+      } else {
+        reserveCredits = generation?.estimatedReserveCredits ?? 0;
+        ledgerReason = "text_gen";
       }
+
+      const reservation = await reserveProcessingLedger({
+        userId: user.id,
+        reason: ledgerReason,
+        priced: shouldBill && (channelModel.capability === "text" || channelModel.capability === "audio" || reserveCredits > 0),
+        reserveCredits,
+        expiresAt,
+        meta: { model: modelName, ...extraMeta, ...(clientTaskId ? { clientTaskId } : {}) },
+      });
+      if (!reservation.ok) {
+        const msg =
+          reservation.required > 0 && reservation.balance > 0
+            ? `积分余额不足（当前可用 ${reservation.balance}，本次至少需要预留 ${reservation.required}）`
+            : "积分余额不足或已被其他请求占用，请先充值";
+        return c.json({ error: msg, message: msg, balance: reservation.balance, required: reservation.required }, 402);
+      }
+      preChargedLedgerId = reservation.ledgerId;
     }
 
     const startedAt = Date.now();
     const finishFailedBilling = async (message: string, extra: Record<string, unknown> = {}) => {
       const metaPatch = { model: modelName, durationMs: Math.max(1, Date.now() - startedAt), taskStatus: "failed", errorMessage: message, ...extra };
-      if (preChargedLedgerId && isReservedCapability) {
+      if (preChargedLedgerId) {
         await settleProcessingLedger({ ledgerId: preChargedLedgerId, userId: user.id, credits: 0, metaPatch }).catch(() => undefined);
-      } else if (preCharged > 0) {
-        await refundLedgerCharge({
-          userId: user.id, ledgerId: preChargedLedgerId || undefined, taskId: task?.taskId, refId: task?.taskId,
-          refundAmount: preCharged, markFailed: true, metaPatch: { ...metaPatch, refundDetail: "上游请求失败自动退回" },
-        }).catch(() => undefined);
-      } else if (preChargedLedgerId) {
-        await patchLedgerMeta(preChargedLedgerId, metaPatch).catch(() => undefined);
       }
     };
     const settleReserved = async (credits: number, metaPatch: Record<string, unknown>) => {
@@ -842,17 +1001,30 @@ aiRoutes.all("/proxy/:channelId/*", async (c) => {
       }
     };
 
+    const disableUpstreamTimeout = !isPolling && (channelModel?.capability === "image" || channelModel?.capability === "video");
+    const upstreamSignal = disableUpstreamTimeout
+      ? shutdownAbortController.signal
+      : AbortSignal.any([
+          AbortSignal.timeout(isPolling ? env.AI_POLL_TIMEOUT_MS : env.AI_UPSTREAM_TIMEOUT_MS),
+          shutdownAbortController.signal,
+        ]);
+
     let upstream: Response;
     try {
       upstream = await fetch(targetUrl, {
         method, headers: forwardHeaders, body: rawBody, redirect: "error",
-        signal: AbortSignal.timeout(isPolling ? env.AI_POLL_TIMEOUT_MS : env.AI_UPSTREAM_TIMEOUT_MS),
+        signal: upstreamSignal,
       });
     } catch (error) {
-      const timedOut = error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError");
-      const message = timedOut ? "上游请求超时" : truncateErrorText(error instanceof Error ? error.message : String(error)) || "上游连接失败";
+      const restarted = shuttingDown || shutdownAbortController.signal.aborted;
+      const timedOut = !restarted && error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError");
+      const message = restarted
+        ? "服务正在更新重启，请求已中止并释放预占额度"
+        : timedOut
+          ? "上游请求超时"
+          : truncateErrorText(error instanceof Error ? error.message : String(error)) || "上游连接失败";
       await finishFailedBilling(message, { upstreamMs: Math.max(1, Date.now() - startedAt) });
-      return c.json({ error: message, message }, timedOut ? 504 : 502);
+      return c.json({ error: message, message }, restarted ? 503 : timedOut ? 504 : 502);
     }
 
     const responseHeaders = new Headers();
@@ -914,9 +1086,9 @@ aiRoutes.all("/proxy/:channelId/*", async (c) => {
         await finishFailedBilling(errorMessage || "上游未返回有效图片", { upstreamMs: durationMs });
         return c.json({ error: errorMessage || "上游未返回有效图片" }, 502);
       }
-      const partialRefund = actualCount < requestedImageCount && preCharged > 0
-        ? roundCredits(preCharged * (requestedImageCount - actualCount) / requestedImageCount)
-        : 0;
+      const actualCharge = actualCount < requestedImageCount && preCharged > 0
+        ? roundCredits(preCharged * actualCount / requestedImageCount)
+        : preCharged;
       const persisted = await persistGeneratedImagesFromPayload({
         userId: user.id, payload: parsed, model: modelName, prompt: promptText, clientTaskId: clientTaskId || undefined,
       }).catch(() => ({ mediaIds: [], fetchImageMs: 0, cloudSaveMs: 0 }));
@@ -925,14 +1097,13 @@ aiRoutes.all("/proxy/:channelId/*", async (c) => {
       const imageMeta = {
         model: modelName, count: requestedImageCount, actual: actualCount, durationMs, upstreamMs: durationMs,
         fetchImageMs: persisted.fetchImageMs, cloudSaveMs: persisted.cloudSaveMs, taskStatus: "completed",
-        ...(partialRefund > 0 ? { refundDetail: "按实际出图数量退回差额" } : {}),
+        ...(actualCount < requestedImageCount && preCharged > 0 ? { refundDetail: "按实际出图数量扣费" } : {}),
         ...(savedMediaIds.length ? { mediaIds: savedMediaIds } : {}),
         ...(clientAborted ? { clientAborted: true } : {}),
       };
-      if (partialRefund > 0) {
-        await refundLedgerCharge({ userId: user.id, ledgerId: preChargedLedgerId, refundAmount: partialRefund, metaPatch: imageMeta }).catch(() => undefined);
-      } else if (preChargedLedgerId) {
-        await patchLedgerMeta(preChargedLedgerId, imageMeta).catch(() => undefined);
+      const settlement = await settleReserved(actualCharge, imageMeta);
+      if (!settlement.ok) {
+        return c.json({ error: settlement.insufficient ? "积分余额不足，未返回生成结果" : "生图计费未完成，未返回生成结果" }, settlement.insufficient ? 402 : 502);
       }
       return new Response(text, { status: upstream.status, headers: responseHeaders });
     }
@@ -958,15 +1129,30 @@ aiRoutes.all("/proxy/:channelId/*", async (c) => {
         await finishFailedBilling(message);
         return c.json({ error: message }, 502);
       }
-      const [insertedTask] = await db.insert(aiBillingTasks).values({
+      const settlement = await settleReserved(preCharged, { taskId, taskStatus });
+      if (preCharged > 0 && !settlement.ok) {
+        return c.json({ error: settlement.insufficient ? "积分余额不足，未创建视频任务" : "视频计费未完成，未创建视频任务" }, settlement.insufficient ? 402 : 502);
+      }
+      const insertedTask = await db.insert(aiBillingTasks).values({
         id: nanoid(), userId: user.id, channelId, model: modelName, taskId, chargedCredits: preCharged,
         status: taskStatus === "completed" ? "completed" : "pending",
-      }).onConflictDoNothing().returning({ id: aiBillingTasks.id });
+      }).onConflictDoNothing().returning({ id: aiBillingTasks.id }).then((rows) => rows[0]).catch(() => undefined);
       if (!insertedTask) {
-        await finishFailedBilling("上游任务编号冲突，已拦截结果");
+        if (preCharged > 0) {
+          await refundLedgerCharge({
+            userId: user.id,
+            ledgerId: preChargedLedgerId || undefined,
+            taskId,
+            refId: taskId,
+            refundAmount: preCharged,
+            markFailed: true,
+            metaPatch: { errorMessage: "上游任务编号冲突，已拦截并退回积分", refundDetail: "上游任务编号冲突自动退回" },
+          }).catch(() => undefined);
+        } else {
+          await patchLedgerMeta(preChargedLedgerId, { taskStatus: "failed", errorMessage: "上游任务编号冲突，已拦截结果" }).catch(() => undefined);
+        }
         return c.json({ error: "上游任务编号冲突，已拦截结果" }, 502);
       }
-      if (preChargedLedgerId) await patchLedgerMeta(preChargedLedgerId, { taskId, taskStatus }).catch(() => undefined);
       return new Response(text, { status: upstream.status, headers: responseHeaders });
     }
 
@@ -1084,14 +1270,16 @@ aiRoutes.all("/proxy/:channelId/*", async (c) => {
         };
 
         const onStreamAbort = () => {
-          clientAborted = true;
+          if (!shuttingDown) clientAborted = true;
           void reader.cancel().catch(() => undefined);
         };
         const cleanupStream = () => {
           c.req.raw.signal?.removeEventListener("abort", onStreamAbort);
+          shutdownAbortController.signal.removeEventListener("abort", onStreamAbort);
           releaseProxyResources();
         };
         c.req.raw.signal?.addEventListener("abort", onStreamAbort, { once: true });
+        shutdownAbortController.signal.addEventListener("abort", onStreamAbort, { once: true });
 
         streamOwnsSlot = true;
         let stream: ReadableStream<Uint8Array>;
@@ -1113,7 +1301,14 @@ aiRoutes.all("/proxy/:channelId/*", async (c) => {
                 }
                 pending += decoder.decode();
                 if (pending) inspectLine(pending);
-                await settleStream(clientAborted, clientAborted ? "客户端取消流式请求" : undefined);
+                await settleStream(
+                  clientAborted || shuttingDown,
+                  shuttingDown
+                    ? "服务正在更新重启，流式请求已中止"
+                    : clientAborted
+                      ? "客户端取消流式请求"
+                      : undefined,
+                );
                 try {
                   controller.close();
                 } catch {
@@ -1121,7 +1316,13 @@ aiRoutes.all("/proxy/:channelId/*", async (c) => {
                 }
               } catch (error) {
                 const timedOut = error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError");
-                const failMsg = clientAborted ? "客户端取消流式请求" : timedOut ? "上游流式响应超时" : "上游流式响应读取失败";
+                const failMsg = shuttingDown
+                  ? "服务正在更新重启，流式请求已中止"
+                  : clientAborted
+                    ? "客户端取消流式请求"
+                    : timedOut
+                      ? "上游流式响应超时"
+                      : "上游流式响应读取失败";
                 await settleStream(true, failMsg);
                 try {
                   if (!clientAborted) controller.error(error);
@@ -1142,6 +1343,7 @@ aiRoutes.all("/proxy/:channelId/*", async (c) => {
         } catch (error) {
           streamOwnsSlot = false;
           c.req.raw.signal?.removeEventListener("abort", onStreamAbort);
+          shutdownAbortController.signal.removeEventListener("abort", onStreamAbort);
           throw error;
         }
         return new Response(stream, { status: upstream.status, headers: responseHeaders });

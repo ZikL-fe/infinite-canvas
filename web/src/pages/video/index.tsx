@@ -18,7 +18,7 @@ import { storageApi } from "@/services/api/server";
 import { prefetchUncachedMediaUrls, resolveMediaUrl } from "@/services/file-storage";
 import { deleteWorkbenchLogsWithCloud, isWorkbenchLogDeleted, pushWorkbenchLogToCloud, syncWorkbenchLogsWithCloud, videoWorkbenchLogStore } from "@/services/workbench-sync";
 import { resolveImageUrl, resolvePickedImage, getImagePreviewRevision, prefetchUncachedImageUrls, previewUrlFor, subscribeImagePreviews, uploadImage } from "@/services/image-storage";
-import { createVideoGenerationTask, pollVideoGenerationTask, storeGeneratedVideo, type VideoGenerationTask } from "@/services/api/video";
+import { createVideoGenerationTask, isTransientVideoPollError, pollVideoGenerationTask, storeGeneratedVideo, type VideoGenerationTask } from "@/services/api/video";
 import { ensureRuntimeConfigForGeneration } from "@/services/cloud-sync";
 import { isCloudAuthenticated, WORKSPACE_CHANGED_EVENT, type WorkspaceChangeScope } from "@/services/cloud-media";
 import { useAssetStore } from "@/stores/use-asset-store";
@@ -425,16 +425,21 @@ export default function VideoPage() {
     const resumePendingLogs = (items: GenerationLog[]) => {
         const pendingItems = items.filter((log) => log.status === "pending");
         if (!pendingItems.length) return;
-        const missingTaskLogs = pendingItems.filter((log) => !log.task && log.clientTaskId);
-        for (const log of pendingItems) {
-            if (log.task) void pollGenerationLog(log);
+        const trackedLogs = pendingItems.filter((log) => Boolean(log.clientTaskId));
+        if (!isCloudAuthenticated() || !trackedLogs.length) {
+            for (const log of pendingItems) {
+                if (log.task) void pollGenerationLog(log);
+            }
+            return;
         }
-        if (!missingTaskLogs.length || !isCloudAuthenticated()) return;
-        const taskIds = missingTaskLogs.map((log) => log.clientTaskId!).filter(Boolean);
+        for (const log of pendingItems) {
+            if (!log.clientTaskId && log.task) void pollGenerationLog(log);
+        }
+        const taskIds = trackedLogs.map((log) => log.clientTaskId!).filter(Boolean);
         void storageApi
             .getByTasks(taskIds)
             .then(async (res) => {
-                for (const log of missingTaskLogs) {
+                for (const log of trackedLogs) {
                     const tid = log.clientTaskId;
                     if (!tid || isWorkbenchLogDeleted(log.id)) continue;
                     const mediaList = res.itemsByTask[tid] || [];
@@ -477,10 +482,16 @@ export default function VideoPage() {
                         const updatedLog: GenerationLog = { ...log, task: nextTask };
                         await saveLog(updatedLog, false);
                         void pollGenerationLog(updatedLog);
+                    } else if (log.task) {
+                        void pollGenerationLog(log);
                     }
                 }
             })
-            .catch(() => undefined);
+            .catch(() => {
+                for (const log of trackedLogs) {
+                    if (log.task) void pollGenerationLog(log);
+                }
+            });
     };
 
     const pollGenerationLog = async (log: GenerationLog, configOverride?: AiConfig, agentTaskId?: string) => {
@@ -500,9 +511,21 @@ export default function VideoPage() {
             }
         }
         try {
-            for (let attempt = 0; attempt < 120; attempt += 1) {
+            let consecutiveTransientErrors = 0;
+            for (let attempt = 0; ; attempt += 1) {
                 if (isWorkbenchLogDeleted(log.id)) return;
-                const state = await pollVideoGenerationTask(resolvedConfig || taskConfig, log.task);
+                let state;
+                try {
+                    state = await pollVideoGenerationTask(resolvedConfig || taskConfig, log.task);
+                    consecutiveTransientErrors = 0;
+                } catch (pollError) {
+                    if (!isTransientVideoPollError(pollError) || consecutiveTransientErrors >= 30) {
+                        throw pollError;
+                    }
+                    consecutiveTransientErrors += 1;
+                    await delay(5000);
+                    continue;
+                }
                 if (isWorkbenchLogDeleted(log.id)) return;
                 if (state.status === "completed") {
                     const stored = await storeGeneratedVideo(state.result);
@@ -527,8 +550,7 @@ export default function VideoPage() {
                     return;
                 }
                 if (state.status === "failed") throw new Error(state.error);
-                if (attempt === 119) throw new Error(t("videoWorkbench.timeout"));
-                await delay(2500);
+                await delay(attempt < 48 ? 2500 : 10_000);
             }
         } catch (error) {
             if (isWorkbenchLogDeleted(log.id) || isPageUnloading()) return;

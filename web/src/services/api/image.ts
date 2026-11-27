@@ -6,9 +6,9 @@ import { normalizePluginImages, runModelPlugin } from "./model-plugin";
 import { nanoid } from "nanoid";
 import { dataUrlToFile } from "@/lib/image-utils";
 import { buildImageReferencePromptText } from "@/lib/image-reference-prompt";
-import { aiAxios, fetchAiWithRefresh, readCloudMediaIdsHeader } from "@/services/api/ai-http";
+import { aiAxios, fetchAiWithRefresh, isAiProxyUrl, readCloudMediaIdsHeader } from "@/services/api/ai-http";
 import { imageToDataUrl } from "@/services/image-storage";
-import { scheduleRefreshUserBalance } from "@/services/api/server";
+import { scheduleRefreshUserBalance, storageApi } from "@/services/api/server";
 import { imageSizePresets, inferMediaScale } from "@/lib/media-size";
 import type { ReferenceImage } from "@/types/image";
 
@@ -107,8 +107,75 @@ const IMAGE_MAX_PIXELS = 8294400;
 const IMAGE_MAX_EDGE = 3840;
 const IMAGE_MAX_RATIO = 3;
 const IMAGE_OUTPUT_FORMAT = "png";
-// 与 image-storage 的下载超时保持一致，避免接口挂起时节点一直停在生成中。
-const IMAGE_REQUEST_TIMEOUT_MS = 10 * 60_000;
+// 生图不设前端超时；若代理连接因长时间静默断开，由 /api/storage/by-tasks 接管轮询。
+const IMAGE_REQUEST_TIMEOUT_MS = 0;
+
+function sleepWithSignal(ms: number, signal?: AbortSignal) {
+    return new Promise<void>((resolve, reject) => {
+        if (signal?.aborted) {
+            reject(new DOMException("Aborted", "AbortError"));
+            return;
+        }
+        const timer = setTimeout(() => {
+            signal?.removeEventListener("abort", onAbort);
+            resolve();
+        }, ms);
+        const onAbort = () => {
+            clearTimeout(timer);
+            reject(new DOMException("Aborted", "AbortError"));
+        };
+        signal?.addEventListener("abort", onAbort, { once: true });
+    });
+}
+
+function isRecoverableProxyDisconnect(error: unknown, signal?: AbortSignal) {
+    if (signal?.aborted || axios.isCancel(error)) return false;
+    if (error instanceof DOMException && error.name === "AbortError") return false;
+    if (!axios.isAxiosError(error)) return true;
+    const status = error.response?.status;
+    if (!status) return true;
+    return status === 502 || status === 503 || status === 504;
+}
+
+async function runImageRequestWithRecovery(
+    baseUrl: string,
+    options: RequestOptions | undefined,
+    run: () => Promise<GeneratedImageItem[]>,
+): Promise<GeneratedImageItem[]> {
+    try {
+        return await run();
+    } catch (error) {
+        const clientTaskId = options?.clientTaskId?.trim();
+        if (!clientTaskId || !isAiProxyUrl(baseUrl) || !isRecoverableProxyDisconnect(error, options?.signal)) {
+            throw error;
+        }
+        let consecutiveFailures = 0;
+        for (let attempt = 0; ; attempt += 1) {
+            if (options?.signal?.aborted) throw new DOMException("Aborted", "AbortError");
+            let res: Awaited<ReturnType<typeof storageApi.getByTasks>>;
+            try {
+                res = await storageApi.getByTasks([clientTaskId]);
+                consecutiveFailures = 0;
+            } catch {
+                consecutiveFailures += 1;
+                if (consecutiveFailures >= 12) throw error;
+                await sleepWithSignal(5000, options?.signal);
+                continue;
+            }
+            const mediaList = res.itemsByTask[clientTaskId] || [];
+            const images = mediaList
+                .filter((item) => Boolean(item.url))
+                .map((item) => ({ id: nanoid(), dataUrl: item.url, storageKey: item.id }));
+            if (images.length > 0) return images;
+            const serverErr = res.errorByTask?.[clientTaskId];
+            if (serverErr) throw new Error(serverErr);
+            if (!res.processingTaskIds.includes(clientTaskId)) {
+                throw error;
+            }
+            await sleepWithSignal(attempt < 48 ? 2500 : 10_000, options?.signal);
+        }
+    }
+}
 
 const GEMINI_SUPPORTED_RATIOS = ["1:1", "1:4", "1:8", "2:3", "3:2", "3:4", "4:1", "4:3", "4:5", "5:4", "8:1", "9:16", "16:9", "21:9"];
 
@@ -677,22 +744,24 @@ async function requestGeminiImagesOnce(config: AiConfig, prompt: string, referen
     for (const image of references) {
         parts.push(toGeminiImagePart(await imageToDataUrl(image)));
     }
-    const response = await aiAxios.post<GeminiPayload>(
-        geminiApiUrl(config, "generateContent"),
-        {
-            ...toGeminiBody(config, [{ role: "user", content: prompt }], { generationConfig: { responseModalities: ["TEXT", "IMAGE"], ...resolveGeminiImageConfig(config) } }),
-            contents: [{ role: "user", parts }],
-        },
-        {
-            headers: {
-                ...geminiHeaders(config),
-                ...(options?.clientTaskId ? { "X-Client-Task-Id": options.clientTaskId } : {}),
+    return runImageRequestWithRecovery(config.baseUrl, options, async () => {
+        const response = await aiAxios.post<GeminiPayload>(
+            geminiApiUrl(config, "generateContent"),
+            {
+                ...toGeminiBody(config, [{ role: "user", content: prompt }], { generationConfig: { responseModalities: ["TEXT", "IMAGE"], ...resolveGeminiImageConfig(config) } }),
+                contents: [{ role: "user", parts }],
             },
-            signal: options?.signal,
-            timeout: IMAGE_REQUEST_TIMEOUT_MS,
-        },
-    );
-    return parseGeminiImagePayload(response.data, readCloudMediaIdsHeader(response.headers));
+            {
+                headers: {
+                    ...geminiHeaders(config),
+                    ...(options?.clientTaskId ? { "X-Client-Task-Id": options.clientTaskId } : {}),
+                },
+                signal: options?.signal,
+                timeout: IMAGE_REQUEST_TIMEOUT_MS,
+            },
+        );
+        return parseGeminiImagePayload(response.data, readCloudMediaIdsHeader(response.headers));
+    });
 }
 
 function parseGeminiImagePayload(payload: GeminiPayload, cloudMediaIds: Array<string | null> = []) {
@@ -760,30 +829,32 @@ export async function requestGeneration(
         const requestSize = resolveRequestSize(config.size);
         const resolutionScale = inferMediaScale(config.size);
         const background = normalizeBackground(config.background);
-        const response = await aiAxios.post<ImageApiResponse>(
-            aiApiUrl(requestConfig, "/images/generations"),
-            {
-                model: requestConfig.model,
-                prompt: withSystemPrompt(requestConfig, prompt),
-                n,
-                ...(quality ? { quality } : {}),
-                ...(requestSize ? { size: requestSize } : {}),
-                ...(background ? { background } : {}),
-                // gpt-image models reject response_format; they always return b64.
-                ...(/gpt-image/.test(requestConfig.model) ? {} : { response_format: "b64_json" }),
-                output_format: IMAGE_OUTPUT_FORMAT,
-            },
-            {
-                headers: {
-                    ...aiHeaders(requestConfig, "application/json"),
-                    ...(resolutionScale !== "auto" ? { "X-Billing-Resolution": resolutionScale } : {}),
-                    ...(options?.clientTaskId ? { "X-Client-Task-Id": options.clientTaskId } : {}),
+        return await runImageRequestWithRecovery(requestConfig.baseUrl, options, async () => {
+            const response = await aiAxios.post<ImageApiResponse>(
+                aiApiUrl(requestConfig, "/images/generations"),
+                {
+                    model: requestConfig.model,
+                    prompt: withSystemPrompt(requestConfig, prompt),
+                    n,
+                    ...(quality ? { quality } : {}),
+                    ...(requestSize ? { size: requestSize } : {}),
+                    ...(background ? { background } : {}),
+                    // gpt-image models reject response_format; they always return b64.
+                    ...(/gpt-image/.test(requestConfig.model) ? {} : { response_format: "b64_json" }),
+                    output_format: IMAGE_OUTPUT_FORMAT,
                 },
-                signal: options?.signal,
-                timeout: IMAGE_REQUEST_TIMEOUT_MS,
-            },
-        );
-        return await parseImagePayload(response.data, readCloudMediaIdsHeader(response.headers));
+                {
+                    headers: {
+                        ...aiHeaders(requestConfig, "application/json"),
+                        ...(resolutionScale !== "auto" ? { "X-Billing-Resolution": resolutionScale } : {}),
+                        ...(options?.clientTaskId ? { "X-Client-Task-Id": options.clientTaskId } : {}),
+                    },
+                    signal: options?.signal,
+                    timeout: IMAGE_REQUEST_TIMEOUT_MS,
+                },
+            );
+            return await parseImagePayload(response.data, readCloudMediaIdsHeader(response.headers));
+        });
     } catch (error) {
         throw new Error(readAxiosError(error, apiText("requestFailed")));
     } finally {
@@ -847,16 +918,18 @@ export async function requestEdit(
         const imageField = files.length > 1 ? "image[]" : "image";
         files.forEach((file) => formData.append(imageField, file));
 
-        const response = await aiAxios.post<ImageApiResponse>(aiApiUrl(requestConfig, "/images/edits"), formData, {
-            headers: {
-                ...aiHeaders(requestConfig),
-                ...(inferMediaScale(config.size) !== "auto" ? { "X-Billing-Resolution": inferMediaScale(config.size) } : {}),
-                ...(options?.clientTaskId ? { "X-Client-Task-Id": options.clientTaskId } : {}),
-            },
-            signal: options?.signal,
-            timeout: IMAGE_REQUEST_TIMEOUT_MS,
+        return await runImageRequestWithRecovery(requestConfig.baseUrl, options, async () => {
+            const response = await aiAxios.post<ImageApiResponse>(aiApiUrl(requestConfig, "/images/edits"), formData, {
+                headers: {
+                    ...aiHeaders(requestConfig),
+                    ...(inferMediaScale(config.size) !== "auto" ? { "X-Billing-Resolution": inferMediaScale(config.size) } : {}),
+                    ...(options?.clientTaskId ? { "X-Client-Task-Id": options.clientTaskId } : {}),
+                },
+                signal: options?.signal,
+                timeout: IMAGE_REQUEST_TIMEOUT_MS,
+            });
+            return await parseImagePayload(response.data, readCloudMediaIdsHeader(response.headers));
         });
-        return await parseImagePayload(response.data, readCloudMediaIdsHeader(response.headers));
     } catch (error) {
         throw new Error(readAxiosError(error, apiText("requestFailed")));
     } finally {

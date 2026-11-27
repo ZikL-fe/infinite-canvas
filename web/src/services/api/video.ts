@@ -61,19 +61,44 @@ export async function requestVideoGeneration(config: AiConfig, prompt: string, r
 }
 
 export async function waitForVideoGenerationTask(config: AiConfig, task: VideoGenerationTask, options?: RequestOptions): Promise<VideoGenerationResult> {
-    for (let attempt = 0; attempt < 120; attempt += 1) {
+    let consecutiveTransientErrors = 0;
+    for (let attempt = 0; ; attempt += 1) {
         if (options?.signal?.aborted) throw new DOMException("Aborted", "AbortError");
-        const state = await pollVideoGenerationTask(config, task, options);
-        if (state.status === "completed") return state.result;
-        if (state.status === "failed") throw videoTaskFailed(state.error);
-        if (attempt === 119) throw new Error(apiText("videoTimeout", { provider: "" }));
-        await delay(2500, options?.signal);
+        try {
+            const state = await pollVideoGenerationTask(config, task, options);
+            consecutiveTransientErrors = 0;
+            if (state.status === "completed") return state.result;
+            if (state.status === "failed") throw videoTaskFailed(state.error);
+            await delay(attempt < 48 ? 2500 : 10_000, options?.signal);
+        } catch (error) {
+            if (!isTransientVideoPollError(error) || consecutiveTransientErrors >= 30) {
+                throw error;
+            }
+            consecutiveTransientErrors += 1;
+            await delay(5000, options?.signal);
+        }
     }
-    throw new Error(apiText("videoTimeout", { provider: "" }));
 }
 
 export function isVideoTaskFailed(error: unknown) {
     return error instanceof Error && error.name === "VideoTaskFailed";
+}
+
+export function isTransientVideoPollError(error: unknown) {
+    return error instanceof Error && error.name === "TransientVideoPollError";
+}
+
+function throwVideoPollError(error: unknown): never {
+    const message = readAxiosError(error, apiText("videoTaskQueryFailed"));
+    if (axios.isAxiosError(error) && !axios.isCancel(error)) {
+        const status = error.response?.status;
+        if (!status || status === 429 || status === 502 || status === 503 || status === 504) {
+            const transient = new Error(message);
+            transient.name = "TransientVideoPollError";
+            throw transient;
+        }
+    }
+    throw new Error(message);
 }
 
 function videoTaskFailed(message: string) {
@@ -283,7 +308,7 @@ async function pollOpenAIVideoTask(config: AiConfig, task: VideoGenerationTask, 
         }
         return { status: "pending" };
     } catch (error) {
-        throw new Error(readAxiosError(error, apiText("videoTaskQueryFailed")));
+        throwVideoPollError(error);
     }
 }
 
@@ -359,7 +384,7 @@ async function pollGeminiVideoTask(config: AiConfig, task: VideoGenerationTask, 
         const result = await videoResultFromUrl(url, options);
         return { status: "completed", result: cloudMediaId ? { ...result, storageKey: cloudMediaId } : result };
     } catch (error) {
-        throw new Error(readAxiosError(error, apiText("videoTaskQueryFailed")));
+        throwVideoPollError(error);
     }
 }
 

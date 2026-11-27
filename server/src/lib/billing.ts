@@ -2,7 +2,7 @@
 import { and, count, desc, eq, gte, gt, ilike, inArray, lte, or, sql, type SQL } from "drizzle-orm";
 import { nanoid } from "nanoid";
 
-import { creditLedger, creditWallets, db, users } from "../db/index.ts";
+import { creditLedger, creditWallets, db, mediaObjects, aiBillingTasks, users } from "../db/index.ts";
 import { scheduleWalletBalanceAlertCheck } from "./billing-alert.ts";
 import type {
   AudioModelPricing,
@@ -151,7 +151,7 @@ async function getReservedCredits(tx: DbTransaction, userId: string, excludeLedg
   const [row] = await tx.execute(sql`
     SELECT COALESCE(SUM(reserved_credits), 0) AS reserved
     FROM credit_ledger
-    WHERE user_id = ${userId} AND reserved_credits > 0 AND reservation_expires_at > clock_timestamp() ${excludeLedger}
+    WHERE user_id = ${userId} AND reserved_credits > 0 AND (reservation_expires_at IS NULL OR reservation_expires_at > clock_timestamp()) ${excludeLedger}
   `);
   return roundCredits(Number(row?.reserved ?? 0));
 }
@@ -168,7 +168,7 @@ async function expireWalletReservations(tx: DbTransaction, userId: string) {
       and(
         eq(creditLedger.userId, userId),
         gt(creditLedger.reservedCredits, 0),
-        sql`${creditLedger.reservationExpiresAt} <= clock_timestamp()`,
+        sql`${creditLedger.reservationExpiresAt} IS NOT NULL AND ${creditLedger.reservationExpiresAt} <= clock_timestamp()`,
       ),
     );
 }
@@ -279,13 +279,13 @@ export async function patchLedgerMetaByTaskId(userId: string, taskId: string, pa
     .where(and(eq(creditLedger.userId, userId), sql`${creditLedger.meta}->>'taskId' = ${taskId}`));
 }
 
-/** 付费文本、语音请求按预估金额全额锁定可用余额，不足时直接拒绝以防真流式阶段透支；免费请求只留下待结算记录。 */
+/** 付费请求按预估金额预占可用余额，不足时直接拒绝以防并发透支；免费请求只留下待结算记录。 */
 export async function reserveProcessingLedger(params: {
   userId: string;
-  reason: "text_gen" | "audio_gen";
+  reason: "text_gen" | "audio_gen" | "image_gen" | "video_gen";
   priced: boolean;
   reserveCredits?: number;
-  expiresAt: Date;
+  expiresAt?: Date | null;
   meta: Record<string, unknown>;
 }) {
   return db.transaction(async (tx) => {
@@ -306,7 +306,7 @@ export async function reserveProcessingLedger(params: {
       delta: 0,
       balanceAfter: balance,
       reservedCredits: reserved,
-      reservationExpiresAt: params.expiresAt,
+      reservationExpiresAt: params.expiresAt ?? null,
       reason: params.reason,
       meta: {
         ...params.meta,
@@ -332,7 +332,7 @@ export async function settleProcessingLedger(params: {
     const [entry] = await tx.select({
       reservedCredits: creditLedger.reservedCredits,
       reservationExpiresAt: creditLedger.reservationExpiresAt,
-      expired: sql<boolean>`${creditLedger.reservationExpiresAt} <= clock_timestamp()`,
+      expired: sql<boolean>`${creditLedger.reservationExpiresAt} IS NOT NULL AND ${creditLedger.reservationExpiresAt} <= clock_timestamp()`,
       delta: creditLedger.delta,
       balanceAfter: creditLedger.balanceAfter,
       meta: creditLedger.meta,
@@ -340,9 +340,9 @@ export async function settleProcessingLedger(params: {
 
     if (!entry) return { balance: current, chargedCredits: 0, uncollectedCredits: charge, applied: false };
     const previousMeta = entry.meta && typeof entry.meta === "object" ? entry.meta : {};
-    const previousStatus = previousMeta.billingStatus;
-    if (!entry.reservationExpiresAt) {
-      if (!["settled", "released", "insufficient_balance", "reservation_expired"].includes(String(previousStatus))) {
+    const previousStatus = String(previousMeta.billingStatus || "");
+    if (previousStatus !== "reserved" && previousStatus !== "pending") {
+      if (!["settled", "released", "insufficient_balance", "reservation_expired"].includes(previousStatus)) {
         return { balance: current, chargedCredits: 0, uncollectedCredits: charge, applied: false };
       }
       return {
@@ -352,7 +352,7 @@ export async function settleProcessingLedger(params: {
         applied: previousStatus !== "reservation_expired",
       };
     }
-    const expired = Boolean(entry.expired);
+    const expired = Boolean(entry.reservationExpiresAt && entry.expired);
     const available = Math.max(0, roundCredits(current - (await getReservedCredits(tx, params.userId, params.ledgerId))));
     const chargeable = available;
     const chargedCredits = Math.min(charge, chargeable);
@@ -780,4 +780,137 @@ export async function queryCreditLedger(params: QueryCreditLedgerParams) {
       recentRpm,
     },
   };
+}
+
+/** 单实例启动时清理上一进程遗留的未完成生成流水（保留已生成 taskId 的异步视频任务）。 */
+export async function cleanupOrphanedProcessingTasks() {
+  const candidates = await db
+    .select({
+      id: creditLedger.id,
+      userId: creditLedger.userId,
+      delta: creditLedger.delta,
+      reservedCredits: creditLedger.reservedCredits,
+      reason: creditLedger.reason,
+      meta: creditLedger.meta,
+    })
+    .from(creditLedger)
+    .where(
+      and(
+        inArray(creditLedger.reason, [...USAGE_LOG_REASONS]),
+        or(
+          gt(creditLedger.reservedCredits, 0),
+          sql`COALESCE(${creditLedger.meta}->>'taskStatus', '') IN ('processing', 'not_started')`,
+        ),
+      ),
+    );
+
+  let cleaned = 0;
+  for (const row of candidates) {
+    const meta = (row.meta && typeof row.meta === "object" ? row.meta : {}) as Record<string, unknown>;
+    const upstreamTaskId = typeof meta.taskId === "string" ? meta.taskId.trim() : "";
+
+    if (row.reason === "video_gen" && upstreamTaskId) {
+      const billingTask = await db.query.aiBillingTasks.findFirst({
+        where: eq(aiBillingTasks.taskId, upstreamTaskId),
+        columns: { status: true, chargedCredits: true },
+      });
+      if (billingTask?.status === "pending") {
+        continue;
+      }
+      if (billingTask?.status === "completed") {
+        const billingStatus = String(meta.billingStatus || "");
+        if (billingStatus === "reserved" || billingStatus === "pending") {
+          await settleProcessingLedger({
+            ledgerId: row.id,
+            userId: row.userId,
+            credits: billingTask.chargedCredits,
+            metaPatch: { taskStatus: "completed" },
+          });
+        } else {
+          await patchLedgerMeta(row.id, { taskStatus: "completed" });
+        }
+        cleaned += 1;
+        continue;
+      }
+      if (billingTask?.status === "refunded") {
+        if (row.delta < 0) {
+          await refundLedgerCharge({
+            userId: row.userId,
+            ledgerId: row.id,
+            taskId: upstreamTaskId,
+            refId: upstreamTaskId,
+            refundAmount: Math.abs(row.delta),
+            markFailed: true,
+            metaPatch: { refundDetail: "服务重启恢复视频失败记录自动退回积分" },
+          });
+        } else {
+          await patchLedgerMeta(row.id, { taskStatus: "failed_refunded" });
+        }
+        cleaned += 1;
+        continue;
+      }
+    }
+
+    const clientTaskId = typeof meta.clientTaskId === "string" ? meta.clientTaskId.trim() : "";
+    const billingStatus = String(meta.billingStatus || "");
+    if (row.reason === "image_gen" && clientTaskId) {
+      const savedMedia = await db
+        .select({ id: mediaObjects.id })
+        .from(mediaObjects)
+        .where(
+          and(
+            eq(mediaObjects.userId, row.userId),
+            eq(mediaObjects.status, "active"),
+            sql`${mediaObjects.meta}->>'clientTaskId' = ${clientTaskId}`,
+          ),
+        );
+      if (savedMedia.length > 0) {
+        const mediaIds = savedMedia.map((m) => m.id);
+        if (billingStatus === "reserved" || billingStatus === "pending") {
+          const requestedCount = Math.max(1, Number(meta.count || 1));
+          const reserved = row.reservedCredits > 0 ? row.reservedCredits : Number(meta.reservedCredits || 0);
+          const actualCharge =
+            reserved > 0
+              ? roundCredits((reserved * Math.min(savedMedia.length, requestedCount)) / requestedCount)
+              : 0;
+          await settleProcessingLedger({
+            ledgerId: row.id,
+            userId: row.userId,
+            credits: actualCharge,
+            metaPatch: { taskStatus: "completed", actual: savedMedia.length, mediaIds },
+          });
+        } else {
+          await patchLedgerMeta(row.id, { taskStatus: "completed", actual: savedMedia.length, mediaIds });
+        }
+        cleaned += 1;
+        continue;
+      }
+    }
+
+    if (billingStatus === "reserved" || billingStatus === "pending") {
+      await settleProcessingLedger({
+        ledgerId: row.id,
+        userId: row.userId,
+        credits: 0,
+        metaPatch: { taskStatus: "failed", errorMessage: "服务重启或异常中断，未扣费（已释放预占额度）" },
+      });
+      cleaned += 1;
+    } else if (row.delta < 0) {
+      await refundLedgerCharge({
+        userId: row.userId,
+        ledgerId: row.id,
+        refundAmount: Math.abs(row.delta),
+        markFailed: true,
+        metaPatch: {
+          errorMessage: "服务重启或异常中断，已自动退回积分",
+          refundDetail: "服务重启或异常中断自动退回积分",
+        },
+      });
+      cleaned += 1;
+    } else {
+      await patchLedgerMeta(row.id, { taskStatus: "failed", errorMessage: "服务重启或异常中断，请重试" });
+      cleaned += 1;
+    }
+  }
+  return cleaned;
 }

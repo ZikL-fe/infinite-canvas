@@ -598,6 +598,7 @@ storageRoutes.get("/by-tasks", async (c) => {
       provider: string | null;
       model: string | null;
       duration_ms: string | null;
+      reservation_expires_at: Date | string | null;
       ledger_created_at: Date | string;
     }>(
       sql`SELECT
@@ -609,6 +610,7 @@ storageRoutes.get("/by-tasks", async (c) => {
         meta->>'provider' AS provider,
         meta->>'model' AS model,
         meta->>'durationMs' AS duration_ms,
+        reservation_expires_at,
         created_at AS ledger_created_at
       FROM credit_ledger
       WHERE user_id = ${user.id}
@@ -686,7 +688,16 @@ storageRoutes.get("/by-tasks", async (c) => {
       };
     }
     if ((status === "processing" || status === "not_started") && !hasMedia && !textByTask[cid]) {
-      processingSet.add(cid);
+      const expiresMs = row.reservation_expires_at
+        ? row.reservation_expires_at instanceof Date
+          ? row.reservation_expires_at.getTime()
+          : new Date(row.reservation_expires_at).getTime()
+        : Number.NaN;
+      if (Number.isFinite(expiresMs) && expiresMs <= Date.now()) {
+        errorByTask[cid] = row.error_message || "请求超时未完成，已释放预占额度";
+      } else {
+        processingSet.add(cid);
+      }
     }
   }
 

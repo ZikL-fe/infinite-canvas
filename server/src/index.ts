@@ -7,9 +7,10 @@ import { cors } from "hono/cors";
 
 import { ensureSchemaReady } from "./db/index.ts";
 import { env } from "./env.ts";
+import { cleanupOrphanedProcessingTasks } from "./lib/billing.ts";
 import { accountRoutes } from "./routes/account.ts";
 import { adminRoutes } from "./routes/admin.ts";
-import { aiRoutes } from "./routes/ai.ts";
+import { aiRoutes, beginAiShutdown, startVideoTaskMonitor, stopVideoTaskMonitor } from "./routes/ai.ts";
 import { assetRoutes } from "./routes/assets.ts";
 import { authRoutes } from "./routes/auth.ts";
 import { billingRoutes } from "./routes/billing.ts";
@@ -19,6 +20,9 @@ import { storageRoutes } from "./routes/storage.ts";
 import { workbenchRoutes } from "./routes/workbench.ts";
 
 await ensureSchemaReady();
+await cleanupOrphanedProcessingTasks().catch((error) => {
+  console.error("[billing] startup orphan task cleanup failed:", error);
+});
 
 const app = new Hono();
 
@@ -68,6 +72,23 @@ void import("./lib/storage-expiry.ts")
 void import("./lib/analytics.ts")
   .then((mod) => mod.startLogRetentionScheduler())
   .catch((error) => console.error("[analytics] log retention scheduler init failed:", error));
+
+startVideoTaskMonitor();
+
+let shutdownPromise: Promise<void> | null = null;
+const handleShutdownSignal = (signal: string) => {
+  if (shutdownPromise) return;
+  console.log(`[server] received ${signal}, aborting in-flight sync AI tasks and settling reservations...`);
+  stopVideoTaskMonitor();
+  shutdownPromise = beginAiShutdown(8000)
+    .catch((error) => console.error("[server] graceful shutdown error:", error))
+    .finally(() => {
+      process.exit(0);
+    });
+};
+
+process.on("SIGTERM", () => handleShutdownSignal("SIGTERM"));
+process.on("SIGINT", () => handleShutdownSignal("SIGINT"));
 
 app.onError((error, c) => {
   console.error("[server] unhandled error:", error);

@@ -615,8 +615,7 @@ export default function ImagePage() {
             (log) =>
                 log.status === "pending" &&
                 !activeLogIdsRef.current.has(log.id) &&
-                log.slotTaskIds?.length &&
-                Date.now() - log.createdAt < 30 * 60_000,
+                log.slotTaskIds?.length,
         );
         if (!pendingLogs.length) return;
 
@@ -675,7 +674,7 @@ export default function ImagePage() {
 
                     const ledgerMaxDurationMs = Math.max(0, ...slotIds.map((tid) => (typeof durationByTask[tid] === "number" ? durationByTask[tid] : 0)));
 
-                    if (recoveredImages.length > 0 && (!hasStillProcessing || attempt >= 20)) {
+                    if (recoveredImages.length > 0 && !hasStillProcessing) {
                         if (cancelled || isWorkbenchLogDeleted(log.id) || !(await logStore.getItem(log.id))) continue;
                         const recoveredMaxDurationMs = Math.max(ledgerMaxDurationMs, ...recoveredImages.map((img) => img.durationMs || 0));
                         const updated: GenerationLog = {
@@ -714,12 +713,18 @@ export default function ImagePage() {
                 if (changed) {
                     await refreshLogs();
                 }
-                if (res.processingTaskIds.length > 0 && attempt < 24 && !cancelled) {
+                if (res.processingTaskIds.length > 0 && !cancelled) {
+                    attempt += 1;
+                    timer = setTimeout(() => void recover(), attempt < 48 ? 2500 : 10_000);
+                } else if (!changed && pendingLogs.length > 0 && attempt === 0 && !cancelled) {
                     attempt += 1;
                     timer = setTimeout(() => void recover(), 2500);
                 }
             } catch {
-                // ignore network recovery error
+                if (!cancelled) {
+                    attempt += 1;
+                    timer = setTimeout(() => void recover(), 5000);
+                }
             }
         };
 
