@@ -8,13 +8,13 @@ import { useNavigate } from "react-router-dom";
 import { LoadingImage, LoadingVideo, MediaLoadBox } from "@/components/loading-media";
 import { useBatchZipDownload } from "@/hooks/use-batch-zip-download";
 import { useCopyText } from "@/hooks/use-copy-text";
-import { createImageThumbnail, createVideoThumbnail } from "@/lib/image-thumbnail";
+import { createCloudImageThumbnail, createVideoThumbnail, isGifImage } from "@/lib/image-thumbnail";
 import { formatBytes, formatStoragePair, getMediaThumbBytes, getMediaTotalBytes } from "@/lib/image-utils";
 import { authApi, mediaDownloadFilename, storageApi, type MediaItem } from "@/services/api/server";
 import { notifyCloudWorkspaceChanged, WORKSPACE_CHANGED_EVENT } from "@/services/cloud-media";
 import { syncCloudWorkspace } from "@/services/cloud-sync";
 import { purgeLocalStoredMedia, uploadMediaFile } from "@/services/file-storage";
-import { getImagePreviewRevision, previewUrlFor, purgeLocalStoredImages, subscribeImagePreviews, uploadImage } from "@/services/image-storage";
+import { ensureImagePreview, getImagePreviewRevision, previewUrlFor, purgeLocalStoredImages, subscribeImagePreviews, uploadImage } from "@/services/image-storage";
 import { useAssetStore } from "@/stores/use-asset-store";
 import { useUserStore } from "@/stores/use-user-store";
 
@@ -63,6 +63,11 @@ export default function ResultsPage() {
                 });
                 setItems(res.items);
                 setTotal(res.total ?? res.items.length);
+                for (const row of res.items) {
+                    if (row.kind === "image" && !row.thumbnailUrl) {
+                        void ensureImagePreview(row.id);
+                    }
+                }
                 const loadedIds = new Set(res.items.map((entry) => entry.id));
                 setSelectedIds((prev) => prev.filter((id) => loadedIds.has(id)));
                 if (notifySuccess) message.success(t("common.refreshed"));
@@ -105,7 +110,7 @@ export default function ResultsPage() {
                 const res = await fetch(originalUrl);
                 if (!res.ok) return;
                 const blob = await res.blob();
-                thumbBlob = (await createImageThumbnail(blob, 480).catch(() => undefined)) || blob;
+                thumbBlob = await createCloudImageThumbnail(blob, 480);
             } else if (item.kind === "video") {
                 thumbBlob = await createVideoThumbnail(originalUrl, 480).catch(() => undefined);
             }
@@ -506,6 +511,11 @@ export default function ResultsPage() {
                                                                     className="h-full w-full object-cover transition group-hover:scale-[1.02]"
                                                                     loading="lazy"
                                                                 />
+                                                                {isGifImage(item.mimeType, item.objectKey) ? (
+                                                                    <span className="pointer-events-none absolute right-2 top-2 rounded bg-black/65 px-1.5 py-0.5 text-[10px] font-semibold tracking-wide text-white backdrop-blur-sm">
+                                                                        GIF
+                                                                    </span>
+                                                                ) : null}
                                                             </button>
                                                         ) : (
                                                             <button

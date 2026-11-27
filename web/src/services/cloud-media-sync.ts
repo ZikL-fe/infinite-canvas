@@ -1,5 +1,5 @@
 /** 云端业务保存前的按需媒体上传与序列化辅助：避免草稿/未发送参考图提前占用云端存储空间。 */
-import { createImageThumbnail, createVideoThumbnail } from "@/lib/image-thumbnail";
+import { createCloudImageThumbnail, createVideoThumbnail } from "@/lib/image-thumbnail";
 import { storageApi } from "@/services/api/server";
 import {
     inferCloudMediaKind,
@@ -85,7 +85,7 @@ async function uploadSingleKeyIfMissing(key: string): Promise<boolean> {
         const [dims, thumbnailBlob] = await Promise.all([
             isImage ? readImageDimensions(blob) : Promise.resolve({}),
             isImage
-                ? createImageThumbnail(blob, 480).catch(() => undefined).then((thumb) => thumb || blob)
+                ? createCloudImageThumbnail(blob, 480)
                 : isVideo
                   ? createVideoThumbnail(blob, 480).catch(() => undefined)
                   : Promise.resolve(undefined),

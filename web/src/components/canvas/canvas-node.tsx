@@ -4,7 +4,7 @@ import { ChevronRight, Copy, Download, Group, Image as ImageIcon, LoaderCircle, 
 
 import { canvasThemes, type CanvasTheme } from "@/lib/canvas-theme";
 import { formatBytes } from "@/lib/image-utils";
-import { pickImageSource } from "@/lib/image-thumbnail";
+import { isGifImage, pickImageSource } from "@/lib/image-thumbnail";
 import { getCachedCloudThumbnailUrl } from "@/services/cloud-media";
 import { ensureImagePreview, previewUrlFor, subscribeImagePreviews, getImagePreviewRevision } from "@/services/image-storage";
 import { getNodeDefinition } from "@/lib/canvas/node-registry";
@@ -1007,6 +1007,7 @@ function ImageContent({
               renderedWidth: node.width,
               renderedHeight: node.height,
               scale,
+              isAnimated: isGifImage(primaryImage?.mimeType || node.metadata?.mimeType, primaryContent),
           })
         : undefined;
 
@@ -1088,6 +1089,7 @@ function ExpandedImageCard({ node, image, index, scale, onView, onSetPrimary, on
               renderedWidth: node.width,
               renderedHeight: node.height,
               scale,
+              isAnimated: isGifImage(image.mimeType, image.content),
           })
         : undefined;
 

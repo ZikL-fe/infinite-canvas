@@ -18,6 +18,7 @@ import { modelOptionLabel, useConfigStore, useEffectiveConfig, type AiConfig } f
 import { useThemeStore } from "@/stores/use-theme-store";
 import { nanoid } from "nanoid";
 import { formatBytes, formatDuration, imageExtensionFromMime } from "@/lib/image-utils";
+import { isGifImage } from "@/lib/image-thumbnail";
 import { requestEdit, requestGeneration } from "@/services/api/image";
 import { storageApi } from "@/services/api/server";
 import { isCloudAuthenticated, WORKSPACE_CHANGED_EVENT, type WorkspaceChangeScope } from "@/services/cloud-media";
@@ -1865,12 +1866,13 @@ function ResultImageCard({
     const [saving, setSaving] = useState(false);
     const [addingRef, setAddingRef] = useState(false);
     const previewSrc = previewUrlFor(image.storageKey);
-    const displaySrc = previewSrc || image.dataUrl;
+    const isGif = isGifImage(image.mimeType, image.dataUrl);
+    const displaySrc = isGif ? image.dataUrl || previewSrc : previewSrc || image.dataUrl;
     useEffect(() => {
-        if (image.storageKey && !previewSrc) {
+        if (image.storageKey && !previewSrc && !isGif) {
             void ensureImagePreview(image.storageKey);
         }
-    }, [image.storageKey, previewSrc]);
+    }, [image.storageKey, isGif, previewSrc]);
     return (
         <div className="overflow-hidden rounded-lg border border-stone-200 bg-background dark:border-stone-800">
             {displaySrc ? (

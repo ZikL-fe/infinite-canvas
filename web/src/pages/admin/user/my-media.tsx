@@ -1,5 +1,5 @@
 /** 个人云端媒体与工作区数据管理面板（支持缩略图补齐、批量删除与 ZIP 打包下载）。 */
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
 import { Alert, App, Avatar, Button, Card, Col, DatePicker, Descriptions, Empty, Form, Image, Input, InputNumber, Modal, Popconfirm, Progress, Radio, Row, Segmented, Select, Space, Spin, Statistic, Switch, Table, Tabs, Tag, Tooltip, Typography, theme as antdTheme } from "antd";
 import type { Dayjs } from "dayjs";
 import type { TFunction } from "i18next";
@@ -11,7 +11,7 @@ import { useNavigate } from "react-router-dom";
 import { useBatchZipDownload } from "@/hooks/use-batch-zip-download";
 import { useEmailCodeSender } from "@/hooks/use-email-code-sender";
 import { formatCompactCredits, formatExactCredits } from "@/lib/format-number";
-import { createImageThumbnail, createVideoThumbnail } from "@/lib/image-thumbnail";
+import { createCloudImageThumbnail, createVideoThumbnail } from "@/lib/image-thumbnail";
 import { getMediaThumbBytes, getMediaTotalBytes } from "@/lib/image-utils";
 import {
     formatCreditAlertCopy,
@@ -20,7 +20,7 @@ import {
     resolveCreditAlert,
     resolveStorageAlert,
 } from "@/lib/quota-alerts";
-import { previewUrlFor, purgeLocalStoredImages } from "@/services/image-storage";
+import { ensureImagePreview, getImagePreviewRevision, previewUrlFor, purgeLocalStoredImages, subscribeImagePreviews } from "@/services/image-storage";
 import { ADMIN_TABLE_CLASS, ADMIN_TABLE_SCROLL, TableRowActions } from "@/pages/admin/components/table-row-actions";
 import { notifyCloudWorkspaceChanged, WORKSPACE_CHANGED_EVENT } from "@/services/cloud-media";
 import { deleteCanvasProjectsWithCloud, syncCloudWorkspace } from "@/services/cloud-sync";
@@ -58,6 +58,7 @@ export function MyMediaPanel() {
     const locale = i18n.resolvedLanguage || undefined;
     const { message } = App.useApp();
     const navigate = useNavigate();
+    useSyncExternalStore(subscribeImagePreviews, getImagePreviewRevision);
     const user = useUserStore((state) => state.user);
     const setUser = useUserStore((state) => state.setUser);
     const cleanupImages = useAssetStore((state) => state.cleanupImages);
@@ -113,6 +114,11 @@ export function MyMediaPanel() {
                 ]);
                 setItems(listRes.items);
                 setTotal(listRes.total ?? listRes.items.length);
+                for (const row of listRes.items) {
+                    if (row.kind === "image" && !row.thumbnailUrl) {
+                        void ensureImagePreview(row.id);
+                    }
+                }
                 const loadedIdSet = new Set(listRes.items.map((item) => item.id));
                 setSelectedMediaIds((prev) => prev.filter((id) => loadedIdSet.has(id)));
                 if (listRes.workspaceStats) setWorkspaceStats(listRes.workspaceStats);
@@ -307,7 +313,7 @@ export function MyMediaPanel() {
                             const res = await fetch(url);
                             if (res.ok) {
                                 const blob = await res.blob();
-                                thumb = (await createImageThumbnail(blob, 480).catch(() => undefined)) || blob;
+                                thumb = await createCloudImageThumbnail(blob, 480);
                             }
                         } else {
                             thumb = await createVideoThumbnail(url, 480).catch(() => undefined);

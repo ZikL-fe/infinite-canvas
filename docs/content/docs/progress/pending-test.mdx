@@ -7,6 +7,10 @@ description: Implemented changes that still need manual verification
 
 The current release needs manual verification in these areas:
 
+- 云端 GIF 动图第 1 帧 WebP 缩略图、自动补齐与动图播放保留：
+  - 在画布及生图工作台生成多帧 GIF（含宽高 `<= 480px` 或体积 `> 2MB` 的动图），确认画布节点（各缩放比例下）与生图工作台结果卡片均能直接播放动画，且对象存储已同步生成轻量第 1 帧 `.webp` 缩略图（`thumbBytes` 远小于原 GIF 大小）；
+  - 打开「成果」「我的云端媒体」「我的资产」，确认 GIF 卡片/表格首列立即展示第 1 帧缩略图并带 `GIF` 角标（历史未生成缩略图的云端 GIF 在进入列表后后台自动静默补齐），点开详情抽屉时再拉取完整 GIF 播放动画。
+
 - 服务端静态资源 Gzip 压缩与首屏主包拆包回归：
   - 在一体化 Docker 部署环境刷新首页与各子页面，通过浏览器 Network 面板确认 JS/CSS 静态资源与普通 JSON 接口返回 `Content-Encoding: gzip` 响应头，同时验证 `/api/ai/*` 文本 SSE 流式输出仍逐字实时透传、`/api/storage/download/*` 与 `/api/storage/thumbnail/*` 媒体下载正常；
   - 检查首页首屏不再加载 `AgentPanel` 与 `Streamdown` 异步分包，浅色/深色模式下 Ant Design 表格/弹窗/表单配色正常，打开系统公告弹窗（含 Markdown 全局通知）可正常渲染。

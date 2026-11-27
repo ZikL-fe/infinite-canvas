@@ -5,14 +5,16 @@ import { saveAs } from "file-saver";
 import { nanoid } from "nanoid";
 import i18n from "@/i18n";
 import { withLocalProxy } from "@/stores/use-config-store";
-import { createImageThumbnail } from "@/lib/image-thumbnail";
+import { createCloudImageThumbnail, createImageThumbnail } from "@/lib/image-thumbnail";
 import { detectImageMimeFromBlob, imageExtensionFromMime } from "@/lib/image-utils";
+import { storageApi } from "@/services/api/server";
 import {
     clearCloudMediaUrlCache,
     evictCloudMediaUrlCache,
     fetchCloudMediaBlob,
     fetchCloudThumbnailBlob,
     getCachedCloudThumbnailUrl,
+    isCloudAuthenticated,
     isCloudMediaMissing,
     prefetchCloudMediaUrls,
     resolveCloudMediaUrl,
@@ -39,6 +41,7 @@ let previewRevision = 0;
 const PREVIEW_CONCURRENCY = 4;
 const pendingPreviewKeys = new Set<string>();
 const failedPreviewKeys = new Set<string>();
+const backfilledCloudThumbKeys = new Set<string>();
 const previewTaskQueue: string[] = [];
 let activePreviewWorkers = 0;
 let previewNotifyScheduled = false;
@@ -109,14 +112,14 @@ async function storeImage(blob: Blob, options?: ImageReadOptions): Promise<Uploa
         objectUrls.set(storageKey, url);
         await storeImagePreview(storageKey, normalizedBlob);
         if (!options?.localOnly) {
-            const cloudThumb = (await createImageThumbnail(normalizedBlob, 480).catch(() => undefined)) || normalizedBlob;
+            const cloudThumb = await createCloudImageThumbnail(normalizedBlob, 480);
             await uploadBlobToCloud(storageKey, normalizedBlob, "image", {
                 width: meta.width,
                 height: meta.height,
                 filename: options?.filename,
                 sourceType: options?.sourceType,
                 alreadyInS3,
-                thumbnailBlob: cloudThumb,
+                ...(cloudThumb ? { thumbnailBlob: cloudThumb } : {}),
             });
         }
         return { url, storageKey, width: meta.width, height: meta.height, bytes: normalizedBlob.size, mimeType: detectedMime };
@@ -302,6 +305,12 @@ async function runPreviewWorker() {
             const original = await getImageBlob(storageKey);
             if (original) {
                 await storeImagePreview(storageKey, original);
+                if (isCloudAuthenticated() && storageKey.startsWith("image:") && !backfilledCloudThumbKeys.has(storageKey)) {
+                    backfilledCloudThumbKeys.add(storageKey);
+                    void createCloudImageThumbnail(original, 480)
+                        .then((thumb) => (thumb && thumb.size <= 2 * 1024 * 1024 ? storageApi.uploadThumbnail(storageKey, thumb) : undefined))
+                        .catch(() => undefined);
+                }
             } else {
                 failedPreviewKeys.add(storageKey);
             }
@@ -438,6 +447,7 @@ export async function clearLocalImageAndWorkbenchCaches() {
     previewUrls.clear();
     pendingPreviewKeys.clear();
     failedPreviewKeys.clear();
+    backfilledCloudThumbKeys.clear();
     previewTaskQueue.length = 0;
     clearCloudMediaUrlCache();
     previewListeners.forEach((listener) => listener());

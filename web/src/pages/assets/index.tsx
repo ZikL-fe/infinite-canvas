@@ -9,6 +9,7 @@ import { LoadingImage, LoadingVideo, MediaLoadBox } from "@/components/loading-m
 import { useBatchZipDownload } from "@/hooks/use-batch-zip-download";
 import { useCopyText } from "@/hooks/use-copy-text";
 import { detectImageMimeFromBlob, formatBytes, formatStoragePair, imageExtensionFromMime, readFileAsDataUrl } from "@/lib/image-utils";
+import { isGifImage } from "@/lib/image-thumbnail";
 import { getMediaBlob } from "@/services/file-storage";
 import { deleteAssetsWithCloud, deleteAssetWithCloud, useCloudSyncing } from "@/services/cloud-sync";
 import { ensureImagePreview, getImageBlob, getImagePreviewRevision, previewUrlFor, subscribeImagePreviews, uploadImage } from "@/services/image-storage";
@@ -691,16 +692,23 @@ function AssetCard({ asset, selected, downloading, onSelectedChange, onOpen, onE
                     >
                         <Checkbox checked={selected} onChange={(event) => onSelectedChange(event.target.checked)} />
                     </div>
-                    <button type="button" className="block w-full text-left" onClick={onOpen}>
+                    <button type="button" className="relative block w-full text-left" onClick={onOpen}>
                         {cover || (asset.kind === "image" && storageKey && !previewReady) ? (
-                            <LoadingImage
-                                src={cover}
-                                pending={!cover && Boolean(storageKey)}
-                                alt={asset.title}
-                                containerClassName="aspect-[4/3] w-full"
-                                className="h-full w-full object-cover"
-                                loading="lazy"
-                            />
+                            <>
+                                <LoadingImage
+                                    src={cover}
+                                    pending={!cover && Boolean(storageKey)}
+                                    alt={asset.title}
+                                    containerClassName="aspect-[4/3] w-full"
+                                    className="h-full w-full object-cover"
+                                    loading="lazy"
+                                />
+                                {asset.kind === "image" && isGifImage(asset.data.mimeType, asset.data.dataUrl) ? (
+                                    <span className="pointer-events-none absolute right-2 top-2 rounded bg-black/65 px-1.5 py-0.5 text-[10px] font-semibold tracking-wide text-white backdrop-blur-sm">
+                                        GIF
+                                    </span>
+                                ) : null}
+                            </>
                         ) : (
                             <div className="flex aspect-[4/3] items-center justify-center bg-stone-100 p-5 text-center text-sm leading-6 text-stone-600 dark:bg-stone-900 dark:text-stone-300">{asset.kind === "text" ? asset.data.content : t("assets.noCover")}</div>
                         )}
