@@ -48,9 +48,18 @@ const storageConfigSchema = z.object({
   forcePathStyle: z.boolean().default(false),
 });
 
+const authRateLimitSchema = z.object({
+  enabled: z.boolean(),
+  loginPerMinute: z.number().int().min(0).max(1000),
+  registerPerMinute: z.number().int().min(0).max(1000),
+  emailCodePerMinute: z.number().int().min(0).max(1000),
+  redeemPerMinute: z.number().int().min(0).max(1000),
+});
+
 const authPolicySchema = z.object({
   allowRegister: z.boolean(),
   requireEmailOnRegister: z.boolean().optional().default(false),
+  rateLimit: authRateLimitSchema.optional(),
 });
 
 const invitePolicySchema = z.object({

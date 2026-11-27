@@ -1,7 +1,7 @@
 /** 多用户认证接口：引导状态检查、首注管理员注册（事务级锁）、登录、刷新令牌及当前会话查询。 */
 import { zValidator } from "@hono/zod-validator";
 import { and, count, eq, gt, isNull, or, sql } from "drizzle-orm";
-import { Hono } from "hono";
+import { Hono, type Context } from "hono";
 import { nanoid } from "nanoid";
 import { z } from "zod";
 
@@ -13,6 +13,7 @@ import { issueEmailVerificationCode, verifyAndConsumeEmailCode } from "../lib/em
 import { normalizeInviteCode } from "../lib/invite.ts";
 import { signAccessToken } from "../lib/jwt.ts";
 import { isMailConfigReady } from "../lib/mail.ts";
+import { getClientIp, rateLimitByIp } from "../lib/rate-limit.ts";
 import { getAuthPolicy, getPlatformInvitePolicy, getPlatformMailConfig, getPlatformWebdavConfig } from "../lib/settings.ts";
 import { getUserQuotaAlertMeta, getUserStorageQuotaSummary, type UserQuotaAlertMeta } from "../lib/storage-quota.ts";
 import { requireAuthWithQuota, type AppEnv } from "../middleware/auth.ts";
@@ -93,7 +94,7 @@ function sanitizeUser(
   };
 }
 
-async function createSessionTokens(userId: string, role: UserRole, c: { req: { header: (name: string) => string | undefined } }) {
+async function createSessionTokens(userId: string, role: UserRole, c: Context<AppEnv>) {
   const accessToken = await signAccessToken(userId, role);
   const refreshToken = generateRandomToken(36);
   const expiresAt = new Date(Date.now() + env.JWT_REFRESH_EXPIRES_DAYS * 86_400_000);
@@ -102,7 +103,7 @@ async function createSessionTokens(userId: string, role: UserRole, c: { req: { h
     userId,
     refreshTokenHash: sha256Hex(refreshToken),
     userAgent: c.req.header("User-Agent") || "",
-    ip: c.req.header("X-Forwarded-For")?.split(",")[0]?.trim() || "",
+    ip: getClientIp(c),
     expiresAt,
   });
   return { accessToken, refreshToken };
@@ -128,7 +129,11 @@ authRoutes.get("/bootstrap-status", async (c) => {
   });
 });
 
-authRoutes.post("/send-register-code", zValidator("json", sendEmailCodeSchema), async (c) => {
+authRoutes.post(
+  "/send-register-code",
+  rateLimitByIp("auth:email_code", (r) => r.emailCodePerMinute),
+  zValidator("json", sendEmailCodeSchema),
+  async (c) => {
   const email = c.req.valid("json").email.toLowerCase();
   const [[{ value: userCount }], policy, existing] = await Promise.all([
     db.select({ value: count() }).from(users),
@@ -148,7 +153,11 @@ authRoutes.post("/send-register-code", zValidator("json", sendEmailCodeSchema), 
   return c.json(issued);
 });
 
-authRoutes.post("/forgot-password/send-code", zValidator("json", sendEmailCodeSchema), async (c) => {
+authRoutes.post(
+  "/forgot-password/send-code",
+  rateLimitByIp("auth:email_code", (r) => r.emailCodePerMinute),
+  zValidator("json", sendEmailCodeSchema),
+  async (c) => {
   const email = c.req.valid("json").email.toLowerCase();
   const user = await db.query.users.findFirst({
     where: eq(users.email, email),
@@ -204,7 +213,11 @@ authRoutes.post("/forgot-password/reset", zValidator("json", resetPasswordSchema
   return c.json({ ok: true });
 });
 
-authRoutes.post("/register", zValidator("json", registerSchema), async (c) => {
+authRoutes.post(
+  "/register",
+  rateLimitByIp("auth:register", (r) => r.registerPerMinute),
+  zValidator("json", registerSchema),
+  async (c) => {
   const body = c.req.valid("json");
   const normalizedEmail = body.email ? body.email.toLowerCase() : null;
   const passwordHash = await hashPassword(body.password);
@@ -316,7 +329,11 @@ authRoutes.post("/register", zValidator("json", registerSchema), async (c) => {
   return c.json({ user: { ...sanitizeUser({ ...result.user, ...alertMeta }), creditBalance: 0 }, ...tokens }, 201);
 });
 
-authRoutes.post("/login", zValidator("json", loginSchema), async (c) => {
+authRoutes.post(
+  "/login",
+  rateLimitByIp("auth:login", (r) => r.loginPerMinute),
+  zValidator("json", loginSchema),
+  async (c) => {
   const { account, password } = c.req.valid("json");
   const normalizedAccount = account.toLowerCase();
 

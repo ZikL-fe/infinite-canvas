@@ -12,6 +12,7 @@ import { issueEmailVerificationCode, verifyAndConsumeEmailCode } from "../lib/em
 import { queryUserInviteSummary } from "../lib/invite.ts";
 import { isMailConfigReady } from "../lib/mail.ts";
 import { mediaTotalBytesSql } from "../lib/media-cleanup.ts";
+import { rateLimitByIp } from "../lib/rate-limit.ts";
 import { getAuthPolicy, getPlatformMailConfig, getPlatformWebdavConfig, resolveEffectiveUserWebdav } from "../lib/settings.ts";
 import { getUserQuotaAlertMeta, getUserStorageQuotaSummary, serializeStorageGrant } from "../lib/storage-quota.ts";
 import { requireAuthWithQuota, type AppEnv } from "../middleware/auth.ts";
@@ -217,7 +218,11 @@ accountRoutes.get("/profile", async (c) => {
   });
 });
 
-accountRoutes.post("/email/send-code", zValidator("json", sendBindEmailCodeSchema), async (c) => {
+accountRoutes.post(
+  "/email/send-code",
+  rateLimitByIp("auth:email_code", (r) => r.emailCodePerMinute),
+  zValidator("json", sendBindEmailCodeSchema),
+  async (c) => {
   const authUser = c.get("user");
   const email = c.req.valid("json").email.toLowerCase();
   const conflict = await db.query.users.findFirst({
@@ -339,7 +344,10 @@ accountRoutes.patch("/profile", zValidator("json", updateProfileSchema), async (
   });
 });
 
-accountRoutes.post("/change-password/send-code", async (c) => {
+accountRoutes.post(
+  "/change-password/send-code",
+  rateLimitByIp("auth:email_code", (r) => r.emailCodePerMinute),
+  async (c) => {
   const authUser = c.get("user");
   const row = await db.query.users.findFirst({
     where: eq(users.id, authUser.id),

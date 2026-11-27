@@ -7,6 +7,7 @@ import { db } from "../db/index.ts";
 import { adjustWalletCreditsInTx, getWalletBalance, queryCreditLedger } from "../lib/billing.ts";
 import { scheduleWalletBalanceAlertCheck } from "../lib/billing-alert.ts";
 import { applyInviteRebateInTx } from "../lib/invite.ts";
+import { rateLimitRedeem } from "../lib/rate-limit.ts";
 import { claimRedeemCodeInTx } from "../lib/redeem.ts";
 import { requireAuth, type AppEnv } from "../middleware/auth.ts";
 
@@ -45,7 +46,7 @@ billingRoutes.get("/ledger", async (c) => {
   });
 });
 
-billingRoutes.post("/redeem", zValidator("json", redeemSchema), async (c) => {
+billingRoutes.post("/redeem", rateLimitRedeem, zValidator("json", redeemSchema), async (c) => {
   const user = c.get("user");
   const code = c.req.valid("json").code;
 

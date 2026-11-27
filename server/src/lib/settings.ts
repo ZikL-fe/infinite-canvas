@@ -110,10 +110,43 @@ export type PlatformWebdavConfig = {
   autoAssignNewUsers: boolean;
 };
 
+export type AuthRateLimitPolicy = {
+  enabled: boolean;
+  loginPerMinute: number;
+  registerPerMinute: number;
+  emailCodePerMinute: number;
+  redeemPerMinute: number;
+};
+
 export type AuthPolicy = {
   allowRegister: boolean;
   requireEmailOnRegister: boolean;
+  rateLimit: AuthRateLimitPolicy;
 };
+
+export const DEFAULT_AUTH_RATE_LIMIT: AuthRateLimitPolicy = {
+  enabled: true,
+  loginPerMinute: 20,
+  registerPerMinute: 10,
+  emailCodePerMinute: 5,
+  redeemPerMinute: 10,
+};
+
+function clampRateLimit(value: unknown, fallback: number) {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return fallback;
+  return Math.max(0, Math.min(1000, Math.floor(num)));
+}
+
+function normalizeAuthRateLimit(raw?: Partial<AuthRateLimitPolicy>): AuthRateLimitPolicy {
+  return {
+    enabled: raw?.enabled ?? DEFAULT_AUTH_RATE_LIMIT.enabled,
+    loginPerMinute: clampRateLimit(raw?.loginPerMinute, DEFAULT_AUTH_RATE_LIMIT.loginPerMinute),
+    registerPerMinute: clampRateLimit(raw?.registerPerMinute, DEFAULT_AUTH_RATE_LIMIT.registerPerMinute),
+    emailCodePerMinute: clampRateLimit(raw?.emailCodePerMinute, DEFAULT_AUTH_RATE_LIMIT.emailCodePerMinute),
+    redeemPerMinute: clampRateLimit(raw?.redeemPerMinute, DEFAULT_AUTH_RATE_LIMIT.redeemPerMinute),
+  };
+}
 
 export type PlatformMailConfig = {
   enabled: boolean;
@@ -171,7 +204,7 @@ export type S3StorageConfig = {
 
 type S3PublicSettings = Omit<S3StorageConfig, "secretAccessKey">;
 
-/** 读取平台注册与邮箱验证策略配置。 */
+/** 读取平台注册、邮箱验证与敏感接口限流策略配置。 */
 export async function getAuthPolicy(): Promise<AuthPolicy> {
   return getCachedSetting(AUTH_POLICY_KEY, async () => {
     const row = await db.query.systemSettings.findFirst({ where: eq(systemSettings.key, AUTH_POLICY_KEY) });
@@ -179,21 +212,31 @@ export async function getAuthPolicy(): Promise<AuthPolicy> {
     return {
       allowRegister: raw?.allowRegister ?? true,
       requireEmailOnRegister: Boolean(raw?.requireEmailOnRegister),
+      rateLimit: normalizeAuthRateLimit(raw?.rateLimit),
     };
   });
 }
 
-/** 保存平台注册策略配置并刷新本地设置缓存。 */
-export async function saveAuthPolicy(policy: AuthPolicy, updatedBy: string) {
+/** 保存平台注册与限流策略配置并刷新本地设置缓存。 */
+export async function saveAuthPolicy(
+  policy: { allowRegister: boolean; requireEmailOnRegister: boolean; rateLimit?: Partial<AuthRateLimitPolicy> },
+  updatedBy: string,
+) {
+  const prev = await getAuthPolicy();
+  const normalized: AuthPolicy = {
+    allowRegister: Boolean(policy.allowRegister),
+    requireEmailOnRegister: Boolean(policy.requireEmailOnRegister),
+    rateLimit: normalizeAuthRateLimit(policy.rateLimit ? { ...prev.rateLimit, ...policy.rateLimit } : prev.rateLimit),
+  };
   await db
     .insert(systemSettings)
-    .values({ key: AUTH_POLICY_KEY, value: policy, updatedBy, updatedAt: new Date() })
+    .values({ key: AUTH_POLICY_KEY, value: normalized, updatedBy, updatedAt: new Date() })
     .onConflictDoUpdate({
       target: systemSettings.key,
-      set: { value: policy, updatedBy, updatedAt: new Date() },
+      set: { value: normalized, updatedBy, updatedAt: new Date() },
     });
   invalidateSettingCache(AUTH_POLICY_KEY);
-  return policy;
+  return normalized;
 }
 
 /** 读取平台 SMTP 邮件与低余额提醒默认配置（含解密密码）。 */

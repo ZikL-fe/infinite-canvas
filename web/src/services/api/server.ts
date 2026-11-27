@@ -9,6 +9,9 @@ import type {
     AccountOverviewResponse,
     AccountProfileResponse,
     AccountSessionItem,
+    AdminAuthPolicy,
+    AdminAuthRateLimitPolicy,
+    AdminAuthSettings,
     AdminChannelItem,
     AdminChannelModel,
     AdminMailSettings,
@@ -133,8 +136,6 @@ export const storageApi = {
         requestServer<{ media: MediaItem; url: string; storageUsedBytes?: number; storageQuotaBytes?: number }>("/storage/confirm", { method: "POST", body: JSON.stringify(payload) }),
     checkExists: (mediaIds: string[]) =>
         requestServer<{ existingIds: string[] }>("/storage/check-exists", { method: "POST", body: JSON.stringify({ mediaIds }) }),
-    ingestUrl: (payload: { url: string; kind?: "image" | "video" | "audio" | "file"; sourceType?: "upload" | "ai_generated" | "canvas_import" }) =>
-        requestServer<{ media: MediaItem; url: string }>("/storage/ingest-url", { method: "POST", body: JSON.stringify(payload) }),
     list: (params?: { q?: string; kind?: string; sourceType?: string; module?: string; page?: number; pageSize?: number; includeStats?: boolean }) => {
         const query = new URLSearchParams();
         if (params?.q) query.set("q", params.q);
@@ -509,9 +510,9 @@ export const adminApi = {
         requestServer<{ ok: boolean; secretAccessKeyPreview: string }>("/admin/settings/storage", { method: "PUT", body: JSON.stringify(payload) }),
     testStorageSettings: (payload: S3StorageConfigForm) =>
         requestServer<{ ok: boolean; message: string }>("/admin/settings/storage/test", { method: "POST", body: JSON.stringify(payload) }),
-    getAuthSettings: () => requestServer<{ allowRegister: boolean; requireEmailOnRegister: boolean; emailEnabled: boolean }>("/admin/settings/auth"),
-    saveAuthSettings: (payload: { allowRegister: boolean; requireEmailOnRegister?: boolean }) =>
-        requestServer<{ allowRegister: boolean; requireEmailOnRegister: boolean }>("/admin/settings/auth", { method: "PUT", body: JSON.stringify(payload) }),
+    getAuthSettings: () => requestServer<AdminAuthSettings>("/admin/settings/auth"),
+    saveAuthSettings: (payload: { allowRegister: boolean; requireEmailOnRegister?: boolean; rateLimit?: AdminAuthRateLimitPolicy }) =>
+        requestServer<AdminAuthPolicy>("/admin/settings/auth", { method: "PUT", body: JSON.stringify(payload) }),
     getInviteSettings: () => requestServer<PlatformInvitePolicy>("/admin/settings/invite"),
     saveInviteSettings: (payload: PlatformInvitePolicy) =>
         requestServer<{ ok: boolean } & PlatformInvitePolicy>("/admin/settings/invite", { method: "PUT", body: JSON.stringify(payload) }),

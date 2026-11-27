@@ -9,6 +9,7 @@ import { formatBytes } from "@/pages/admin/admin-utils";
 import { ADMIN_TABLE_CLASS, ADMIN_TABLE_SCROLL } from "@/pages/admin/components/table-row-actions";
 import {
     adminApi,
+    type AdminAuthRateLimitPolicy,
     type AdminMailSettingsForm,
     type AdminStorageExpiryPolicyForm,
     type PlatformAnalyticsPolicy,
@@ -38,6 +39,8 @@ export function AdminSystemSettingsPanel({ section }: { section: SystemSettingsS
     const [allowRegister, setAllowRegister] = useState(true);
     const [requireEmailOnRegister, setRequireEmailOnRegister] = useState(false);
     const [authPolicySaving, setAuthPolicySaving] = useState(false);
+    const [rateLimitForm] = Form.useForm<AdminAuthRateLimitPolicy>();
+    const [rateLimitSaving, setRateLimitSaving] = useState(false);
 
     const [webdavForm] = Form.useForm<WebdavPlatformForm>();
     const [webdavPasswordPreview, setWebdavPasswordPreview] = useState("");
@@ -79,6 +82,7 @@ export function AdminSystemSettingsPanel({ section }: { section: SystemSettingsS
             ]);
             setAllowRegister(authRes.allowRegister);
             setRequireEmailOnRegister(authRes.requireEmailOnRegister);
+            rateLimitForm.setFieldsValue(authRes.rateLimit);
             inviteForm.setFieldsValue({
                 enabled: inviteRes.enabled,
                 rebatePercent: inviteRes.rebatePercent,
@@ -126,7 +130,7 @@ export function AdminSystemSettingsPanel({ section }: { section: SystemSettingsS
         } finally {
             setLoading(false);
         }
-    }, [analyticsForm, inviteForm, mailForm, message, storageExpiryForm, t, webdavForm]);
+    }, [analyticsForm, inviteForm, mailForm, message, rateLimitForm, storageExpiryForm, t, webdavForm]);
 
     useEffect(() => {
         void loadSettings();
@@ -141,6 +145,7 @@ export function AdminSystemSettingsPanel({ section }: { section: SystemSettingsS
             });
             setAllowRegister(res.allowRegister);
             setRequireEmailOnRegister(res.requireEmailOnRegister);
+            rateLimitForm.setFieldsValue(res.rateLimit);
             if (patch.allowRegister !== undefined) {
                 message.success(res.allowRegister ? t("admin.messages.registerOpened") : t("admin.messages.registerClosed"));
             } else {
@@ -150,6 +155,25 @@ export function AdminSystemSettingsPanel({ section }: { section: SystemSettingsS
             message.error(error instanceof Error ? error.message : t("admin.messages.saveFailed"));
         } finally {
             setAuthPolicySaving(false);
+        }
+    };
+
+    const handleSaveRateLimit = async (values: AdminAuthRateLimitPolicy) => {
+        setRateLimitSaving(true);
+        try {
+            const res = await adminApi.saveAuthSettings({
+                allowRegister,
+                requireEmailOnRegister,
+                rateLimit: values,
+            });
+            setAllowRegister(res.allowRegister);
+            setRequireEmailOnRegister(res.requireEmailOnRegister);
+            rateLimitForm.setFieldsValue(res.rateLimit);
+            message.success(t("admin.messages.rateLimitSaved"));
+        } catch (error) {
+            message.error(error instanceof Error ? error.message : t("admin.messages.rateLimitSaveFailed"));
+        } finally {
+            setRateLimitSaving(false);
         }
     };
 
@@ -360,35 +384,103 @@ export function AdminSystemSettingsPanel({ section }: { section: SystemSettingsS
     if (section === "auth") {
         return (
             <Spin spinning={loading}>
-                <Card title={t("admin.settingsTab.auth.cardTitle")}>
-                    <div className="flex flex-col gap-4">
-                        <div className="flex items-start justify-between gap-4 sm:items-center">
-                            <div className="min-w-0 flex-1">
-                                <div className="font-medium">{t("admin.settingsTab.auth.allowRegister")}</div>
-                                <Typography.Text type="secondary">{t("admin.settingsTab.auth.allowRegisterDesc")}</Typography.Text>
+                <div className="flex flex-col gap-4">
+                    <Card title={t("admin.settingsTab.auth.cardTitle")}>
+                        <div className="flex flex-col gap-4">
+                            <div className="flex items-start justify-between gap-4 sm:items-center">
+                                <div className="min-w-0 flex-1">
+                                    <div className="font-medium">{t("admin.settingsTab.auth.allowRegister")}</div>
+                                    <Typography.Text type="secondary">{t("admin.settingsTab.auth.allowRegisterDesc")}</Typography.Text>
+                                </div>
+                                <Switch
+                                    className="shrink-0"
+                                    checked={allowRegister}
+                                    loading={authPolicySaving}
+                                    onChange={(checked) => void handleUpdateAuthPolicy({ allowRegister: checked })}
+                                />
                             </div>
-                            <Switch
-                                className="shrink-0"
-                                checked={allowRegister}
-                                loading={authPolicySaving}
-                                onChange={(checked) => void handleUpdateAuthPolicy({ allowRegister: checked })}
-                            />
-                        </div>
-                        <div className="flex items-start justify-between gap-4 border-t border-black/5 pt-4 sm:items-center dark:border-white/5">
-                            <div className="min-w-0 flex-1">
-                                <div className="font-medium">{t("admin.settingsTab.auth.requireEmail")}</div>
-                                <Typography.Text type="secondary">{t("admin.settingsTab.auth.requireEmailDesc")}</Typography.Text>
+                            <div className="flex items-start justify-between gap-4 border-t border-black/5 pt-4 sm:items-center dark:border-white/5">
+                                <div className="min-w-0 flex-1">
+                                    <div className="font-medium">{t("admin.settingsTab.auth.requireEmail")}</div>
+                                    <Typography.Text type="secondary">{t("admin.settingsTab.auth.requireEmailDesc")}</Typography.Text>
+                                </div>
+                                <Switch
+                                    className="shrink-0"
+                                    checked={requireEmailOnRegister}
+                                    disabled={!mailReady && !requireEmailOnRegister}
+                                    loading={authPolicySaving}
+                                    onChange={(checked) => void handleUpdateAuthPolicy({ requireEmailOnRegister: checked })}
+                                />
                             </div>
-                            <Switch
-                                className="shrink-0"
-                                checked={requireEmailOnRegister}
-                                disabled={!mailReady && !requireEmailOnRegister}
-                                loading={authPolicySaving}
-                                onChange={(checked) => void handleUpdateAuthPolicy({ requireEmailOnRegister: checked })}
-                            />
                         </div>
-                    </div>
-                </Card>
+                    </Card>
+                    <Card title={t("admin.settingsTab.auth.rateLimitCardTitle")}>
+                        <Alert
+                            type="info"
+                            showIcon
+                            className="mb-4"
+                            message={t("admin.settingsTab.auth.rateLimitAlertTitle")}
+                            description={t("admin.settingsTab.auth.rateLimitAlertDesc")}
+                        />
+                        <Form
+                            form={rateLimitForm}
+                            layout="vertical"
+                            initialValues={{
+                                enabled: true,
+                                loginPerMinute: 20,
+                                registerPerMinute: 10,
+                                emailCodePerMinute: 5,
+                                redeemPerMinute: 10,
+                            }}
+                            onFinish={handleSaveRateLimit}
+                        >
+                            <Form.Item name="enabled" label={t("admin.settingsTab.auth.rateLimitEnabledLabel")} valuePropName="checked">
+                                <Switch />
+                            </Form.Item>
+                            <Row gutter={16}>
+                                <Col xs={24} md={12} xl={6}>
+                                    <Form.Item
+                                        name="loginPerMinute"
+                                        label={t("admin.settingsTab.auth.rateLimitLoginLabel")}
+                                        rules={[{ required: true, message: t("admin.settingsTab.auth.rateLimitNumberReq") }]}
+                                    >
+                                        <InputNumber min={0} max={1000} precision={0} className="w-full" />
+                                    </Form.Item>
+                                </Col>
+                                <Col xs={24} md={12} xl={6}>
+                                    <Form.Item
+                                        name="registerPerMinute"
+                                        label={t("admin.settingsTab.auth.rateLimitRegisterLabel")}
+                                        rules={[{ required: true, message: t("admin.settingsTab.auth.rateLimitNumberReq") }]}
+                                    >
+                                        <InputNumber min={0} max={1000} precision={0} className="w-full" />
+                                    </Form.Item>
+                                </Col>
+                                <Col xs={24} md={12} xl={6}>
+                                    <Form.Item
+                                        name="emailCodePerMinute"
+                                        label={t("admin.settingsTab.auth.rateLimitEmailCodeLabel")}
+                                        rules={[{ required: true, message: t("admin.settingsTab.auth.rateLimitNumberReq") }]}
+                                    >
+                                        <InputNumber min={0} max={1000} precision={0} className="w-full" />
+                                    </Form.Item>
+                                </Col>
+                                <Col xs={24} md={12} xl={6}>
+                                    <Form.Item
+                                        name="redeemPerMinute"
+                                        label={t("admin.settingsTab.auth.rateLimitRedeemLabel")}
+                                        rules={[{ required: true, message: t("admin.settingsTab.auth.rateLimitNumberReq") }]}
+                                    >
+                                        <InputNumber min={0} max={1000} precision={0} className="w-full" />
+                                    </Form.Item>
+                                </Col>
+                            </Row>
+                            <Button type="primary" htmlType="submit" icon={<Save className="size-4" />} loading={rateLimitSaving}>
+                                {t("admin.storageTab.saveConfigBtn")}
+                            </Button>
+                        </Form>
+                    </Card>
+                </div>
             </Spin>
         );
     }

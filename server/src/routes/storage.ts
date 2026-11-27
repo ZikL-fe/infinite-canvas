@@ -8,11 +8,9 @@ import { z } from "zod";
 import { canvasProjects, creditLedger, db, mediaObjects, userAssets, userStorageGrants, users, workbenchLogs, type MediaKind } from "../db/index.ts";
 import { env } from "../env.ts";
 import {
-  assertSafeExternalUrl,
   buildObjectKey,
   buildThumbnailObjectKey,
   checkStorageQuotaBlock,
-  fetchMediaBufferWithLimits,
   inferExtension,
 } from "../lib/ai-media-persist.ts";
 import {
@@ -33,6 +31,7 @@ import {
   isS3NotFoundError,
   putS3Object,
 } from "../lib/s3.ts";
+import { rateLimitRedeem } from "../lib/rate-limit.ts";
 import { getPlatformWebdavConfig, getS3StorageConfig, resolveEffectiveUserWebdav } from "../lib/settings.ts";
 import { getUserQuotaAlertMeta, getUserStorageQuotaSummary, serializeStorageGrant } from "../lib/storage-quota.ts";
 import { uploadFileToWebdav } from "../lib/webdav.ts";
@@ -64,12 +63,6 @@ const confirmUploadSchema = z.object({
   durationMs: z.number().int().nonnegative().optional(),
 });
 
-const ingestUrlSchema = z.object({
-  url: z.string().url("请输入有效的资源链接"),
-  kind: z.enum(["image", "video", "audio", "file"]).optional(),
-  sourceType: z.enum(["upload", "ai_generated", "canvas_import"]).optional().default("ai_generated"),
-});
-
 const batchUrlsSchema = z.object({
   mediaIds: z.array(z.string().min(1)).max(100),
 });
@@ -81,13 +74,6 @@ const batchDeleteMediaSchema = z.object({
 const storageRedeemSchema = z.object({
   code: z.string().trim().min(1, "请输入云端存储兑换码").max(64),
 });
-
-function inferKindFromMime(mimeType: string, fallback: MediaKind = "file"): MediaKind {
-  if (mimeType.startsWith("image/")) return "image";
-  if (mimeType.startsWith("video/")) return "video";
-  if (mimeType.startsWith("audio/")) return "audio";
-  return fallback;
-}
 
 export const storageRoutes = new Hono<AppEnv>();
 
@@ -111,7 +97,7 @@ storageRoutes.get("/grants", async (c) => {
   });
 });
 
-storageRoutes.post("/redeem", zValidator("json", storageRedeemSchema), async (c) => {
+storageRoutes.post("/redeem", rateLimitRedeem, zValidator("json", storageRedeemSchema), async (c) => {
   const user = c.get("user");
   const code = c.req.valid("json").code;
 
@@ -371,97 +357,6 @@ storageRoutes.post("/confirm", zValidator("json", confirmUploadSchema), async (c
 
   const url = await createMediaReadUrl(config, updated.row.objectKey);
   return c.json({ media: updated.row, url, storageUsedBytes: updated.storageUsedBytes, storageQuotaBytes: user.storageQuotaBytes });
-});
-
-storageRoutes.post("/ingest-url", zValidator("json", ingestUrlSchema), async (c) => {
-  const config = await getS3StorageConfig();
-  if (!config) {
-    return c.json({ error: "管理员尚未配置对象存储" }, 503);
-  }
-
-  const user = c.get("user");
-  const preBlock = checkStorageQuotaBlock(user.storageUsedBytes, user.storageQuotaBytes, user.storageQuotaExpiresAt, 0);
-  if (preBlock.blocked) {
-    return c.json(
-      {
-        error: preBlock.error,
-        code: preBlock.code,
-        storageUsedBytes: user.storageUsedBytes,
-        storageQuotaBytes: user.storageQuotaBytes,
-      },
-      403,
-    );
-  }
-
-  const body = c.req.valid("json");
-  let parsedUrl: URL;
-  try {
-    parsedUrl = assertSafeExternalUrl(body.url);
-  } catch (error) {
-    return c.json({ error: error instanceof Error ? error.message : "非法的远程资源链接" }, 400);
-  }
-
-  let fetched: { buffer: Buffer; mimeType: string } | null;
-  try {
-    fetched = await fetchMediaBufferWithLimits(parsedUrl.toString());
-  } catch (error) {
-    return c.json({ error: error instanceof Error ? error.message : "拉取远程资源失败" }, 400);
-  }
-  if (!fetched) {
-    return c.json({ error: "拉取远程资源失败或文件超出允许大小限制" }, 400);
-  }
-
-  const mimeType = fetched.mimeType || "application/octet-stream";
-  const kind = body.kind || inferKindFromMime(mimeType, "file");
-  const ext = inferExtension(parsedUrl.pathname, mimeType);
-  const objectKey = buildObjectKey(user.id, kind, ext);
-  const mediaId = `${kind}:${nanoid()}`;
-  const buffer = fetched.buffer;
-
-  const postBlock = checkStorageQuotaBlock(user.storageUsedBytes, user.storageQuotaBytes, user.storageQuotaExpiresAt, buffer.byteLength);
-  if (postBlock.blocked) {
-    return c.json(
-      {
-        error: postBlock.error,
-        code: postBlock.code,
-        storageUsedBytes: user.storageUsedBytes,
-        storageQuotaBytes: user.storageQuotaBytes,
-      },
-      403,
-    );
-  }
-
-  await putS3Object(config, objectKey, buffer, mimeType);
-
-  const created = await db.transaction(async (tx) => {
-    const [row] = await tx
-      .insert(mediaObjects)
-      .values({
-        id: mediaId,
-        userId: user.id,
-        bucket: config.bucket,
-        objectKey,
-        kind,
-        mimeType,
-        bytes: buffer.byteLength,
-        sourceType: body.sourceType,
-        status: "active",
-      })
-      .returning();
-
-    await tx
-      .update(users)
-      .set({
-        storageUsedBytes: sql`${users.storageUsedBytes} + ${buffer.byteLength}`,
-        updatedAt: new Date(),
-      })
-      .where(eq(users.id, user.id));
-
-    return row;
-  });
-
-  const url = await createMediaReadUrl(config, created.objectKey);
-  return c.json({ media: created, url }, 201);
 });
 
 storageRoutes.get("/list", async (c) => {

@@ -350,6 +350,24 @@ export type AdminMailSettings = {
     ready: boolean;
 };
 
+export type AdminAuthRateLimitPolicy = {
+    enabled: boolean;
+    loginPerMinute: number;
+    registerPerMinute: number;
+    emailCodePerMinute: number;
+    redeemPerMinute: number;
+};
+
+export type AdminAuthPolicy = {
+    allowRegister: boolean;
+    requireEmailOnRegister: boolean;
+    rateLimit: AdminAuthRateLimitPolicy;
+};
+
+export type AdminAuthSettings = AdminAuthPolicy & {
+    emailEnabled: boolean;
+};
+
 export type AdminMailSettingsForm = {
     enabled: boolean;
     host: string;

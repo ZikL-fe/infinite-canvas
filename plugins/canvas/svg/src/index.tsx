@@ -1,6 +1,7 @@
 // SVG 节点:编辑与渲染 SVG,透明背景直接融入画布;无自身内容时可取上游文本节点里的 SVG 源码。
-import { definePlugin, useEffect, useRef, useState } from "@infinite-canvas/plugin-sdk";
+import { definePlugin, useEffect, useMemo, useRef, useState } from "@infinite-canvas/plugin-sdk";
 import type { CanvasNodeContentProps } from "@infinite-canvas/plugin-sdk";
+import DOMPurify from "dompurify";
 
 function SvgContent({ ctx }: CanvasNodeContentProps) {
     const [editing, setEditing] = useState(false);
@@ -13,6 +14,16 @@ function SvgContent({ ctx }: CanvasNodeContentProps) {
         .find((text): text is string => typeof text === "string" && text.trim().startsWith("<svg"));
     const value = stored ?? "";
     const svg = value.trim() || upstream || "";
+    const safeSvg = useMemo(
+        () =>
+            svg
+                ? DOMPurify.sanitize(svg, {
+                      USE_PROFILES: { svg: true, svgFilters: true },
+                      FORBID_TAGS: ["script", "foreignObject"],
+                  })
+                : "",
+        [svg],
+    );
 
     // 无自身内容但有上游 SVG:自动采用上游源码
     useEffect(() => {
@@ -65,9 +76,9 @@ function SvgContent({ ctx }: CanvasNodeContentProps) {
                     onWheel={stop}
                     style={{ height: "100%", width: "100%", resize: "none", background: ctx.theme.node.fill, borderRadius: 16, padding: 16, boxSizing: "border-box", fontFamily: "monospace", fontSize: 12, outline: "none", border: `1px solid ${ctx.theme.node.stroke}`, color: ctx.theme.node.text }}
                 />
-            ) : svg ? (
+            ) : safeSvg ? (
                 // pointerEvents:none 让整块可拖动移动,双击/拖拽都命中外层节点
-                <div style={{ height: "100%", width: "100%", display: "flex", alignItems: "center", justifyContent: "center", padding: 12, boxSizing: "border-box", pointerEvents: "none" }} dangerouslySetInnerHTML={{ __html: svg }} />
+                <div style={{ height: "100%", width: "100%", display: "flex", alignItems: "center", justifyContent: "center", padding: 12, boxSizing: "border-box", pointerEvents: "none" }} dangerouslySetInnerHTML={{ __html: safeSvg }} />
             ) : (
                 <div style={{ height: "100%", width: "100%", display: "flex", alignItems: "center", justifyContent: "center", padding: 16, boxSizing: "border-box", color: ctx.theme.node.placeholder, fontSize: 13, textAlign: "center", pointerEvents: "none" }}>双击编辑,粘贴 SVG 源码</div>
             )}
@@ -78,7 +89,7 @@ function SvgContent({ ctx }: CanvasNodeContentProps) {
 export default definePlugin({
     id: "svg",
     name: "SVG 节点",
-    version: "1.1.0",
+    version: "1.1.1",
     description: "透明背景渲染 SVG 矢量图,可接收上游文本节点的 SVG 源码",
     nodes: [
         {

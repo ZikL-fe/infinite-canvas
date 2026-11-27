@@ -83,7 +83,7 @@ export async function issueEmailVerificationCode(params: {
   return { ok: true as const, cooldownSeconds: EMAIL_CODE_RESEND_COOLDOWN_SECONDS, expiresInMinutes: EMAIL_CODE_TTL_MINUTES };
 }
 
-/** 校验并一次性消费邮箱验证码（超过最大试错次数或过期自动失效）。 */
+/** 校验并一次性消费邮箱验证码（事务行锁防并发竞态，超过最大试错次数或过期自动失效）。 */
 export async function verifyAndConsumeEmailCode(params: {
   email: string;
   purpose: EmailCodePurpose;
@@ -96,56 +96,59 @@ export async function verifyAndConsumeEmailCode(params: {
     return { ok: false as const, status: 400 as const, error: "请输入邮箱验证码" };
   }
 
-  const record = await db.query.emailVerificationCodes.findFirst({
-    where: and(
-      eq(emailVerificationCodes.email, email),
-      eq(emailVerificationCodes.purpose, params.purpose),
-      isNull(emailVerificationCodes.consumedAt),
-    ),
-    orderBy: [desc(emailVerificationCodes.createdAt)],
-  });
-  if (!record) {
-    return { ok: false as const, status: 400 as const, error: "请先获取邮箱验证码" };
-  }
-  if (params.userId && record.userId && record.userId !== params.userId) {
-    return { ok: false as const, status: 400 as const, error: "验证码与当前账号不匹配，请重新获取" };
-  }
+  return db.transaction(async (tx) => {
+    const [record] = await tx
+      .select()
+      .from(emailVerificationCodes)
+      .where(
+        and(
+          eq(emailVerificationCodes.email, email),
+          eq(emailVerificationCodes.purpose, params.purpose),
+          isNull(emailVerificationCodes.consumedAt),
+        ),
+      )
+      .orderBy(desc(emailVerificationCodes.createdAt))
+      .limit(1)
+      .for("update");
 
-  const now = new Date();
-  if (record.expiresAt.getTime() <= now.getTime()) {
-    await db.update(emailVerificationCodes).set({ consumedAt: now }).where(eq(emailVerificationCodes.id, record.id));
-    return { ok: false as const, status: 400 as const, error: "验证码已过期，请重新获取" };
-  }
+    if (!record) {
+      return { ok: false as const, status: 400 as const, error: "请先获取邮箱验证码" };
+    }
+    if (params.userId && record.userId && record.userId !== params.userId) {
+      return { ok: false as const, status: 400 as const, error: "验证码与当前账号不匹配，请重新获取" };
+    }
 
-  if (record.codeHash !== hashEmailCode(params.purpose, email, code)) {
-    const nextAttempts = record.attempts + 1;
-    const exhausted = nextAttempts >= EMAIL_CODE_MAX_ATTEMPTS;
-    await db
+    const now = new Date();
+    if (record.expiresAt.getTime() <= now.getTime()) {
+      await tx.update(emailVerificationCodes).set({ consumedAt: now }).where(eq(emailVerificationCodes.id, record.id));
+      return { ok: false as const, status: 400 as const, error: "验证码已过期，请重新获取" };
+    }
+
+    if (record.codeHash !== hashEmailCode(params.purpose, email, code)) {
+      const nextAttempts = record.attempts + 1;
+      const exhausted = nextAttempts >= EMAIL_CODE_MAX_ATTEMPTS;
+      await tx
+        .update(emailVerificationCodes)
+        .set({
+          attempts: nextAttempts,
+          ...(exhausted ? { consumedAt: now } : {}),
+        })
+        .where(eq(emailVerificationCodes.id, record.id));
+
+      return {
+        ok: false as const,
+        status: 400 as const,
+        error: exhausted
+          ? "验证码错误次数过多，已失效，请重新获取"
+          : `邮箱验证码不正确（还可重试 ${EMAIL_CODE_MAX_ATTEMPTS - nextAttempts} 次）`,
+      };
+    }
+
+    await tx
       .update(emailVerificationCodes)
-      .set({
-        attempts: nextAttempts,
-        ...(exhausted ? { consumedAt: now } : {}),
-      })
+      .set({ consumedAt: now })
       .where(eq(emailVerificationCodes.id, record.id));
 
-    return {
-      ok: false as const,
-      status: 400 as const,
-      error: exhausted
-        ? "验证码错误次数过多，已失效，请重新获取"
-        : `邮箱验证码不正确（还可重试 ${EMAIL_CODE_MAX_ATTEMPTS - nextAttempts} 次）`,
-    };
-  }
-
-  const [consumed] = await db
-    .update(emailVerificationCodes)
-    .set({ consumedAt: now })
-    .where(and(eq(emailVerificationCodes.id, record.id), isNull(emailVerificationCodes.consumedAt)))
-    .returning({ id: emailVerificationCodes.id });
-
-  if (!consumed) {
-    return { ok: false as const, status: 400 as const, error: "验证码已被使用，请重新获取" };
-  }
-
-  return { ok: true as const };
+    return { ok: true as const };
+  });
 }

@@ -7,6 +7,16 @@ description: Implemented changes that still need manual verification
 
 The current release needs manual verification in these areas:
 
+- 高风险接口限流、验证码并发防护与后台可配置策略：
+  - 进入 `/admin?tab=settings-auth`，检查「高风险接口防刷限流」表单默认值展示（总开关开启，登录 `20`、注册 `10`、发送邮箱验证码 `5`、兑换码核销 `10` 次/分钟），修改阈值保存后刷新确认持久化生效；
+  - 将某项阈值改为较小值（如登录改为 `2` 次/分钟）或填 `0` 禁用，短时间连续请求 `/api/auth/login`、`/api/auth/register`、`/api/auth/send-register-code`、`/api/auth/forgot-password/send-code`、`/api/account/email/send-code`、`/api/account/change-password/send-code`、`/api/billing/redeem`、`/api/storage/redeem`，确认超限返回 `429` 且携带 `Retry-After` 响应头，同时验证画布同步、媒体上传与 AI 生图/对话并发请求不受限制；
+  - 针对同一绑定/注册邮箱验证码并发发送多条错误验证请求，确认累计失败 `5` 次即被锁定作废，无法被并发绕过；
+- AI 文本 SSE 流式透传与严格预扣费：
+  - 使用较低余额账号请求定价文本模型，确认可用余额低于预留门槛时直接返回 `402` 拒绝请求；
+  - 在文本工作台或画布文本助手发起长文本流式生成，确认首字逐块实时到达前端不再等待整段输出完成，生成结束及中途手动取消时积分台账均能准确按实际 `usage` 结算或失败退还预留额度。
+- 安全加固（移除 `/api/storage/ingest-url` 与 SVG/Markdown 插件 XSS 防护）：
+  - 请求 `POST /api/storage/ingest-url` 确认服务端返回 `404`（不再存在远端 URL 拉取转存入口）；
+  - 重新构建并加载官方 SVG 与 Markdown 节点插件（`v1.1.1`），验证正常矢量图与 Markdown（标题、表格、代码块、链接、任务列表）渲染正常；输入包含 `<script>`、`onload=`、`onerror=`、`<foreignObject>` 或 `javascript:` 链接的内容时确认不会执行脚本。
 - 邀请注册、充值返利与反向扣回闭环：
   - 在 `/admin?tab=settings-invite` 开启邀请返利、配置返利百分比（例如 `10%`）并分别测试开启/关闭「管理员后台调账计入返利」保存生效；
   - 从「积分钱包 -> 邀请返利」复制邀请码与邀请链接（`/auth?invite=CODE`），使用新账号注册验证自动填充与绑定，确认邀请人列表人数与邀请信息正确更新；

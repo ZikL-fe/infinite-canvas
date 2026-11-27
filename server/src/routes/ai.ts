@@ -761,6 +761,14 @@ aiRoutes.all("/proxy/:channelId/*", async (c) => {
   let clientAborted = Boolean(c.req.raw.signal?.aborted);
   const handleAbort = () => { clientAborted = true; };
   c.req.raw.signal?.addEventListener("abort", handleAbort, { once: true });
+  let streamOwnsSlot = false;
+  let proxyResourcesReleased = false;
+  const releaseProxyResources = () => {
+    if (proxyResourcesReleased) return;
+    proxyResourcesReleased = true;
+    c.req.raw.signal?.removeEventListener("abort", handleAbort);
+    releaseProxySlot?.();
+  };
 
   try {
     let preCharged = 0;
@@ -800,8 +808,11 @@ aiRoutes.all("/proxy/:channelId/*", async (c) => {
           meta: { model: modelName, isStream: Boolean(generation?.streaming), taskStatus: "processing", ...(clientTaskId ? { clientTaskId } : {}) },
         });
         if (!reservation.ok) {
-          const msg = "积分余额不足或已被其他请求占用，请先充值";
-          return c.json({ error: msg, message: msg, balance: reservation.balance }, 402);
+          const msg =
+            reservation.required > 0 && reservation.balance > 0
+              ? `积分余额不足（当前可用 ${reservation.balance}，本次至少需要预留 ${reservation.required}）`
+              : "积分余额不足或已被其他请求占用，请先充值";
+          return c.json({ error: msg, message: msg, balance: reservation.balance, required: reservation.required }, 402);
         }
         preChargedLedgerId = reservation.ledgerId;
       }
@@ -1003,15 +1014,17 @@ aiRoutes.all("/proxy/:channelId/*", async (c) => {
 
     if (channelModel.capability === "text") {
       const isSse = respType.includes("text/event-stream");
-      let bytes: Uint8Array<ArrayBuffer>;
-      let responseText = "";
       let usage: UsageTotals | null = null;
       let resultText = "";
       let firstChunkMs: number | undefined;
       let firstContentMs: number | undefined;
 
       if (isSse) {
-        const chunks: Uint8Array[] = [];
+        if (!upstream.body) {
+          await finishFailedBilling("上游未返回流式内容");
+          return c.json({ error: "上游未返回流式内容，未返回生成结果" }, 502);
+        }
+        const reader = upstream.body.getReader();
         const decoder = new TextDecoder();
         let pending = "";
         const inspectLine = (line: string) => {
@@ -1029,45 +1042,127 @@ aiRoutes.all("/proxy/:channelId/*", async (c) => {
             // 无效事件由缺少 usage 的付费结算门槛拦截。
           }
         };
+
+        let settlePromise: Promise<void> | null = null;
+        const settleStream = (abortedOrErrored: boolean, failReason?: string) => {
+          if (settlePromise) return settlePromise;
+          settlePromise = (async () => {
+            const durationMs = Math.max(1, Date.now() - startedAt);
+            const firstTokenMs = Math.min(durationMs, Math.max(1, firstContentMs ?? firstChunkMs ?? durationMs));
+            if ((shouldBill && !usage) || (abortedOrErrored && !usage && failReason)) {
+              await finishFailedBilling(failReason || "上游未返回可验证的 Token 用量", {
+                isStream: true,
+                firstTokenMs,
+                ...(clientAborted || abortedOrErrored ? { clientAborted: true } : {}),
+                ...(resultText ? { resultText } : {}),
+              });
+              return;
+            }
+            const credits = usage && pricing ? calculateTextCharge(pricing as TextModelPricing, usage) : 0;
+            if (credits === null) {
+              await finishFailedBilling("文本计费数值超出可计算范围", {
+                isStream: true,
+                firstTokenMs,
+                ...(clientAborted || abortedOrErrored ? { clientAborted: true } : {}),
+                ...(resultText ? { resultText } : {}),
+              });
+              return;
+            }
+            await settleReserved(credits, {
+              model: modelName,
+              ...(usage ?? {}),
+              isStream: true,
+              durationMs,
+              firstTokenMs,
+              ...(usage ? { tokensPerSecond: calcTokensPerSecond(usage.outputTokens, durationMs, firstTokenMs) } : {}),
+              ...(clientAborted || abortedOrErrored ? { clientAborted: true } : {}),
+              ...(resultText ? { resultText } : {}),
+              taskStatus: "completed",
+            });
+          })();
+          return settlePromise;
+        };
+
+        const onStreamAbort = () => {
+          clientAborted = true;
+          void reader.cancel().catch(() => undefined);
+        };
+        const cleanupStream = () => {
+          c.req.raw.signal?.removeEventListener("abort", onStreamAbort);
+          releaseProxyResources();
+        };
+        c.req.raw.signal?.addEventListener("abort", onStreamAbort, { once: true });
+
+        streamOwnsSlot = true;
+        let stream: ReadableStream<Uint8Array>;
         try {
-          if (!upstream.body) throw new Error("上游未返回流式内容");
-          const reader = upstream.body.getReader();
-          for (;;) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            if (value.byteLength && firstChunkMs === undefined) firstChunkMs = Math.max(1, Date.now() - startedAt);
-            chunks.push(value);
-            pending += decoder.decode(value, { stream: true });
-            const lines = pending.split(/\r?\n/);
-            pending = lines.pop() || "";
-            for (const line of lines) inspectLine(line);
-          }
-          pending += decoder.decode();
-          if (pending) inspectLine(pending);
-          const length = chunks.reduce((sum, chunk) => sum + chunk.byteLength, 0);
-          bytes = new Uint8Array(length);
-          let offset = 0;
-          for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
-        } catch {
-          await finishFailedBilling("上游流式响应读取失败");
-          return c.json({ error: "上游流式响应读取失败，未返回生成结果" }, 502);
+          stream = new ReadableStream<Uint8Array>({
+            async start(controller) {
+              try {
+                for (;;) {
+                  const { done, value } = await reader.read();
+                  if (done) break;
+                  if (value.byteLength) {
+                    if (firstChunkMs === undefined) firstChunkMs = Math.max(1, Date.now() - startedAt);
+                    controller.enqueue(value);
+                    pending += decoder.decode(value, { stream: true });
+                    const lines = pending.split(/\r?\n/);
+                    pending = lines.pop() || "";
+                    for (const line of lines) inspectLine(line);
+                  }
+                }
+                pending += decoder.decode();
+                if (pending) inspectLine(pending);
+                await settleStream(clientAborted, clientAborted ? "客户端取消流式请求" : undefined);
+                try {
+                  controller.close();
+                } catch {
+                  // 客户端已断开
+                }
+              } catch (error) {
+                const timedOut = error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError");
+                const failMsg = clientAborted ? "客户端取消流式请求" : timedOut ? "上游流式响应超时" : "上游流式响应读取失败";
+                await settleStream(true, failMsg);
+                try {
+                  if (!clientAborted) controller.error(error);
+                } catch {
+                  // 流已关闭或已取消
+                }
+              } finally {
+                cleanupStream();
+              }
+            },
+            async cancel() {
+              clientAborted = true;
+              await reader.cancel().catch(() => undefined);
+              await settleStream(true, "客户端取消流式请求");
+              cleanupStream();
+            },
+          });
+        } catch (error) {
+          streamOwnsSlot = false;
+          c.req.raw.signal?.removeEventListener("abort", onStreamAbort);
+          throw error;
         }
-      } else {
-        try {
-          bytes = new Uint8Array(await upstream.arrayBuffer());
-        } catch {
-          await finishFailedBilling("上游文本响应读取失败");
-          return c.json({ error: "上游文本响应读取失败，未返回生成结果" }, 502);
-        }
-        responseText = new TextDecoder().decode(bytes);
-        try {
-          const parsed = JSON.parse(responseText);
-          usage = extractUsageFromObject(parsed);
-          resultText = appendCappedText("", extractFinalTextFromPayload(parsed));
-        } catch {
-          await finishFailedBilling("上游文本响应解析失败");
-          return c.json({ error: "上游文本响应解析失败，未返回生成结果" }, 502);
-        }
+        return new Response(stream, { status: upstream.status, headers: responseHeaders });
+      }
+
+      let bytes: Uint8Array<ArrayBuffer>;
+      let responseText = "";
+      try {
+        bytes = new Uint8Array(await upstream.arrayBuffer());
+      } catch {
+        await finishFailedBilling("上游文本响应读取失败");
+        return c.json({ error: "上游文本响应读取失败，未返回生成结果" }, 502);
+      }
+      responseText = new TextDecoder().decode(bytes);
+      try {
+        const parsed = JSON.parse(responseText);
+        usage = extractUsageFromObject(parsed);
+        resultText = appendCappedText("", extractFinalTextFromPayload(parsed));
+      } catch {
+        await finishFailedBilling("上游文本响应解析失败");
+        return c.json({ error: "上游文本响应解析失败，未返回生成结果" }, 502);
       }
       const durationMs = Math.max(1, Date.now() - startedAt);
 
@@ -1080,11 +1175,9 @@ aiRoutes.all("/proxy/:channelId/*", async (c) => {
         await finishFailedBilling("文本计费数值超出可计算范围");
         return c.json({ error: "文本计费数值超出可计算范围，未返回生成结果" }, 502);
       }
-      const firstTokenMs = Math.min(durationMs, Math.max(1, firstContentMs ?? firstChunkMs ?? durationMs));
       const settlement = await settleReserved(credits, {
-        model: modelName, ...(usage ?? {}), isStream: isSse, durationMs,
-        ...(isSse ? { firstTokenMs } : {}),
-        ...(usage ? { tokensPerSecond: calcTokensPerSecond(usage.outputTokens, durationMs, isSse ? firstTokenMs : undefined) } : {}),
+        model: modelName, ...(usage ?? {}), isStream: false, durationMs,
+        ...(usage ? { tokensPerSecond: calcTokensPerSecond(usage.outputTokens, durationMs, undefined) } : {}),
         ...(clientAborted ? { clientAborted: true } : {}),
         ...(resultText ? { resultText } : {}),
         taskStatus: "completed",
@@ -1097,7 +1190,8 @@ aiRoutes.all("/proxy/:channelId/*", async (c) => {
 
     return new Response(upstream.body, { status: upstream.status, headers: responseHeaders });
   } finally {
-    c.req.raw.signal?.removeEventListener("abort", handleAbort);
-    releaseProxySlot?.();
+    if (!streamOwnsSlot) {
+      releaseProxyResources();
+    }
   }
 });

@@ -279,7 +279,7 @@ export async function patchLedgerMetaByTaskId(userId: string, taskId: string, pa
     .where(and(eq(creditLedger.userId, userId), sql`${creditLedger.meta}->>'taskId' = ${taskId}`));
 }
 
-/** 付费文本、语音请求按预估金额锁定可用余额（不超过实际可用余额），免费请求只留下待结算记录。 */
+/** 付费文本、语音请求按预估金额全额锁定可用余额，不足时直接拒绝以防真流式阶段透支；免费请求只留下待结算记录。 */
 export async function reserveProcessingLedger(params: {
   userId: string;
   reason: "text_gen" | "audio_gen";
@@ -292,12 +292,13 @@ export async function reserveProcessingLedger(params: {
     const balance = await lockWalletBalance(tx, params.userId);
     await expireWalletReservations(tx, params.userId);
     const available = params.priced ? roundCredits(balance - (await getReservedCredits(tx, params.userId))) : 0;
-    if (params.priced && available <= 0) {
-      return { ok: false as const, balance: Math.max(0, available) };
-    }
-    const reserved = params.priced
-      ? Math.min(available, Math.max(0.0001, roundCredits(params.reserveCredits ?? available)))
+    const requiredReserve = params.priced
+      ? Math.max(0.0001, roundCredits(params.reserveCredits ?? available))
       : 0;
+    if (params.priced && (available <= 0 || available < requiredReserve)) {
+      return { ok: false as const, balance: Math.max(0, available), required: requiredReserve };
+    }
+    const reserved = params.priced ? requiredReserve : 0;
     const ledgerId = nanoid();
     await tx.insert(creditLedger).values({
       id: ledgerId,
