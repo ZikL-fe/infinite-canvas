@@ -307,6 +307,8 @@ adminMediaLogsRoutes.get("/logs", async (c) => {
     category,
     reason: c.req.query("reason"),
     model: c.req.query("model"),
+    group: c.req.query("group"),
+    includeInternalChannel: true,
     startDate: c.req.query("startDate"),
     endDate: c.req.query("endDate"),
     page: Number(c.req.query("page") || 1),

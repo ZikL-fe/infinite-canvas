@@ -54,6 +54,7 @@ export type ChannelModel = {
 export type ModelChannel = {
     id: string;
     name: string;
+    alias?: string;
     baseUrl: string;
     apiKey: string;
     apiFormat: ApiCallFormat;
@@ -442,6 +443,7 @@ export function createModelChannel(channel?: Partial<ModelChannel>): ModelChanne
     return {
         id: channel?.id?.trim() || nanoid(),
         name: channel?.name?.trim() || i18n.t("config.channels.newName"),
+        ...(channel?.alias?.trim() ? { alias: channel.alias.trim() } : {}),
         baseUrl: channel?.baseUrl?.trim() || defaultBaseUrlForApiFormat(apiFormat),
         apiKey: channel?.apiKey || "",
         apiFormat,

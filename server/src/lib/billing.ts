@@ -4,12 +4,13 @@ import { nanoid } from "nanoid";
 
 import { creditLedger, creditWallets, db, mediaObjects, aiBillingTasks, users } from "../db/index.ts";
 import { scheduleWalletBalanceAlertCheck } from "./billing-alert.ts";
-import type {
-  AudioModelPricing,
-  ImageModelPricing,
-  ModelPricing,
-  TextModelPricing,
-  VideoModelPricing,
+import {
+  getPlatformChannels,
+  type AudioModelPricing,
+  type ImageModelPricing,
+  type ModelPricing,
+  type TextModelPricing,
+  type VideoModelPricing,
 } from "./settings.ts";
 
 /** 按 4 位小数精度截断/四舍五入积分数值，避免浮点误差累积。 */
@@ -612,6 +613,8 @@ export type QueryCreditLedgerParams = {
   category?: "usage" | "recharge";
   reason?: string;
   model?: string;
+  group?: string;
+  includeInternalChannel?: boolean;
   startDate?: string;
   endDate?: string;
   page?: number;
@@ -647,9 +650,40 @@ export async function queryCreditLedger(params: QueryCreditLedgerParams) {
     filters.push(inArray(creditLedger.reason, [...WALLET_RECHARGE_REASONS]));
   }
 
+  const channels = await getPlatformChannels();
+  const channelMap = new Map(channels.map((ch) => [ch.id, ch]));
+
   const model = params.model?.trim() || "";
   if (model) {
     filters.push(sql`${creditLedger.meta}->>'model' ILIKE ${`%${model}%`}`);
+  }
+
+  const group = params.group?.trim() || "";
+  if (group) {
+    const lowerGroup = group.toLowerCase();
+    const liveIds = channels.map((ch) => ch.id);
+    const matchingChannelIds = channels
+      .filter((ch) => {
+        const displayGroup = ch.name.toLowerCase();
+        const aliasMatch = Boolean(params.includeInternalChannel) && (ch.alias?.trim() || "").toLowerCase().includes(lowerGroup);
+        return displayGroup.includes(lowerGroup) || aliasMatch;
+      })
+      .map((ch) => ch.id);
+
+    const snapshotFilter = params.includeInternalChannel
+      ? sql`COALESCE(${creditLedger.meta}->>'channelGroup', ${creditLedger.meta}->>'channelAlias', '') ILIKE ${`%${group}%`}`
+      : sql`COALESCE(${creditLedger.meta}->>'channelGroup', '') ILIKE ${`%${group}%`}`;
+
+    if (liveIds.length > 0) {
+      const snapshotCond = sql`(COALESCE(${creditLedger.meta}->>'channelId', '') = '' OR ${creditLedger.meta}->>'channelId' NOT IN (${sql.join(liveIds.map((id) => sql`${id}`), sql`, `)})) AND ${snapshotFilter}`;
+      if (matchingChannelIds.length > 0) {
+        filters.push(sql`(${creditLedger.meta}->>'channelId' IN (${sql.join(matchingChannelIds.map((id) => sql`${id}`), sql`, `)}) OR (${snapshotCond}))`);
+      } else {
+        filters.push(snapshotCond);
+      }
+    } else {
+      filters.push(snapshotFilter);
+    }
   }
 
   const taskStatus = params.taskStatus?.trim() || "";
@@ -759,8 +793,33 @@ export async function queryCreditLedger(params: QueryCreditLedgerParams) {
     avgRpm = Math.round((consumeCalls / spanMinutes) * 100) / 100;
   }
 
+  const safeItems = items.map((item) => {
+    if (!item.meta || typeof item.meta !== "object") return item;
+    const rawMeta = item.meta as Record<string, unknown>;
+    const channelId = typeof rawMeta.channelId === "string" ? rawMeta.channelId : "";
+    const liveChannel = channelId ? channelMap.get(channelId) : undefined;
+    const { channelAlias: _storedAlias, ...restMeta } = rawMeta;
+
+    if (liveChannel) {
+      const liveAlias = liveChannel.alias?.trim() || "";
+      return {
+        ...item,
+        meta: {
+          ...restMeta,
+          channelGroup: liveChannel.name,
+          ...(params.includeInternalChannel && liveAlias ? { channelAlias: liveAlias } : {}),
+        },
+      };
+    }
+
+    if (!params.includeInternalChannel && "channelAlias" in rawMeta) {
+      return { ...item, meta: restMeta };
+    }
+    return item;
+  });
+
   return {
-    items,
+    items: safeItems,
     total: Number(total),
     page,
     pageSize,

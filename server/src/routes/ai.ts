@@ -966,13 +966,21 @@ aiRoutes.all("/proxy/:channelId/*", async (c) => {
         ledgerReason = "text_gen";
       }
 
+      const channelAlias = channel.alias?.trim() || "";
       const reservation = await reserveProcessingLedger({
         userId: user.id,
         reason: ledgerReason,
         priced: shouldBill && (channelModel.capability === "text" || channelModel.capability === "audio" || reserveCredits > 0),
         reserveCredits,
         expiresAt,
-        meta: { model: modelName, ...extraMeta, ...(clientTaskId ? { clientTaskId } : {}) },
+        meta: {
+          model: modelName,
+          channelId: channel.id,
+          channelGroup: channel.name,
+          ...(channelAlias ? { channelAlias } : {}),
+          ...extraMeta,
+          ...(clientTaskId ? { clientTaskId } : {}),
+        },
       });
       if (!reservation.ok) {
         const msg =

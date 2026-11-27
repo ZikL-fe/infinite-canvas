@@ -94,6 +94,7 @@ export type PlatformChannelModel = {
 export type PlatformChannel = {
   id: string;
   name: string;
+  alias?: string;
   baseUrl: string;
   apiKey: string;
   apiFormat: PlatformApiFormat;
@@ -387,6 +388,7 @@ export async function getPlatformChannels(): Promise<PlatformChannel[]> {
     return (raw.channels || []).map((channel) => ({
       id: channel.id,
       name: channel.name,
+      ...(channel.alias?.trim() ? { alias: channel.alias.trim() } : {}),
       baseUrl: channel.baseUrl || "",
       apiFormat: channel.apiFormat === "gemini" ? "gemini" : "openai",
       enabled: channel.enabled ?? true,

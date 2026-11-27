@@ -1,10 +1,9 @@
 /** 个人钱包充值/兑换面板与 NewAPI 风格使用日志面板。 */
 import { useCallback, useEffect, useState } from "react";
-import { Alert, App, Avatar, Button, Card, Col, DatePicker, Descriptions, Empty, Form, Image, Input, InputNumber, Modal, Popconfirm, Progress, Radio, Row, Segmented, Select, Space, Spin, Statistic, Switch, Table, Tabs, Tag, Tooltip, Typography, theme as antdTheme } from "antd";
-import type { Dayjs } from "dayjs";
+import { Alert, App, Avatar, Button, Card, Col, Descriptions, Empty, Form, Image, Input, InputNumber, Modal, Popconfirm, Progress, Radio, Row, Segmented, Select, Space, Spin, Statistic, Switch, Table, Tabs, Tag, Tooltip, Typography, theme as antdTheme } from "antd";
 import type { TFunction } from "i18next";
 import localforage from "localforage";
-import { AudioLines, Bell, Copy, Download, Eye, FileIcon, Gift, ImageIcon, KeyRound, Laptop, Link2, LogOut, Megaphone, Pin, RefreshCw, RotateCcw, Save, Search, Trash2, TrendingUp, User, Users, Video } from "lucide-react";
+import { AudioLines, Bell, ChevronDown, ChevronUp, Copy, Download, Eye, FileIcon, Gift, ImageIcon, KeyRound, Laptop, Link2, LogOut, Megaphone, Pin, RefreshCw, RotateCcw, Save, Search, Trash2, TrendingUp, User, Users, Video } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
 
@@ -55,7 +54,7 @@ import {
 import { useUserStore } from "@/stores/use-user-store";
 
 import { LedgerDetailModal } from "./ledger-detail-modal";
-import { emptyLedgerSummary, formatBytes, formatDurationSec, formatLedgerUsageDetail, getLedgerReasonMeta, getLedgerTaskStatus, getLedgerTimingStats, LedgerDeltaTag } from "./shared";
+import { buildDateTimePresetRange, DateTimeRangePicker, emptyLedgerSummary, formatBytes, formatDurationSec, formatLedgerUsageDetail, getLedgerReasonMeta, getLedgerTaskStatus, getLedgerTimingStats, LedgerDeltaTag, type DateTimeRangeValue } from "./shared";
 
 export function MyWalletPanel({ compact = false, onOpenLogs }: { compact?: boolean; onOpenLogs?: () => void }) {
     const { t, i18n } = useTranslation();
@@ -76,7 +75,7 @@ export function MyWalletPanel({ compact = false, onOpenLogs }: { compact?: boole
     const [initialized, setInitialized] = useState(false);
 
     const [reasonFilter, setReasonFilter] = useState("");
-    const [dateRange, setDateRange] = useState<[Dayjs | null, Dayjs | null] | null>(null);
+    const [dateRange, setDateRange] = useState<DateTimeRangeValue>(null);
 
     const [redeemCode, setRedeemCode] = useState("");
     const [redeeming, setRedeeming] = useState(false);
@@ -113,8 +112,8 @@ export function MyWalletPanel({ compact = false, onOpenLogs }: { compact?: boole
         async (targetPage = page, nextReason = reasonFilter, nextRange = dateRange, nextPageSize = pageSize, notifySuccess = false) => {
             setLoading(true);
             try {
-                const startDate = nextRange?.[0] ? nextRange[0].startOf("day").toISOString() : undefined;
-                const endDate = nextRange?.[1] ? nextRange[1].endOf("day").toISOString() : undefined;
+                const startDate = nextRange?.[0] ? nextRange[0].startOf("second").toISOString() : undefined;
+                const endDate = nextRange?.[1] ? nextRange[1].endOf("second").toISOString() : undefined;
                 const res = await billingApi.getLedger({
                     category: "recharge",
                     reason: nextReason || undefined,
@@ -253,14 +252,12 @@ export function MyWalletPanel({ compact = false, onOpenLogs }: { compact?: boole
                                             { value: "plan_grant", label: t("userPanels.ledgerReasons.plan_grant") },
                                         ]}
                                     />
-                                    <DatePicker.RangePicker
-                                        className="w-full! sm:w-auto!"
+                                    <DateTimeRangePicker
                                         value={dateRange}
                                         onChange={(dates) => {
                                             setPage(1);
                                             setDateRange(dates);
                                         }}
-                                        placeholder={[t("userPanels.wallet.startDate"), t("userPanels.wallet.endDate")]}
                                     />
                                     {reasonFilter || dateRange ? (
                                         <Button icon={<RotateCcw className="size-4" />} onClick={resetFilters}>
@@ -586,9 +583,11 @@ export function UsageLogsPanel({ defaultScope }: { defaultScope?: "all" | "self"
     const [reasonFilter, setReasonFilter] = useState("");
     const [statusFilter, setStatusFilter] = useState("");
     const [modelFilter, setModelFilter] = useState("");
+    const [groupFilter, setGroupFilter] = useState("");
     const [userQueryFilter, setUserQueryFilter] = useState("");
     const [logIdFilter, setLogIdFilter] = useState("");
-    const [dateRange, setDateRange] = useState<[Dayjs | null, Dayjs | null] | null>(null);
+    const [dateRange, setDateRange] = useState<DateTimeRangeValue>(() => buildDateTimePresetRange("today"));
+    const [filtersExpanded, setFiltersExpanded] = useState(false);
     const [detailItem, setDetailItem] = useState<CreditLedgerItem | null>(null);
 
     useEffect(() => {
@@ -603,6 +602,7 @@ export function UsageLogsPanel({ defaultScope }: { defaultScope?: "all" | "self"
             nextReason = reasonFilter,
             nextStatus = statusFilter,
             nextModel = modelFilter,
+            nextGroup = groupFilter,
             nextUser = userQueryFilter,
             nextLogId = logIdFilter,
             nextRange = dateRange,
@@ -611,8 +611,8 @@ export function UsageLogsPanel({ defaultScope }: { defaultScope?: "all" | "self"
         ) => {
             setLoading(true);
             try {
-                const startDate = nextRange?.[0] ? nextRange[0].startOf("day").toISOString() : undefined;
-                const endDate = nextRange?.[1] ? nextRange[1].endOf("day").toISOString() : undefined;
+                const startDate = nextRange?.[0] ? nextRange[0].startOf("second").toISOString() : undefined;
+                const endDate = nextRange?.[1] ? nextRange[1].endOf("second").toISOString() : undefined;
                 if (isAdmin) {
                     const res = await adminApi.listLogs({
                         scope: nextScope,
@@ -622,6 +622,7 @@ export function UsageLogsPanel({ defaultScope }: { defaultScope?: "all" | "self"
                         taskStatus: nextStatus || undefined,
                         reason: nextReason || undefined,
                         model: nextModel.trim() || undefined,
+                        group: nextGroup.trim() || undefined,
                         startDate,
                         endDate,
                         page: targetPage,
@@ -637,6 +638,7 @@ export function UsageLogsPanel({ defaultScope }: { defaultScope?: "all" | "self"
                         taskStatus: nextStatus || undefined,
                         reason: nextReason || undefined,
                         model: nextModel.trim() || undefined,
+                        group: nextGroup.trim() || undefined,
                         startDate,
                         endDate,
                         page: targetPage,
@@ -653,22 +655,32 @@ export function UsageLogsPanel({ defaultScope }: { defaultScope?: "all" | "self"
                 setLoading(false);
             }
         },
-        [dateRange, isAdmin, logIdFilter, message, modelFilter, page, pageSize, reasonFilter, scope, statusFilter, t, userQueryFilter],
+        [dateRange, groupFilter, isAdmin, logIdFilter, message, modelFilter, page, pageSize, reasonFilter, scope, statusFilter, t, userQueryFilter],
     );
 
     useEffect(() => {
-        void loadLogs(page, scope, reasonFilter, statusFilter, modelFilter, userQueryFilter, logIdFilter, dateRange);
-    }, [dateRange, loadLogs, logIdFilter, modelFilter, page, reasonFilter, scope, statusFilter, userQueryFilter]);
+        void loadLogs(page, scope, reasonFilter, statusFilter, modelFilter, groupFilter, userQueryFilter, logIdFilter, dateRange);
+    }, [dateRange, groupFilter, loadLogs, logIdFilter, modelFilter, page, reasonFilter, scope, statusFilter, userQueryFilter]);
 
     const resetFilters = () => {
         setReasonFilter("");
         setStatusFilter("");
         setModelFilter("");
+        setGroupFilter("");
         setUserQueryFilter("");
         setLogIdFilter("");
-        setDateRange(null);
+        setDateRange(buildDateTimePresetRange("today"));
         setPage(1);
     };
+
+    const todayRange = buildDateTimePresetRange("today");
+    const isDefaultToday = Boolean(
+        dateRange?.[0] &&
+            dateRange?.[1] &&
+            dateRange[0].isSame(todayRange[0], "second") &&
+            dateRange[1].isSame(todayRange[1], "second"),
+    );
+    const hasActiveFilters = Boolean(reasonFilter || statusFilter || modelFilter || groupFilter || userQueryFilter || logIdFilter || !isDefaultToday);
 
     const showUserColumn = isAdmin && scope === "all";
 
@@ -677,113 +689,147 @@ export function UsageLogsPanel({ defaultScope }: { defaultScope?: "all" | "self"
             <Card
                 title={t("userPanels.usageLogs.cardTitle", { count: summary.recordCount })}
                 extra={
-                    <Space wrap>
-                        {isAdmin ? (
-                            <Segmented
-                                size="small"
-                                value={scope}
-                                onChange={(val) => {
-                                    setPage(1);
-                                    setScope(val as "all" | "self");
-                                }}
-                                options={[
-                                    { label: t("userPanels.usageLogs.scopeAll"), value: "all" },
-                                    { label: t("userPanels.usageLogs.scopeSelf"), value: "self" },
-                                ]}
-                            />
-                        ) : null}
-                        <Button
+                    isAdmin ? (
+                        <Segmented
                             size="small"
-                            icon={<RefreshCw className="size-3.5" />}
-                            loading={loading}
-                            onClick={() => void loadLogs(page, scope, reasonFilter, statusFilter, modelFilter, userQueryFilter, logIdFilter, dateRange, pageSize, true)}
-                        >
-                            {t("common.refresh")}
-                        </Button>
-                    </Space>
+                            value={scope}
+                            onChange={(val) => {
+                                setPage(1);
+                                setScope(val as "all" | "self");
+                            }}
+                            options={[
+                                { label: t("userPanels.usageLogs.scopeAll"), value: "all" },
+                                { label: t("userPanels.usageLogs.scopeSelf"), value: "self" },
+                            ]}
+                        />
+                    ) : null
                 }
             >
-                <div className="mb-3 flex flex-wrap items-center gap-2">
-                    <Select
-                        value={reasonFilter}
-                        className="min-w-[125px] flex-1 sm:w-[130px]! sm:flex-none"
-                        onChange={(val) => {
-                            setPage(1);
-                            setReasonFilter(val);
-                        }}
-                        options={[
-                            { value: "", label: t("userPanels.usageLogs.allUsageTypes") },
-                            { value: "text_gen", label: t("userPanels.ledgerReasons.text_gen") },
-                            { value: "image_gen", label: t("userPanels.ledgerReasons.image_gen") },
-                            { value: "video_gen", label: t("userPanels.ledgerReasons.video_gen") },
-                            { value: "audio_gen", label: t("userPanels.ledgerReasons.audio_gen") },
-                        ]}
-                    />
-                    <Select
-                        value={statusFilter}
-                        className="min-w-[115px] flex-1 sm:w-[115px]! sm:flex-none"
-                        onChange={(val) => {
-                            setPage(1);
-                            setStatusFilter(val);
-                        }}
-                        options={[
-                            { value: "", label: t("userPanels.usageLogs.allStatuses") },
-                            { value: "not_started", label: t("userPanels.taskStatuses.not_started") },
-                            { value: "processing", label: t("userPanels.taskStatuses.processing") },
-                            { value: "completed", label: t("userPanels.taskStatuses.completed") },
-                            { value: "failed", label: t("userPanels.taskStatuses.failed") },
-                            { value: "failed_refunded", label: t("userPanels.taskStatuses.failed_refunded") },
-                        ]}
-                    />
-                    <Input
-                        allowClear
-                        value={modelFilter}
-                        prefix={<Search className="size-3.5 opacity-50" />}
-                        placeholder={t("userPanels.usageLogs.filterModel")}
-                        className="w-full! sm:w-[180px]!"
-                        onChange={(e) => {
-                            setPage(1);
-                            setModelFilter(e.target.value);
-                        }}
-                    />
-                    {showUserColumn ? (
-                        <Input
-                            allowClear
-                            value={userQueryFilter}
-                            prefix={<User className="size-3.5 opacity-50" />}
-                            placeholder={t("userPanels.usageLogs.searchUser")}
-                            className="w-full! sm:w-[180px]!"
-                            onChange={(e) => {
-                                setPage(1);
-                                setUserQueryFilter(e.target.value);
-                            }}
-                        />
+                <div
+                    className="mb-3 rounded-lg border p-3"
+                    style={{
+                        backgroundColor: token.colorFillAlter,
+                        borderColor: token.colorBorderSecondary,
+                    }}
+                >
+                    <div className="flex items-start gap-2">
+                        <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
+                            <Select
+                                value={reasonFilter}
+                                className="w-full sm:w-[138px]! sm:shrink-0"
+                                onChange={(val) => {
+                                    setPage(1);
+                                    setReasonFilter(val);
+                                }}
+                                options={[
+                                    { value: "", label: t("userPanels.usageLogs.allUsageTypes") },
+                                    { value: "text_gen", label: t("userPanels.ledgerReasons.text_gen") },
+                                    { value: "image_gen", label: t("userPanels.ledgerReasons.image_gen") },
+                                    { value: "video_gen", label: t("userPanels.ledgerReasons.video_gen") },
+                                    { value: "audio_gen", label: t("userPanels.ledgerReasons.audio_gen") },
+                                ]}
+                            />
+                            <Select
+                                value={statusFilter}
+                                className="w-full sm:w-[116px]! sm:shrink-0"
+                                onChange={(val) => {
+                                    setPage(1);
+                                    setStatusFilter(val);
+                                }}
+                                options={[
+                                    { value: "", label: t("userPanels.usageLogs.allStatuses") },
+                                    { value: "not_started", label: t("userPanels.taskStatuses.not_started") },
+                                    { value: "processing", label: t("userPanels.taskStatuses.processing") },
+                                    { value: "completed", label: t("userPanels.taskStatuses.completed") },
+                                    { value: "failed", label: t("userPanels.taskStatuses.failed") },
+                                    { value: "failed_refunded", label: t("userPanels.taskStatuses.failed_refunded") },
+                                ]}
+                            />
+                            <DateTimeRangePicker
+                                value={dateRange}
+                                className="w-full sm:min-w-[332px] sm:flex-[1.5_1_332px]"
+                                onChange={(dates) => {
+                                    setPage(1);
+                                    setDateRange(dates);
+                                }}
+                            />
+                            <Input
+                                allowClear
+                                value={modelFilter}
+                                prefix={<Search className="size-3.5 opacity-50" />}
+                                placeholder={t("userPanels.usageLogs.filterModel")}
+                                className="w-full! sm:w-auto! sm:min-w-[155px] sm:flex-[1_1_160px]"
+                                onChange={(e) => {
+                                    setPage(1);
+                                    setModelFilter(e.target.value);
+                                }}
+                            />
+                            <Input
+                                allowClear
+                                value={groupFilter}
+                                prefix={<Search className="size-3.5 opacity-50" />}
+                                placeholder={t("userPanels.usageLogs.filterGroup")}
+                                className="w-full! sm:w-auto! sm:min-w-[135px] sm:flex-[1_1_140px]"
+                                onChange={(e) => {
+                                    setPage(1);
+                                    setGroupFilter(e.target.value);
+                                }}
+                            />
+                        </div>
+                        <Button
+                            className="shrink-0"
+                            icon={filtersExpanded ? <ChevronUp className="size-3.5" /> : <ChevronDown className="size-3.5" />}
+                            onClick={() => setFiltersExpanded((prev) => !prev)}
+                        >
+                            {t(filtersExpanded ? "userPanels.usageLogs.collapseFilters" : "userPanels.usageLogs.expandFilters")}
+                        </Button>
+                    </div>
+
+                    {filtersExpanded ? (
+                        <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-4">
+                            {showUserColumn ? (
+                                <Input
+                                    allowClear
+                                    value={userQueryFilter}
+                                    prefix={<User className="size-3.5 opacity-50" />}
+                                    placeholder={t("userPanels.usageLogs.searchUser")}
+                                    className="w-full"
+                                    onChange={(e) => {
+                                        setPage(1);
+                                        setUserQueryFilter(e.target.value);
+                                    }}
+                                />
+                            ) : null}
+                            <Input
+                                allowClear
+                                value={logIdFilter}
+                                prefix={<Search className="size-3.5 opacity-50" />}
+                                placeholder={t("userPanels.usageLogs.searchLogId")}
+                                className="w-full"
+                                onChange={(e) => {
+                                    setPage(1);
+                                    setLogIdFilter(e.target.value);
+                                }}
+                            />
+                        </div>
                     ) : null}
-                    <Input
-                        allowClear
-                        value={logIdFilter}
-                        prefix={<Search className="size-3.5 opacity-50" />}
-                        placeholder={t("userPanels.usageLogs.searchLogId")}
-                        className="w-full! sm:w-[190px]!"
-                        onChange={(e) => {
-                            setPage(1);
-                            setLogIdFilter(e.target.value);
-                        }}
-                    />
-                    <DatePicker.RangePicker
-                        className="w-full! sm:w-auto!"
-                        value={dateRange}
-                        onChange={(dates) => {
-                            setPage(1);
-                            setDateRange(dates);
-                        }}
-                        placeholder={[t("userPanels.wallet.startDate"), t("userPanels.wallet.endDate")]}
-                    />
-                    {reasonFilter || statusFilter || modelFilter || userQueryFilter || logIdFilter || dateRange ? (
-                        <Button icon={<RotateCcw className="size-4" />} onClick={resetFilters}>
+
+                    <div className="mt-2.5 grid grid-cols-2 gap-2 sm:flex sm:flex-wrap sm:items-center sm:justify-end">
+                        <Button icon={<RotateCcw className="size-3.5" />} disabled={!hasActiveFilters} onClick={resetFilters}>
                             {t("userPanels.wallet.resetFilters")}
                         </Button>
-                    ) : null}
+                        <Button
+                            type="primary"
+                            icon={<Search className="size-3.5" />}
+                            loading={loading}
+                            onClick={() => {
+                                if (page !== 1) setPage(1);
+                                else void loadLogs(1, scope, reasonFilter, statusFilter, modelFilter, groupFilter, userQueryFilter, logIdFilter, dateRange, pageSize);
+                            }}
+                        >
+                            {t("userPanels.usageLogs.queryBtn")}
+                        </Button>
+                    </div>
                 </div>
 
                 <div
@@ -931,13 +977,35 @@ export function UsageLogsPanel({ defaultScope }: { defaultScope?: "all" | "self"
                         {
                             title: t("userPanels.usageLogs.colModel"),
                             key: "model",
-                            width: 160,
+                            width: 170,
                             render: (_, record) =>
                                 typeof record.meta?.model === "string" && record.meta.model ? (
-                                    <Tag>{record.meta.model}</Tag>
+                                    <Tooltip title={record.meta.model}>
+                                        <Tag style={{ marginInlineEnd: 0, maxWidth: 155, overflow: "hidden", textOverflow: "ellipsis", verticalAlign: "bottom" }}>
+                                            {record.meta.model}
+                                        </Tag>
+                                    </Tooltip>
                                 ) : (
                                     <Typography.Text type="secondary">—</Typography.Text>
                                 ),
+                        },
+                        {
+                            title: t("userPanels.usageLogs.colGroup"),
+                            key: "channelGroup",
+                            width: 125,
+                            render: (_, record) => {
+                                const group = typeof record.meta?.channelGroup === "string" ? record.meta.channelGroup : "";
+                                if (!group) return <Typography.Text type="secondary">—</Typography.Text>;
+                                const alias = showUserColumn && typeof record.meta?.channelAlias === "string" ? record.meta.channelAlias.trim() : "";
+                                const tip = alias ? t("userPanels.usageLogs.channelAliasTip", { group, alias }) : group;
+                                return (
+                                    <Tooltip title={tip}>
+                                        <Tag color="blue" style={{ marginInlineEnd: 0, maxWidth: 112, overflow: "hidden", textOverflow: "ellipsis", verticalAlign: "bottom" }}>
+                                            {group}
+                                        </Tag>
+                                    </Tooltip>
+                                );
+                            },
                         },
                         {
                             title: t("userPanels.usageLogs.colStream"),
@@ -962,7 +1030,13 @@ export function UsageLogsPanel({ defaultScope }: { defaultScope?: "all" | "self"
                                     record.meta,
                                     t,
                                 );
-                                if (!durationText && !tokPerSec) return <Typography.Text type="secondary">—</Typography.Text>;
+                                if (!durationText && !tokPerSec) {
+                                    return (
+                                        <div className="flex min-h-8 items-center">
+                                            <Typography.Text type="secondary">—</Typography.Text>
+                                        </div>
+                                    );
+                                }
                                 const tooltipTitle =
                                     isStream && firstTokenMs !== undefined
                                         ? t("userPanels.usageLogs.streamTooltip", {
@@ -980,21 +1054,21 @@ export function UsageLogsPanel({ defaultScope }: { defaultScope?: "all" | "self"
                                                 aborted: clientAborted ? t("userPanels.usageLogs.abortedParen") : "",
                                             });
                                 return (
-                                    <div className="flex flex-col leading-tight">
+                                    <div className="flex min-h-8 flex-col justify-center">
                                         {durationText ? (
                                             <Tooltip title={tooltipTitle}>
-                                                <span className="font-mono text-xs">
+                                                <span className="font-mono text-xs leading-4">
                                                     {durationText}
                                                     {clientAborted ? t("userPanels.usageLogs.disconnectedShort") : ""}
                                                 </span>
                                             </Tooltip>
                                         ) : null}
                                         {tokPerSec > 0 ? (
-                                            <Typography.Text type="secondary" className="font-mono text-[11px]">
+                                            <Typography.Text type="secondary" className="font-mono text-[11px] leading-4">
                                                 {tokPerSec} tok/s
                                             </Typography.Text>
                                         ) : upstreamMs !== undefined ? (
-                                            <Typography.Text type="secondary" className="font-mono text-[11px]">
+                                            <Typography.Text type="secondary" className="font-mono text-[11px] leading-4">
                                                 {t("userPanels.usageLogs.upstreamShort", { duration: formatDurationSec(upstreamMs) })}
                                             </Typography.Text>
                                         ) : null}

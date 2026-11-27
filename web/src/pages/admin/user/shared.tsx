@@ -1,6 +1,9 @@
 /** 个人后台面板共享的媒体标签、字节单元格与账本格式化组件。 */
-import { Space, Tag, Tooltip, Typography } from "antd";
+import { useRef, useState } from "react";
+import { Button, DatePicker, Popover, Space, Tag, Tooltip, Typography, theme as antdTheme } from "antd";
+import dayjs, { type Dayjs } from "dayjs";
 import type { TFunction } from "i18next";
+import { Calendar, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
 import { formatCompactCredits, formatExactCredits } from "@/lib/format-number";
@@ -273,6 +276,214 @@ export function LedgerDeltaTag({ record, t }: { record: CreditLedgerItem; t: TFu
         <Tag color={delta > 0 ? "green" : delta === 0 ? "orange" : "volcano"} style={{ marginInlineEnd: 0 }}>
             {delta > 0 ? `+${delta}` : delta}
         </Tag>
+    );
+}
+
+export type DateTimeRangeValue = [Dayjs | null, Dayjs | null] | null;
+
+type DateTimePresetKey = "today" | "last7Days" | "thisWeek" | "last30Days" | "thisMonth";
+
+export function buildDateTimePresetRange(key: DateTimePresetKey): [Dayjs, Dayjs] {
+    const now = dayjs();
+    if (key === "today") return [now.startOf("day"), now.endOf("day")];
+    if (key === "last7Days") return [now.subtract(6, "day").startOf("day"), now.endOf("day")];
+    if (key === "thisWeek") {
+        const monday = now.subtract((now.day() + 6) % 7, "day").startOf("day");
+        return [monday, monday.add(6, "day").endOf("day")];
+    }
+    if (key === "last30Days") return [now.subtract(29, "day").startOf("day"), now.endOf("day")];
+    return [now.startOf("month"), now.endOf("month")];
+}
+
+const PRESET_KEYS: DateTimePresetKey[] = ["today", "last7Days", "thisWeek", "last30Days", "thisMonth"];
+
+function matchDateTimePreset(start: Dayjs | null, end: Dayjs | null): DateTimePresetKey | null {
+    if (!start || !end) return null;
+    for (const key of PRESET_KEYS) {
+        const [pStart, pEnd] = buildDateTimePresetRange(key);
+        if (start.isSame(pStart, "second") && end.isSame(pEnd, "second")) return key;
+    }
+    return null;
+}
+
+/** 支持时分秒选择与常用时间段快捷按钮的日期时间范围筛选器。 */
+export function DateTimeRangePicker({
+    value,
+    onChange,
+    className,
+}: {
+    value: DateTimeRangeValue;
+    onChange: (value: DateTimeRangeValue) => void;
+    className?: string;
+}) {
+    const { t } = useTranslation();
+    const { token } = antdTheme.useToken();
+    const [open, setOpen] = useState(false);
+    const [draftStart, setDraftStart] = useState<Dayjs | null>(value?.[0] ?? null);
+    const [draftEnd, setDraftEnd] = useState<Dayjs | null>(value?.[1] ?? null);
+    const [activePreset, setActivePreset] = useState<DateTimePresetKey | null>(() => matchDateTimePreset(value?.[0] ?? null, value?.[1] ?? null));
+    const panelRef = useRef<HTMLDivElement>(null);
+
+    const hasValue = Boolean(value?.[0] && value?.[1]);
+    const displayText = hasValue
+        ? `${value![0]!.format("YYYY-MM-DD HH:mm:ss")} ~ ${value![1]!.format("YYYY-MM-DD HH:mm:ss")}`
+        : `${t("userPanels.wallet.startDate")} ~ ${t("userPanels.wallet.endDate")}`;
+
+    const handleOpenChange = (nextOpen: boolean) => {
+        if (nextOpen) {
+            const nextStart = value?.[0] ?? null;
+            const nextEnd = value?.[1] ?? null;
+            setDraftStart(nextStart);
+            setDraftEnd(nextEnd);
+            setActivePreset(matchDateTimePreset(nextStart, nextEnd));
+        }
+        setOpen(nextOpen);
+    };
+
+    const applyPreset = (key: DateTimePresetKey) => {
+        const [start, end] = buildDateTimePresetRange(key);
+        setDraftStart(start);
+        setDraftEnd(end);
+        setActivePreset(key);
+    };
+
+    const handleConfirm = () => {
+        if (!draftStart && !draftEnd) {
+            onChange(null);
+            setOpen(false);
+            return;
+        }
+        let start = draftStart || draftEnd!.startOf("day");
+        let end = draftEnd || draftStart!.endOf("day");
+        if (start.isAfter(end)) [start, end] = [end, start];
+        onChange([start, end]);
+        setOpen(false);
+    };
+
+    const handleClear = () => {
+        setDraftStart(null);
+        setDraftEnd(null);
+        setActivePreset(null);
+        onChange(null);
+        setOpen(false);
+    };
+
+    const presets: Array<{ key: DateTimePresetKey; label: string }> = [
+        { key: "today", label: t("userPanels.usageLogs.presetToday") },
+        { key: "last7Days", label: t("userPanels.usageLogs.preset7Days") },
+        { key: "thisWeek", label: t("userPanels.usageLogs.presetThisWeek") },
+        { key: "last30Days", label: t("userPanels.usageLogs.preset30Days") },
+        { key: "thisMonth", label: t("userPanels.usageLogs.presetThisMonth") },
+    ];
+
+    const content = (
+        <div ref={panelRef} className="w-[420px] max-w-[calc(100vw-32px)] p-1">
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-[1fr_auto_1fr] sm:items-end">
+                <div className="min-w-0">
+                    <Typography.Text type="secondary" className="mb-1 block text-xs">
+                        {t("userPanels.usageLogs.startTimeLabel")}
+                    </Typography.Text>
+                    <DatePicker
+                        showTime={{ format: "HH:mm:ss" }}
+                        format="YYYY/MM/DD HH:mm:ss"
+                        needConfirm={false}
+                        allowClear={false}
+                        value={draftStart}
+                        placeholder={t("userPanels.wallet.startDate")}
+                        getPopupContainer={() => panelRef.current || document.body}
+                        className="w-full"
+                        onChange={(val) => {
+                            setDraftStart(val);
+                            setActivePreset(null);
+                        }}
+                    />
+                </div>
+                <span className="hidden pb-1.5 text-center text-xs opacity-50 sm:inline">~</span>
+                <div className="min-w-0">
+                    <Typography.Text type="secondary" className="mb-1 block text-xs">
+                        {t("userPanels.usageLogs.endTimeLabel")}
+                    </Typography.Text>
+                    <DatePicker
+                        showTime={{ format: "HH:mm:ss" }}
+                        format="YYYY/MM/DD HH:mm:ss"
+                        needConfirm={false}
+                        allowClear={false}
+                        value={draftEnd}
+                        placeholder={t("userPanels.wallet.endDate")}
+                        getPopupContainer={() => panelRef.current || document.body}
+                        className="w-full"
+                        onChange={(val) => {
+                            setDraftEnd(val);
+                            setActivePreset(null);
+                        }}
+                    />
+                </div>
+            </div>
+
+            <div className="mt-3 grid grid-cols-5 gap-1.5">
+                {presets.map((preset) => (
+                    <Button
+                        key={preset.key}
+                        size="small"
+                        type={activePreset === preset.key ? "primary" : "default"}
+                        className="px-1!"
+                        onClick={() => applyPreset(preset.key)}
+                    >
+                        {preset.label}
+                    </Button>
+                ))}
+            </div>
+
+            <div className="mt-3 flex items-center justify-end gap-2">
+                {draftStart || draftEnd ? (
+                    <Button size="small" onClick={handleClear}>
+                        {t("common.clear")}
+                    </Button>
+                ) : null}
+                <Button size="small" type="primary" onClick={handleConfirm}>
+                    {t("userPanels.usageLogs.confirmRange")}
+                </Button>
+            </div>
+        </div>
+    );
+
+    return (
+        <Popover open={open} onOpenChange={handleOpenChange} trigger="click" placement="bottomLeft" content={content}>
+            <div
+                role="button"
+                tabIndex={0}
+                title={displayText}
+                onKeyDown={(event) => {
+                    if (event.key === "Enter" || event.key === " ") {
+                        event.preventDefault();
+                        handleOpenChange(!open);
+                    }
+                }}
+                style={{
+                    backgroundColor: token.colorBgContainer,
+                    borderColor: open ? token.colorPrimary : token.colorBorder,
+                    borderRadius: token.borderRadius,
+                    color: hasValue ? token.colorText : token.colorTextPlaceholder,
+                }}
+                className={`inline-flex h-8 max-w-full cursor-pointer items-center gap-2 border px-2.5 text-sm transition-colors select-none ${className || "w-full sm:w-auto"}`}
+            >
+                <Calendar className="size-3.5 shrink-0 opacity-60" />
+                <span className="min-w-0 flex-1 truncate font-mono text-xs">{displayText}</span>
+                {hasValue ? (
+                    <span
+                        role="button"
+                        aria-label={t("common.clear")}
+                        className="inline-flex size-4 shrink-0 items-center justify-center rounded-full opacity-55 transition-opacity hover:opacity-100"
+                        onClick={(event) => {
+                            event.stopPropagation();
+                            handleClear();
+                        }}
+                    >
+                        <X className="size-3" />
+                    </span>
+                ) : null}
+            </div>
+        </Popover>
     );
 }
 

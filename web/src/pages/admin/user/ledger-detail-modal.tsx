@@ -133,6 +133,8 @@ export function LedgerDetailModal({
     };
     const reasonInfo = item ? getLedgerReasonMeta(item.reason, t) : undefined;
     const modelName = typeof item?.meta?.model === "string" && item.meta.model ? item.meta.model : "";
+    const channelGroup = typeof item?.meta?.channelGroup === "string" ? item.meta.channelGroup : "";
+    const channelAlias = showUser && typeof item?.meta?.channelAlias === "string" ? item.meta.channelAlias.trim() : "";
     const hasTokens = typeof item?.meta?.inputTokens === "number" || typeof item?.meta?.outputTokens === "number";
     const imageSpec = [
         typeof item?.meta?.count === "number" ? t("userPanels.usageDetail.countImages", { count: item.meta.count }) : "",
@@ -192,6 +194,11 @@ export function LedgerDetailModal({
                                 </Tag>
                             ) : null}
                             {modelName ? <Tag style={{ marginInlineEnd: 0 }}>{modelName}</Tag> : null}
+                            {channelGroup ? (
+                                <Tag color="blue" style={{ marginInlineEnd: 0 }}>
+                                    {channelGroup}
+                                </Tag>
+                            ) : null}
                             <Typography.Text type="secondary" className="text-xs">
                                 {new Date(item.createdAt).toLocaleString(locale)}
                             </Typography.Text>
@@ -301,6 +308,24 @@ export function LedgerDetailModal({
                                         </Typography.Text>
                                     ) : null}
                                 </div>
+                            </div>
+                        ) : null}
+
+                        {channelGroup ? (
+                            <div className="min-w-0">
+                                <Typography.Text type="secondary" className="block text-xs">
+                                    {t("userPanels.ledgerDetail.modelGroup")}
+                                </Typography.Text>
+                                <div className="mt-0.5 truncate text-sm font-medium">{channelGroup}</div>
+                            </div>
+                        ) : null}
+
+                        {channelAlias ? (
+                            <div className="min-w-0">
+                                <Typography.Text type="secondary" className="block text-xs">
+                                    {t("userPanels.ledgerDetail.channelAlias")}
+                                </Typography.Text>
+                                <div className="mt-0.5 truncate text-sm font-medium">{channelAlias}</div>
                             </div>
                         ) : null}
 

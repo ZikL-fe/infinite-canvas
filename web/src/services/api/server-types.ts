@@ -322,6 +322,7 @@ export type AdminChannelModel = {
 export type AdminChannelItem = {
     id: string;
     name: string;
+    alias?: string;
     baseUrl: string;
     apiFormat: "openai" | "gemini";
     enabled: boolean;

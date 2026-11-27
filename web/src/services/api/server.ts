@@ -419,13 +419,14 @@ export const runtimeApi = {
 };
 
 export const billingApi = {
-    getLedger: (params?: { logId?: string; taskStatus?: string; category?: "usage" | "recharge"; reason?: string; model?: string; startDate?: string; endDate?: string; page?: number; pageSize?: number }) => {
+    getLedger: (params?: { logId?: string; taskStatus?: string; category?: "usage" | "recharge"; reason?: string; model?: string; group?: string; startDate?: string; endDate?: string; page?: number; pageSize?: number }) => {
         const query = new URLSearchParams();
         if (params?.logId) query.set("logId", params.logId);
         if (params?.taskStatus) query.set("taskStatus", params.taskStatus);
         if (params?.category) query.set("category", params.category);
         if (params?.reason) query.set("reason", params.reason);
         if (params?.model) query.set("model", params.model);
+        if (params?.group) query.set("group", params.group);
         if (params?.startDate) query.set("startDate", params.startDate);
         if (params?.endDate) query.set("endDate", params.endDate);
         if (params?.page) query.set("page", String(params.page));
@@ -637,7 +638,7 @@ export const adminApi = {
             method: "POST",
             body: JSON.stringify({ ids }),
         }),
-    listLogs: (params?: { scope?: "all" | "self"; q?: string; logId?: string; taskStatus?: string; category?: "usage" | "recharge"; reason?: string; model?: string; startDate?: string; endDate?: string; page?: number; pageSize?: number }) => {
+    listLogs: (params?: { scope?: "all" | "self"; q?: string; logId?: string; taskStatus?: string; category?: "usage" | "recharge"; reason?: string; model?: string; group?: string; startDate?: string; endDate?: string; page?: number; pageSize?: number }) => {
         const query = new URLSearchParams();
         if (params?.scope) query.set("scope", params.scope);
         if (params?.q) query.set("q", params.q);
@@ -646,6 +647,7 @@ export const adminApi = {
         if (params?.category) query.set("category", params.category);
         if (params?.reason) query.set("reason", params.reason);
         if (params?.model) query.set("model", params.model);
+        if (params?.group) query.set("group", params.group);
         if (params?.startDate) query.set("startDate", params.startDate);
         if (params?.endDate) query.set("endDate", params.endDate);
         if (params?.page) query.set("page", String(params.page));

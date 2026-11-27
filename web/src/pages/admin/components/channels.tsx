@@ -64,6 +64,7 @@ export function AdminChannelsPanel() {
         setEditingChannel({
             id: item.id,
             name: item.name,
+            alias: item.alias || "",
             baseUrl: item.baseUrl,
             apiKey: "",
             apiFormat: item.apiFormat,
@@ -78,6 +79,7 @@ export function AdminChannelsPanel() {
         const nextItem: AdminChannelItem = {
             id: saved.id,
             name: saved.name,
+            alias: saved.alias?.trim() || "",
             baseUrl: saved.baseUrl,
             apiFormat: saved.apiFormat,
             enabled: saved.enabled ?? true,
@@ -126,9 +128,23 @@ export function AdminChannelsPanel() {
                         {
                             title: t("admin.channelsTab.colName"),
                             dataIndex: "name",
-                            width: 170,
+                            width: 150,
                             ellipsis: true,
                             render: (name: string) => <span className="font-medium">{name}</span>,
+                        },
+                        {
+                            title: t("admin.channelsTab.colAlias"),
+                            dataIndex: "alias",
+                            width: 140,
+                            ellipsis: true,
+                            render: (alias: string | undefined) =>
+                                alias?.trim() ? (
+                                    <Tag style={{ marginInlineEnd: 0 }}>{alias.trim()}</Tag>
+                                ) : (
+                                    <Typography.Text type="secondary" className="text-xs">
+                                        —
+                                    </Typography.Text>
+                                ),
                         },
                         {
                             title: t("admin.channelsTab.colBaseUrl"),

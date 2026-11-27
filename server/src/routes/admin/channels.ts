@@ -49,6 +49,7 @@ const channelModelSchema = z.object({
 const channelItemSchema = z.object({
   id: z.string().trim().min(1),
   name: z.string().trim().min(1),
+  alias: z.string().trim().optional().default(""),
   baseUrl: z.string().trim(),
   apiKey: z.string().optional().default(""),
   apiFormat: z.enum(["openai", "gemini"]).default("openai"),
@@ -75,6 +76,7 @@ adminChannelsRoutes.get("/settings/channels", async (c) => {
     channels: channels.map((channel) => ({
       id: channel.id,
       name: channel.name,
+      alias: channel.alias || "",
       baseUrl: channel.baseUrl,
       apiFormat: channel.apiFormat,
       enabled: channel.enabled,
@@ -93,6 +95,7 @@ adminChannelsRoutes.put("/settings/channels", zValidator("json", saveChannelsSch
   const nextChannels: PlatformChannel[] = body.channels.map((ch) => ({
     id: ch.id,
     name: ch.name,
+    ...(ch.alias.trim() ? { alias: ch.alias.trim() } : {}),
     baseUrl: ch.baseUrl.replace(/\/+$/, ""),
     apiKey: ch.apiKey.trim() || existingKeyMap.get(ch.id) || "",
     apiFormat: ch.apiFormat,

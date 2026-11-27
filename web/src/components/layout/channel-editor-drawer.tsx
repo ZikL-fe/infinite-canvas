@@ -61,7 +61,12 @@ export function ChannelEditorDrawer({
     const removeModel = (name: string) => setModels(draft.models.filter((model) => model.name !== name));
 
     const save = () => {
-        onSave({ ...draft, name: draft.name.trim() || t("config.channels.unnamed"), models: normalizeChannelModels(draft.models) });
+        onSave({
+            ...draft,
+            name: draft.name.trim() || t("config.channels.unnamed"),
+            alias: draft.alias?.trim() || "",
+            models: normalizeChannelModels(draft.models),
+        });
         onClose();
     };
 
@@ -81,20 +86,28 @@ export function ChannelEditorDrawer({
                 </Space>
             }
         >
-            <div className="grid gap-4 md:grid-cols-2">
+            <div className="grid gap-4 md:grid-cols-3">
                 <label className="block">
                     <span className="mb-1 block text-sm font-medium">{t("config.channelEditor.name")}</span>
-                    <Input value={draft.name} onChange={(event) => patch({ name: event.target.value })} />
+                    <Input value={draft.name} onChange={(event) => patch({ name: event.target.value })} placeholder={t("config.channelEditor.namePlaceholder")} />
+                </label>
+                <label className="block">
+                    <span className="mb-1 block text-sm font-medium">{t("config.channelEditor.alias")}</span>
+                    <Input
+                        value={draft.alias || ""}
+                        onChange={(event) => patch({ alias: event.target.value })}
+                        placeholder={t("config.channelEditor.aliasPlaceholder")}
+                    />
                 </label>
                 <label className="block">
                     <span className="mb-1 block text-sm font-medium">{t("config.channelEditor.protocol")}</span>
                     <Select className="w-full" value={draft.apiFormat} options={apiFormatOptions} onChange={changeApiFormat} />
                 </label>
-                <label className="block md:col-span-2">
+                <label className="block md:col-span-3">
                     <span className="mb-1 block text-sm font-medium">{t("config.channelEditor.baseUrl")}</span>
                     <Input value={draft.baseUrl} onChange={(event) => patch({ baseUrl: event.target.value })} placeholder="https://api.example.com" />
                 </label>
-                <label className="block md:col-span-2">
+                <label className="block md:col-span-3">
                     <span className="mb-1 block text-sm font-medium">
                         API Key{draft.hasApiKey && draft.apiKeyPreview ? t("config.channelEditor.apiKeySavedHint", { preview: draft.apiKeyPreview }) : ""}
                     </span>
