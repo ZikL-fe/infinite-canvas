@@ -851,14 +851,7 @@ export function UsageLogsPanel({ defaultScope }: { defaultScope?: "all" | "self"
                         <Typography.Text type="secondary" className="text-xs">
                             {t("userPanels.usageLogs.consumedCredits")}
                         </Typography.Text>
-                        <div className="mt-0.5 text-base font-semibold">
-                            {summary.totalConsumed}
-                            {summary.totalRecharged > 0 ? (
-                                <Typography.Text type="secondary" className="ml-1.5 text-xs font-normal">
-                                    {t("userPanels.usageLogs.refundedTag", { amount: summary.totalRecharged })}
-                                </Typography.Text>
-                            ) : null}
-                        </div>
+                        <div className="mt-0.5 text-base font-semibold">{summary.totalConsumed}</div>
                     </div>
                     <div>
                         <Tooltip
