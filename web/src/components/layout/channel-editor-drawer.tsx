@@ -116,23 +116,27 @@ export function ChannelEditorDrawer({
                 </Button>
             </div>
 
-            <div className="space-y-2 rounded-lg border border-stone-200 p-2 dark:border-stone-800">
+            <div className="divide-y divide-stone-200 rounded-lg border border-stone-200 dark:divide-stone-800 dark:border-stone-800">
                 {draft.models.length ? (
                     draft.models.map((model) => (
-                        <div key={model.name} className="flex flex-wrap items-center gap-3 rounded-md px-2 py-1.5 hover:bg-stone-50 dark:hover:bg-stone-900/40">
-                            <span className="min-w-0 flex-1 truncate text-sm" title={model.name}>
-                                {model.name}
-                            </span>
-                            <div className="flex flex-wrap items-center gap-2">
-                                <Tag>{formatModelPricingSummary(model.capability, model.pricing)}</Tag>
+                        <div key={model.name} className="space-y-2 px-3 py-2.5 hover:bg-stone-50 dark:hover:bg-stone-900/40">
+                            <div className="flex items-start justify-between gap-3">
+                                <span className="min-w-0 flex-1 break-all text-sm font-medium leading-5" title={model.name}>
+                                    {model.name}
+                                </span>
+                                <Tag className="!m-0 shrink-0">{formatModelPricingSummary(model.capability, model.pricing)}</Tag>
+                            </div>
+                            <div className="flex flex-wrap items-center justify-between gap-2">
                                 <Segmented size="small" value={model.capability} options={capabilityOptions} onChange={(value) => setCapability(model.name, value as ModelCapability)} />
-                                <Button size="small" icon={<Coins className="size-3.5" />} onClick={() => setPricingTarget({ name: model.name, capability: model.capability, value: model.pricing })}>
-                                    {t("config.channelEditor.pricing")}
-                                </Button>
-                                <Button size="small" icon={<Code2 className="size-3.5" />} type={model.script ? "primary" : "default"} ghost={Boolean(model.script)} onClick={() => setScriptTarget({ name: model.name, capability: model.capability, value: model.script || "" })}>
-                                    {t(model.script ? "config.channelEditor.scriptReady" : "config.channelEditor.script")}
-                                </Button>
-                                <Button size="small" danger type="text" icon={<Trash2 className="size-3.5" />} onClick={() => removeModel(model.name)} />
+                                <div className="flex flex-wrap items-center gap-2">
+                                    <Button size="small" icon={<Coins className="size-3.5" />} onClick={() => setPricingTarget({ name: model.name, capability: model.capability, value: model.pricing })}>
+                                        {t("config.channelEditor.pricing")}
+                                    </Button>
+                                    <Button size="small" icon={<Code2 className="size-3.5" />} type={model.script ? "primary" : "default"} ghost={Boolean(model.script)} onClick={() => setScriptTarget({ name: model.name, capability: model.capability, value: model.script || "" })}>
+                                        {t(model.script ? "config.channelEditor.scriptReady" : "config.channelEditor.script")}
+                                    </Button>
+                                    <Button size="small" danger type="text" icon={<Trash2 className="size-3.5" />} onClick={() => removeModel(model.name)} />
+                                </div>
                             </div>
                         </div>
                     ))

@@ -62,7 +62,7 @@ export function ModelPicker({ config, value, onChange, capability, className, fu
             </SelectTrigger>
             <SelectContent
                 data-canvas-no-zoom
-                className="z-[1200] w-80 max-w-[calc(100vw-24px)] rounded-xl border border-border/70 bg-popover p-1 shadow-xl"
+                className="z-[1200] w-max min-w-[max(20rem,var(--radix-select-trigger-width))] max-w-[min(36rem,calc(100vw-24px))] rounded-xl border border-border/70 bg-popover p-1 shadow-xl"
                 position="popper"
                 align="start"
                 side="bottom"
@@ -71,11 +71,14 @@ export function ModelPicker({ config, value, onChange, capability, className, fu
                 onMouseDown={(event) => event.stopPropagation()}
             >
                 {options.length ? (
-                    options.map((model) => (
-                        <SelectItem key={model} value={model} textValue={modelOptionLabel(config, model)}>
-                            <ModelLabel config={config} model={model} />
-                        </SelectItem>
-                    ))
+                    options.map((model) => {
+                        const label = modelOptionLabel(config, model);
+                        return (
+                            <SelectItem key={model} value={model} textValue={label} title={label} className="py-1.5 *:[span]:last:min-w-0 *:[span]:last:flex-1">
+                                <ModelLabel config={config} model={model} label={label} />
+                            </SelectItem>
+                        );
+                    })
                 ) : (
                     <SelectItem value="__empty__" disabled>
                         {t("settingsPanels.model.contactAdmin")}
@@ -86,16 +89,16 @@ export function ModelPicker({ config, value, onChange, capability, className, fu
     );
 }
 
-function ModelLabel({ config, model }: { config: AiConfig; model: string }) {
+function ModelLabel({ config, model, label }: { config: AiConfig; model: string; label: string }) {
     const decoded = decodeChannelModel(model);
     const channel = decoded ? config.channels.find((ch) => ch.id === decoded.channelId) : undefined;
     const matchedModel = channel?.models.find((item) => item.name === (decoded?.model || model));
     const priceText = matchedModel?.pricing ? formatModelPricingSummary(matchedModel.capability, matchedModel.pricing) : "";
     return (
-        <span className="flex w-full min-w-0 items-center justify-between gap-2">
-            <span className="flex min-w-0 items-center gap-2">
+        <span className="flex w-full min-w-0 items-center justify-between gap-3">
+            <span className="flex min-w-0 flex-1 items-center gap-2">
                 <ModelIcon model={model} />
-                <span className="truncate">{modelOptionLabel(config, model)}</span>
+                <span className="min-w-0 whitespace-normal [overflow-wrap:anywhere]">{label}</span>
             </span>
             {priceText && priceText !== i18n.t("pricing.free") ? <span className="shrink-0 text-[11px] opacity-60">{priceText}</span> : null}
         </span>
