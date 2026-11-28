@@ -33,7 +33,7 @@ import {
 } from "@/services/workbench-sync";
 import { useCanvasStore, type CanvasDeletedProject, type CanvasProject } from "@/stores/canvas/use-canvas-store";
 import { useAssetStore, type Asset } from "@/stores/use-asset-store";
-import { useConfigStore, type AiConfig } from "@/stores/use-config-store";
+import { resolveModelForCapability, useConfigStore, type AiConfig, type ModelCapability } from "@/stores/use-config-store";
 import { useUserStore } from "@/stores/use-user-store";
 
 const LAST_SYNC_USER_KEY = "infinite-canvas:cloud_sync_uid";
@@ -387,9 +387,10 @@ export async function syncRuntimeSettings(): Promise<boolean> {
 export async function ensureRuntimeConfigForGeneration(
     generationConfig: AiConfig,
     model: string,
-    checkReady: (config: AiConfig, model: string) => boolean,
+    checkReady: (config: AiConfig, model: string, capability?: ModelCapability) => boolean,
+    capability?: ModelCapability,
 ): Promise<AiConfig | null> {
-    if (checkReady(generationConfig, model)) return generationConfig;
+    if (checkReady(generationConfig, model, capability)) return generationConfig;
     if (!isCloudAuthenticated() || generationConfig.channels.length > 0) return null;
 
     const synced = await syncRuntimeSettings();
@@ -400,13 +401,17 @@ export async function ensureRuntimeConfigForGeneration(
         ...generationConfig,
         channels: storeCfg.channels,
         models: storeCfg.models,
+        imageModel: storeCfg.imageModel,
+        videoModel: storeCfg.videoModel,
+        textModel: storeCfg.textModel,
+        audioModel: storeCfg.audioModel,
         baseUrl: storeCfg.baseUrl,
         apiKey: storeCfg.apiKey,
         apiFormat: storeCfg.apiFormat,
         channelMode: "local" as const,
     };
-    const resolvedModel = model || merged.imageModel || merged.model;
-    return checkReady(merged, resolvedModel) ? { ...merged, model: resolvedModel } : null;
+    const resolvedModel = capability ? resolveModelForCapability(merged, model, capability) : model || merged.imageModel || merged.model;
+    return checkReady(merged, resolvedModel, capability) ? { ...merged, model: resolvedModel } : null;
 }
 
 /** 双向同步当前登录账号的画布、资产与工作台记录（支持串行排队、切换账号清缓存与持久化墓碑防回流）。 */

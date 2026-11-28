@@ -162,7 +162,7 @@ export default function ImagePage() {
     const activeLogIdsRef = useRef<Set<string>>(new Set());
     const backfilledErrorLogIdsRef = useRef<Set<string>>(new Set());
 
-    const model = effectiveConfig.imageModel || effectiveConfig.model;
+    const model = effectiveConfig.imageModel;
     const canGenerate = Boolean(prompt.trim());
     const generationCount = Math.max(1, Math.min(10, Number(config.count) || 1));
 
@@ -372,7 +372,7 @@ export default function ImagePage() {
         const pendingLog = buildLog({
             id: logId,
             prompt: text,
-            model,
+            model: snapshot.config.model,
             config: { ...snapshot.config, count: String(count) },
             references: snapshot.references,
             durationMs: 0,
@@ -822,8 +822,8 @@ export default function ImagePage() {
 
     const ensureGenerationConfig = async (): Promise<AiConfig | null> => {
         let snapshotConfig: AiConfig = { ...effectiveConfig, model, count: "1" };
-        if (!isAiConfigReady(snapshotConfig, snapshotConfig.model)) {
-            const refreshed = await ensureRuntimeConfigForGeneration(snapshotConfig, snapshotConfig.model, isAiConfigReady);
+        if (!isAiConfigReady(snapshotConfig, snapshotConfig.model, "image")) {
+            const refreshed = await ensureRuntimeConfigForGeneration(snapshotConfig, snapshotConfig.model, isAiConfigReady, "image");
             if (!refreshed) {
                 message.warning(t("workbench.configFirst"));
                 openConfigDialog(true);
@@ -1016,7 +1016,7 @@ export default function ImagePage() {
                         const pendingLog = buildLog({
                             id: logId,
                             prompt: state.group.prompt,
-                            model,
+                            model: snapshotConfig.model,
                             config: { ...snapshotConfig, count: String(perGroupCount) },
                             references: state.group.references,
                             durationMs: 0,
@@ -1143,7 +1143,7 @@ export default function ImagePage() {
             saveLog(
                 buildLog({
                     prompt: targetGroup.prompt,
-                    model,
+                    model: snapshotConfig.model,
                     config: { ...snapshotConfig, count: "1" },
                     references: targetGroup.references,
                     durationMs: performance.now() - retryStartedAt,
@@ -1260,7 +1260,7 @@ export default function ImagePage() {
             saveLog(
                 buildLog({
                     prompt: snapshot.text,
-                    model,
+                    model: snapshot.config.model,
                     config: { ...snapshot.config, count: "1" },
                     references: snapshot.references,
                     durationMs: performance.now() - retryStartedAt,
@@ -1485,7 +1485,7 @@ export default function ImagePage() {
 
                             <div className="flex items-center justify-between rounded-lg border border-stone-200 bg-stone-50 px-3 py-2 text-sm dark:border-stone-800 dark:bg-stone-900 sm:hidden">
                                 <span className="truncate text-stone-500 dark:text-stone-400">
-                                    {modelOptionLabel(effectiveConfig, model)} · {effectiveConfig.size} · {effectiveConfig.quality}
+                                    {model ? `${modelOptionLabel(effectiveConfig, model)} · ` : ""}{effectiveConfig.size} · {effectiveConfig.quality}
                                 </span>
                                 <Button size="small" type="text" icon={<SlidersHorizontal className="size-4" />} onClick={() => setSettingsOpen(true)}>
                                     {t("workbench.adjust")}

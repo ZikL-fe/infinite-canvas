@@ -194,7 +194,7 @@ type ConfigStore = {
     updateWebdavConfig: <K extends keyof WebdavSyncConfig>(key: K, value: WebdavSyncConfig[K]) => void;
     applyRuntimeConfig: (channels: ModelChannel[], assignedWebdav: Partial<WebdavSyncConfig> | null) => void;
     clearRuntimeConfig: () => void;
-    isAiConfigReady: (config: AiConfig, model: string) => boolean;
+    isAiConfigReady: (config: AiConfig, model: string, capability?: ModelCapability) => boolean;
     openConfigDialog: (shouldPromptContinue?: boolean, tab?: ConfigTabKey) => void;
     setConfigDialogOpen: (isOpen: boolean) => void;
     clearPromptContinue: () => void;
@@ -256,9 +256,9 @@ export function resolveModelScript(config: AiConfig, value: string) {
     return findChannelModel(config, value)?.model.script?.trim() || "";
 }
 
-function isAiConfigReady(config: AiConfig, model: string) {
+function isAiConfigReady(config: AiConfig, model: string, capability?: ModelCapability) {
     const match = findChannelModel(config, model);
-    return Boolean(match && match.channel.baseUrl.trim() && match.channel.apiKey.trim());
+    return Boolean(match && (!capability || match.model.capability === capability) && match.channel.baseUrl.trim() && match.channel.apiKey.trim());
 }
 
 export const useConfigStore = create<ConfigStore>()(
@@ -355,7 +355,7 @@ export const useConfigStore = create<ConfigStore>()(
                     },
                     webdav: defaultWebdavSyncConfig,
                 })),
-            isAiConfigReady: (config, model) => isAiConfigReady(config, model),
+            isAiConfigReady: (config, model, capability) => isAiConfigReady(config, model, capability),
             openConfigDialog: (shouldPromptContinue = false, configTab = "preferences") => set({ isConfigOpen: true, shouldPromptContinue, configTab }),
             setConfigDialogOpen: (isConfigOpen) => set({ isConfigOpen }),
             clearPromptContinue: () => set({ shouldPromptContinue: false }),

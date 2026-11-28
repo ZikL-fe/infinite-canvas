@@ -1,4 +1,4 @@
-import { defaultConfig, resolveModelForCapability, useConfigStore, type AiConfig } from "@/stores/use-config-store";
+import { defaultConfig, resolveModelForCapability, type AiConfig, type ModelCapability } from "@/stores/use-config-store";
 import i18n from "@/i18n";
 import { storageApi } from "@/services/api/server";
 import { isCloudAuthenticated } from "@/services/cloud-media";
@@ -194,27 +194,18 @@ export async function ensureReadyGenerationConfig(
     generationConfig: AiConfig,
     node: CanvasNodeData | undefined,
     mode: CanvasNodeGenerationMode,
-    isReady: (config: AiConfig, model: string) => boolean,
+    isReady: (config: AiConfig, model: string, capability?: ModelCapability) => boolean,
 ): Promise<AiConfig | null> {
-    if (isReady(generationConfig, generationConfig.model)) return generationConfig;
-    const resolveForMode = (cfg: AiConfig) => {
-        const latest = useConfigStore.getState().config;
-        return resolveModelForCapability(
-            {
-                ...cfg,
-                imageModel: latest.imageModel,
-                videoModel: latest.videoModel,
-                textModel: latest.textModel,
-                audioModel: latest.audioModel,
-            },
-            node?.metadata?.model ?? generationConfig.model,
-            mode,
-        );
-    };
-    const refreshed = await ensureRuntimeConfigForGeneration(generationConfig, generationConfig.model, (cfg) => isReady(cfg, resolveForMode(cfg)));
+    if (isReady(generationConfig, generationConfig.model, mode)) return generationConfig;
+    const refreshed = await ensureRuntimeConfigForGeneration(
+        generationConfig,
+        node?.metadata?.model ?? generationConfig.model,
+        isReady,
+        mode,
+    );
     if (!refreshed) return null;
-    const resolvedModel = resolveForMode(refreshed);
-    return isReady(refreshed, resolvedModel) ? { ...refreshed, model: resolvedModel } : null;
+    const resolvedModel = resolveModelForCapability(refreshed, node?.metadata?.model ?? refreshed.model, mode);
+    return isReady(refreshed, resolvedModel, mode) ? { ...refreshed, model: resolvedModel } : null;
 }
 
 export function hasResumableVideoTask(node: CanvasNodeData) {

@@ -187,6 +187,8 @@ function measureFocusFrame(container: HTMLDivElement | null, nodeId: string) {
     return { above, below, bottomInset: dockRect && below > 0 ? Math.max(0, container.getBoundingClientRect().bottom - dockRect.top) : 0 };
 }
 
+const SHOW_CANVAS_AGENT = false;
+
 function InfiniteCanvasPage() {
     const { message, modal } = App.useApp();
     const { t } = useTranslation();
@@ -200,9 +202,9 @@ function InfiniteCanvasPage() {
     const localAgentActivity = useAgentStore((state) => state.activity);
     const localAgentEnabled = useAgentStore((state) => state.enabled);
     const fragmentBootstrap = useAgentStore((state) => state.fragmentBootstrap);
-    const agentPanelOpen = useAgentStore((state) => state.panelOpen);
     const toggleAgentPanel = useAgentStore((state) => state.togglePanel);
     const openAgentPanel = useAgentStore((state) => state.openPanel);
+    const closeAgentPanel = useAgentStore((state) => state.closePanel);
     const containerRef = useRef<HTMLDivElement>(null);
     const imageInputRef = useRef<HTMLInputElement>(null);
     const uploadTargetRef = useRef<{ nodeId?: string; position?: Position } | null>(null);
@@ -624,9 +626,13 @@ function InfiniteCanvasPage() {
     }, [projectLoaded]);
 
     useEffect(() => {
+        if (!SHOW_CANVAS_AGENT) {
+            closeAgentPanel();
+            return;
+        }
         if (!projectLoaded || !["new", "recent", "choose"].includes(searchParams.get("mode") || "")) return;
         if (!searchParams.has("agentUrl") && !localAgentEnabled && !fragmentBootstrap) openAgentPanel();
-    }, [fragmentBootstrap, localAgentEnabled, openAgentPanel, projectLoaded, searchParams]);
+    }, [closeAgentPanel, fragmentBootstrap, localAgentEnabled, openAgentPanel, projectLoaded, searchParams]);
 
     useEffect(() => {
         if (!projectLoaded || applyingHistoryRef.current || historyPausedRef.current) return;
@@ -2976,7 +2982,7 @@ function InfiniteCanvasPage() {
                 hasSavedImageMetadata && savedImageMetadata
                     ? {
                           ...effectiveConfig,
-                          model: savedImageMetadata.model || effectiveConfig.imageModel || effectiveConfig.model,
+                          model: savedImageMetadata.model || effectiveConfig.imageModel,
                           quality: savedImageMetadata.quality || effectiveConfig.quality,
                           size: savedImageMetadata.size || effectiveConfig.size,
                           background: savedImageMetadata.background ?? effectiveConfig.background,
@@ -3450,7 +3456,9 @@ function InfiniteCanvasPage() {
                     onUndo={undoCanvas}
                     onRedo={redoCanvas}
                     compactAgentStatus={{ connected: localAgentConnected, enabled: localAgentEnabled, activity: localAgentActivity }}
-                    onToggleAgent={toggleAgentPanel}
+                    onToggleAgent={() => {
+                        if (SHOW_CANVAS_AGENT) toggleAgentPanel();
+                    }}
                 />
 
                 <InfiniteCanvas
