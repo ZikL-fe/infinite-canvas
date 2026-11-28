@@ -11,6 +11,7 @@ import {
   buildObjectKey,
   buildThumbnailObjectKey,
   checkStorageQuotaBlock,
+  detectImageMimeFromBuffer,
   inferExtension,
 } from "../lib/ai-media-persist.ts";
 import {
@@ -22,6 +23,7 @@ import {
 } from "../lib/media-cleanup.ts";
 import { claimRedeemCodeInTx } from "../lib/redeem.ts";
 import {
+  INLINE_SAFE_MEDIA_MIMES,
   createMediaReadUrl,
   createPresignedUploadUrl,
   deleteS3Object,
@@ -29,6 +31,7 @@ import {
   getS3Object,
   headS3Object,
   isS3NotFoundError,
+  normalizeMimeType,
   putS3Object,
 } from "../lib/s3.ts";
 import { rateLimitRedeem } from "../lib/rate-limit.ts";
@@ -36,6 +39,27 @@ import { getPlatformWebdavConfig, getS3StorageConfig, resolveEffectiveUserWebdav
 import { getUserQuotaAlertMeta, getUserStorageQuotaSummary, serializeStorageGrant } from "../lib/storage-quota.ts";
 import { uploadFileToWebdav } from "../lib/webdav.ts";
 import { requireAuthWithQuota, type AppEnv } from "../middleware/auth.ts";
+
+const SAFE_UPLOAD_MIME_TYPES = new Set([
+  ...INLINE_SAFE_MEDIA_MIMES,
+  "application/pdf",
+  "application/json",
+  "text/plain",
+  "application/zip",
+  "application/x-zip-compressed",
+  "application/octet-stream",
+]);
+const DISALLOWED_FILENAME_EXTS = new Set(["svg", "html", "htm", "xhtml", "xml", "js", "mjs", "cjs", "wasm"]);
+
+function isSafeUploadFile(mimeType: string, filename?: string): boolean {
+  const normalized = normalizeMimeType(mimeType);
+  if (!SAFE_UPLOAD_MIME_TYPES.has(normalized)) return false;
+  if (filename) {
+    const ext = filename.split(".").pop()?.trim().toLowerCase() || "";
+    if (DISALLOWED_FILENAME_EXTS.has(ext)) return false;
+  }
+  return true;
+}
 
 const presignUploadSchema = z.object({
   mediaId: z
@@ -45,7 +69,7 @@ const presignUploadSchema = z.object({
   filename: z.string().max(255).optional(),
   kind: z.enum(["image", "video", "audio", "file"]).default("file"),
   mimeType: z.string().min(1).max(128).default("application/octet-stream"),
-  bytes: z.number().int().nonnegative().optional(),
+  bytes: z.number().int().min(1, "文件大小必须大于 0"),
   width: z.number().int().positive().optional(),
   height: z.number().int().positive().optional(),
   durationMs: z.number().int().nonnegative().optional(),
@@ -97,7 +121,7 @@ storageRoutes.get("/grants", async (c) => {
   });
 });
 
-storageRoutes.post("/redeem", rateLimitRedeem, zValidator("json", storageRedeemSchema), async (c) => {
+storageRoutes.post("/redeem", rateLimitRedeem(), zValidator("json", storageRedeemSchema), async (c) => {
   const user = c.get("user");
   const code = c.req.valid("json").code;
 
@@ -170,12 +194,16 @@ storageRoutes.post("/presign-upload", zValidator("json", presignUploadSchema), a
 
   const user = c.get("user");
   const body = c.req.valid("json");
+  const normalizedMime = normalizeMimeType(body.mimeType);
+  if (!isSafeUploadFile(normalizedMime, body.filename)) {
+    return c.json({ error: "不支持的文件类型" }, 400);
+  }
   const mediaId = body.mediaId || `${body.kind}:${nanoid()}`;
 
   if (body.mediaId) {
     const existing = await db.query.mediaObjects.findFirst({ where: eq(mediaObjects.id, mediaId) });
     if (existing) {
-      if (existing.userId !== user.id) {
+      if (existing.userId !== user.id || existing.status === "deleted") {
         return c.json({ error: "媒体标识冲突" }, 409);
       }
       if (existing.status === "active") {
@@ -188,7 +216,7 @@ storageRoutes.post("/presign-upload", zValidator("json", presignUploadSchema), a
           headers: {},
         });
       }
-      const block = checkStorageQuotaBlock(user.storageUsedBytes, user.storageQuotaBytes, user.storageQuotaExpiresAt, body.bytes ?? existing.bytes);
+      const block = checkStorageQuotaBlock(user.storageUsedBytes, user.storageQuotaBytes, user.storageQuotaExpiresAt, body.bytes);
       if (block.blocked) {
         return c.json(
           {
@@ -200,19 +228,30 @@ storageRoutes.post("/presign-upload", zValidator("json", presignUploadSchema), a
           403,
         );
       }
-      const uploadUrl = await createPresignedUploadUrl(config, existing.objectKey, body.mimeType);
+      await db
+        .update(mediaObjects)
+        .set({
+          kind: body.kind,
+          mimeType: normalizedMime,
+          bytes: body.bytes,
+          width: body.width ?? existing.width,
+          height: body.height ?? existing.height,
+          durationMs: body.durationMs ?? existing.durationMs,
+        })
+        .where(and(eq(mediaObjects.id, existing.id), eq(mediaObjects.status, "pending")));
+      const uploadUrl = await createPresignedUploadUrl(config, existing.objectKey, normalizedMime, body.bytes);
       return c.json({
         alreadyExists: false,
         mediaId,
         objectKey: existing.objectKey,
         uploadUrl,
         expiresIn: env.S3_PRESIGN_EXPIRES_SECONDS,
-        headers: { "Content-Type": body.mimeType },
+        headers: { "Content-Type": normalizedMime },
       });
     }
   }
 
-  const block = checkStorageQuotaBlock(user.storageUsedBytes, user.storageQuotaBytes, user.storageQuotaExpiresAt, body.bytes ?? 0);
+  const block = checkStorageQuotaBlock(user.storageUsedBytes, user.storageQuotaBytes, user.storageQuotaExpiresAt, body.bytes);
   if (block.blocked) {
     return c.json(
       {
@@ -225,7 +264,7 @@ storageRoutes.post("/presign-upload", zValidator("json", presignUploadSchema), a
     );
   }
 
-  const ext = inferExtension(body.filename, body.mimeType);
+  const ext = inferExtension(body.filename, normalizedMime);
   const objectKey = buildObjectKey(user.id, body.kind, ext);
 
   await db.insert(mediaObjects).values({
@@ -234,8 +273,8 @@ storageRoutes.post("/presign-upload", zValidator("json", presignUploadSchema), a
     bucket: config.bucket,
     objectKey,
     kind: body.kind,
-    mimeType: body.mimeType,
-    bytes: body.bytes ?? 0,
+    mimeType: normalizedMime,
+    bytes: body.bytes,
     width: body.width ?? null,
     height: body.height ?? null,
     durationMs: body.durationMs ?? null,
@@ -243,14 +282,14 @@ storageRoutes.post("/presign-upload", zValidator("json", presignUploadSchema), a
     status: "pending",
   });
 
-  const uploadUrl = await createPresignedUploadUrl(config, objectKey, body.mimeType);
+  const uploadUrl = await createPresignedUploadUrl(config, objectKey, normalizedMime, body.bytes);
   return c.json({
     alreadyExists: false,
     mediaId,
     objectKey,
     uploadUrl,
     expiresIn: env.S3_PRESIGN_EXPIRES_SECONDS,
-    headers: { "Content-Type": body.mimeType },
+    headers: { "Content-Type": normalizedMime },
   });
 });
 
@@ -281,39 +320,71 @@ storageRoutes.post("/confirm", zValidator("json", confirmUploadSchema), async (c
   if (!existing || existing.status === "deleted") {
     return c.json({ error: "媒体记录不存在" }, 404);
   }
+  if (existing.status !== "pending") {
+    return c.json({ error: "该媒体已完成确认，禁止重复覆盖" }, 409);
+  }
 
   let actualBytes = existing.bytes;
-  let actualMime = existing.mimeType;
+  let actualMime = normalizeMimeType(existing.mimeType);
+  let headContentLength: number | undefined;
   try {
     const head = await headS3Object(config, existing.objectKey);
-    if (typeof head.ContentLength === "number") actualBytes = head.ContentLength;
-    if (head.ContentType) actualMime = head.ContentType;
+    if (typeof head.ContentLength === "number") {
+      headContentLength = head.ContentLength;
+      actualBytes = head.ContentLength;
+    }
+    if (head.ContentType) {
+      actualMime = normalizeMimeType(head.ContentType === "binary/octet-stream" ? "application/octet-stream" : head.ContentType);
+    }
   } catch {
     return c.json({ error: "对象存储中未找到已上传的文件，请确认是否已直传成功或检查桶 CORS 配置" }, 400);
   }
 
-  if (existing.status === "pending") {
-    const block = checkStorageQuotaBlock(user.storageUsedBytes, user.storageQuotaBytes, user.storageQuotaExpiresAt, actualBytes);
-    if (block.blocked) {
-      await deleteS3Object(config, existing.objectKey).catch(() => undefined);
-      await db.update(mediaObjects).set({ status: "deleted" }).where(eq(mediaObjects.id, existing.id));
-      return c.json(
-        {
-          error: block.error,
-          code: block.code,
-          storageUsedBytes: user.storageUsedBytes,
-          storageQuotaBytes: user.storageQuotaBytes,
-        },
-        403,
-      );
-    }
+  if (actualBytes <= 0 || (existing.bytes > 0 && typeof headContentLength === "number" && headContentLength !== existing.bytes)) {
+    await deleteS3Object(config, existing.objectKey).catch(() => undefined);
+    await db.update(mediaObjects).set({ status: "deleted" }).where(and(eq(mediaObjects.id, existing.id), eq(mediaObjects.status, "pending")));
+    return c.json({ error: "上传文件大小异常或与预签名声明不一致" }, 400);
+  }
+  if (!isSafeUploadFile(actualMime)) {
+    await deleteS3Object(config, existing.objectKey).catch(() => undefined);
+    await db.update(mediaObjects).set({ status: "deleted" }).where(and(eq(mediaObjects.id, existing.id), eq(mediaObjects.status, "pending")));
+    return c.json({ error: "不支持的文件类型" }, 400);
   }
 
-  const updated = await db.transaction(async (tx) => {
-    const whereClause =
-      existing.status === "pending"
-        ? and(eq(mediaObjects.id, existing.id), eq(mediaObjects.userId, user.id), eq(mediaObjects.status, "pending"))
-        : and(eq(mediaObjects.id, existing.id), eq(mediaObjects.userId, user.id));
+  const txResult = await db.transaction(async (tx) => {
+    await tx.execute(sql`SELECT id FROM users WHERE id = ${user.id} FOR UPDATE`);
+    const [lockedMedia] = await tx
+      .select()
+      .from(mediaObjects)
+      .where(and(eq(mediaObjects.id, existing.id), eq(mediaObjects.userId, user.id)))
+      .for("update");
+
+    if (!lockedMedia || lockedMedia.status === "deleted") {
+      return { status: 404 as const, error: "媒体记录不存在" };
+    }
+    if (lockedMedia.status !== "pending") {
+      return { status: 409 as const, error: "该媒体已完成确认，禁止重复覆盖" };
+    }
+
+    const freshUser = await tx.query.users.findFirst({
+      where: eq(users.id, user.id),
+      columns: { id: true, storageUsedBytes: true, storageQuotaBytes: true, storageQuotaExpiresAt: true },
+    });
+    if (!freshUser) {
+      return { status: 401 as const, error: "账号不存在" };
+    }
+
+    const quotaSummary = await getUserStorageQuotaSummary(freshUser, tx);
+    const block = checkStorageQuotaBlock(freshUser.storageUsedBytes, quotaSummary.storageQuotaBytes, quotaSummary.storageQuotaExpiresAt, actualBytes);
+    if (block.blocked) {
+      await tx.update(mediaObjects).set({ status: "deleted" }).where(and(eq(mediaObjects.id, lockedMedia.id), eq(mediaObjects.status, "pending")));
+      return {
+        status: 403 as const,
+        block,
+        storageUsedBytes: freshUser.storageUsedBytes,
+        storageQuotaBytes: quotaSummary.storageQuotaBytes,
+      };
+    }
 
     const [row] = await tx
       .update(mediaObjects)
@@ -321,42 +392,53 @@ storageRoutes.post("/confirm", zValidator("json", confirmUploadSchema), async (c
         status: "active",
         bytes: actualBytes,
         mimeType: actualMime,
-        width: body.width ?? existing.width,
-        height: body.height ?? existing.height,
-        durationMs: body.durationMs ?? existing.durationMs,
+        width: body.width ?? lockedMedia.width,
+        height: body.height ?? lockedMedia.height,
+        durationMs: body.durationMs ?? lockedMedia.durationMs,
       })
-      .where(whereClause)
+      .where(and(eq(mediaObjects.id, lockedMedia.id), eq(mediaObjects.userId, user.id), eq(mediaObjects.status, "pending")))
       .returning();
 
-    if (!row) {
-      const latest = await tx.query.mediaObjects.findFirst({
-        where: and(eq(mediaObjects.id, existing.id), eq(mediaObjects.userId, user.id)),
-      });
-      const latestUser = await tx.query.users.findFirst({
-        where: eq(users.id, user.id),
-        columns: { storageUsedBytes: true },
-      });
-      return { row: latest ?? existing, storageUsedBytes: latestUser?.storageUsedBytes ?? user.storageUsedBytes };
-    }
+    const [updatedUser] = await tx
+      .update(users)
+      .set({
+        storageUsedBytes: sql`${users.storageUsedBytes} + ${actualBytes}`,
+        updatedAt: new Date(),
+      })
+      .where(eq(users.id, user.id))
+      .returning({ storageUsedBytes: users.storageUsedBytes });
 
-    let storageUsedBytes = user.storageUsedBytes;
-    if (existing.status === "pending" && actualBytes > 0) {
-      const [u] = await tx
-        .update(users)
-        .set({
-          storageUsedBytes: sql`${users.storageUsedBytes} + ${actualBytes}`,
-          updatedAt: new Date(),
-        })
-        .where(eq(users.id, user.id))
-        .returning({ storageUsedBytes: users.storageUsedBytes });
-      if (u) storageUsedBytes = u.storageUsedBytes;
-    }
-
-    return { row, storageUsedBytes };
+    return {
+      status: 200 as const,
+      row,
+      storageUsedBytes: updatedUser?.storageUsedBytes ?? freshUser.storageUsedBytes + actualBytes,
+      storageQuotaBytes: quotaSummary.storageQuotaBytes,
+    };
   });
 
-  const url = await createMediaReadUrl(config, updated.row.objectKey);
-  return c.json({ media: updated.row, url, storageUsedBytes: updated.storageUsedBytes, storageQuotaBytes: user.storageQuotaBytes });
+  if (txResult.status === 403) {
+    await deleteS3Object(config, existing.objectKey).catch(() => undefined);
+    return c.json(
+      {
+        error: txResult.block.error,
+        code: txResult.block.code,
+        storageUsedBytes: txResult.storageUsedBytes,
+        storageQuotaBytes: txResult.storageQuotaBytes,
+      },
+      403,
+    );
+  }
+  if (txResult.status !== 200) {
+    return c.json({ error: txResult.error }, txResult.status);
+  }
+
+  const url = await createMediaReadUrl(config, txResult.row.objectKey, txResult.row.mimeType);
+  return c.json({
+    media: txResult.row,
+    url,
+    storageUsedBytes: txResult.storageUsedBytes,
+    storageQuotaBytes: txResult.storageQuotaBytes,
+  });
 });
 
 storageRoutes.get("/list", async (c) => {
@@ -440,8 +522,8 @@ storageRoutes.get("/list", async (c) => {
     rows.map(async (row) => {
       const thumbKey = typeof row.meta?.thumbObjectKey === "string" ? row.meta.thumbObjectKey : "";
       const [url, thumbnailUrl] = await Promise.all([
-        config ? createMediaReadUrl(config, row.objectKey) : Promise.resolve(""),
-        config && thumbKey ? createMediaReadUrl(config, thumbKey) : Promise.resolve(""),
+        config ? createMediaReadUrl(config, row.objectKey, row.mimeType) : Promise.resolve(""),
+        config && thumbKey ? createMediaReadUrl(config, thumbKey, "image/webp") : Promise.resolve(""),
       ]);
       return {
         ...row,
@@ -479,11 +561,16 @@ storageRoutes.post("/thumbnail/:mediaId", async (c) => {
   }
 
   const buffer = Buffer.from(await file.arrayBuffer());
+  const detectedMime = detectImageMimeFromBuffer(buffer);
+  if (!detectedMime) {
+    return c.json({ error: "仅支持 PNG、JPEG、WebP 或 GIF 格式的缩略图" }, 400);
+  }
+
   const oldThumbBytes = getMediaThumbBytes(media.meta);
   const newThumbBytes = buffer.byteLength;
-  const deltaBytes = newThumbBytes - oldThumbBytes;
+  const preDeltaBytes = newThumbBytes - oldThumbBytes;
 
-  if (deltaBytes > 0) {
+  if (preDeltaBytes > 0) {
     let targetUsedBytes = user.storageUsedBytes;
     let targetQuotaBytes = user.storageQuotaBytes;
     let targetExpiresAt = user.storageQuotaExpiresAt;
@@ -497,7 +584,7 @@ storageRoutes.post("/thumbnail/:mediaId", async (c) => {
       targetQuotaBytes = ownerSummary.storageQuotaBytes;
       targetExpiresAt = ownerSummary.storageQuotaExpiresAt;
     }
-    const block = checkStorageQuotaBlock(targetUsedBytes, targetQuotaBytes, targetExpiresAt, deltaBytes);
+    const block = checkStorageQuotaBlock(targetUsedBytes, targetQuotaBytes, targetExpiresAt, preDeltaBytes);
     if (block.blocked) {
       return c.json(
         {
@@ -511,33 +598,90 @@ storageRoutes.post("/thumbnail/:mediaId", async (c) => {
     }
   }
 
-  const thumbObjectKey =
-    typeof media.meta?.thumbObjectKey === "string" && media.meta.thumbObjectKey
-      ? media.meta.thumbObjectKey
-      : buildThumbnailObjectKey(media.userId, media.id);
-  await putS3Object(config, thumbObjectKey, buffer, file.type || "image/webp");
+  const hadExistingThumb = typeof media.meta?.thumbObjectKey === "string" && Boolean(media.meta.thumbObjectKey);
+  const thumbObjectKey = hadExistingThumb
+    ? (media.meta.thumbObjectKey as string)
+    : buildThumbnailObjectKey(media.userId, media.id);
+  await putS3Object(config, thumbObjectKey, buffer, detectedMime);
 
-  const nextMeta = { ...(media.meta || {}), thumbObjectKey, thumbBytes: newThumbBytes };
-  const storageUsedBytes = await db.transaction(async (tx) => {
-    await tx.update(mediaObjects).set({ meta: nextMeta }).where(eq(mediaObjects.id, media.id));
-    if (deltaBytes === 0) return undefined;
+  const txResult = await db.transaction(async (tx) => {
+    await tx.execute(sql`SELECT id FROM users WHERE id = ${media.userId} FOR UPDATE`);
+    const [freshMedia] = await tx
+      .select()
+      .from(mediaObjects)
+      .where(eq(mediaObjects.id, media.id))
+      .for("update");
+    if (!freshMedia || freshMedia.status === "deleted") {
+      return { status: 404 as const, error: "媒体文件不存在" };
+    }
+
+    const freshOldThumbBytes = getMediaThumbBytes(freshMedia.meta);
+    const deltaBytes = newThumbBytes - freshOldThumbBytes;
+    if (deltaBytes > 0) {
+      const ownerRow = await tx.query.users.findFirst({
+        where: eq(users.id, freshMedia.userId),
+        columns: { id: true, storageUsedBytes: true, storageQuotaBytes: true, storageQuotaExpiresAt: true },
+      });
+      if (!ownerRow) {
+        return { status: 404 as const, error: "媒体所属用户不存在" };
+      }
+      const ownerSummary = await getUserStorageQuotaSummary(ownerRow, tx);
+      const block = checkStorageQuotaBlock(ownerRow.storageUsedBytes, ownerSummary.storageQuotaBytes, ownerSummary.storageQuotaExpiresAt, deltaBytes);
+      if (block.blocked) {
+        return {
+          status: 403 as const,
+          block,
+          storageUsedBytes: ownerRow.storageUsedBytes,
+          storageQuotaBytes: ownerSummary.storageQuotaBytes,
+        };
+      }
+    }
+
+    const nextMeta = { ...(freshMedia.meta || {}), thumbObjectKey, thumbBytes: newThumbBytes };
+    await tx.update(mediaObjects).set({ meta: nextMeta }).where(eq(mediaObjects.id, freshMedia.id));
+    if (deltaBytes === 0) {
+      return { status: 200 as const, storageUsedBytes: undefined };
+    }
     const [updatedUser] = await tx
       .update(users)
       .set({
         storageUsedBytes: sql`GREATEST(0, ${users.storageUsedBytes} + ${deltaBytes})`,
         updatedAt: new Date(),
       })
-      .where(eq(users.id, media.userId))
+      .where(eq(users.id, freshMedia.userId))
       .returning({ storageUsedBytes: users.storageUsedBytes });
-    return updatedUser?.storageUsedBytes;
+    return { status: 200 as const, storageUsedBytes: updatedUser?.storageUsedBytes };
   });
-  const thumbnailUrl = await createMediaReadUrl(config, thumbObjectKey);
+
+  if (txResult.status === 403) {
+    if (!hadExistingThumb) {
+      await deleteS3Object(config, thumbObjectKey).catch(() => undefined);
+    }
+    return c.json(
+      {
+        error: txResult.block.error,
+        code: txResult.block.code,
+        storageUsedBytes: txResult.storageUsedBytes,
+        storageQuotaBytes: txResult.storageQuotaBytes,
+      },
+      403,
+    );
+  }
+  if (txResult.status !== 200) {
+    if (!hadExistingThumb) {
+      await deleteS3Object(config, thumbObjectKey).catch(() => undefined);
+    }
+    return c.json({ error: txResult.error }, txResult.status);
+  }
+
+  const thumbnailUrl = await createMediaReadUrl(config, thumbObjectKey, detectedMime);
+  c.header("X-Content-Type-Options", "nosniff");
   return c.json({
     ok: true,
     userId: media.userId,
     thumbnailUrl,
     thumbBytes: newThumbBytes,
-    ...(typeof storageUsedBytes === "number" ? { storageUsedBytes } : {}),
+    ...(typeof txResult.storageUsedBytes === "number" ? { storageUsedBytes: txResult.storageUsedBytes } : {}),
   });
 });
 
@@ -556,7 +700,8 @@ storageRoutes.get("/thumbnail/:mediaId", async (c) => {
     return c.json({ error: "无权访问该文件" }, 403);
   }
   const thumbKey = typeof media.meta?.thumbObjectKey === "string" ? media.meta.thumbObjectKey : "";
-  const thumbnailUrl = thumbKey ? await createMediaReadUrl(config, thumbKey) : "";
+  const thumbnailUrl = thumbKey ? await createMediaReadUrl(config, thumbKey, "image/webp") : "";
+  c.header("X-Content-Type-Options", "nosniff");
   return c.json({ mediaId: media.id, thumbnailUrl });
 });
 
@@ -630,8 +775,8 @@ storageRoutes.get("/by-tasks", async (c) => {
       if (!taskId) return;
       const thumbKey = typeof row.meta?.thumbObjectKey === "string" ? row.meta.thumbObjectKey : "";
       const [url, thumbnailUrl] = await Promise.all([
-        config ? createMediaReadUrl(config, row.objectKey) : Promise.resolve(""),
-        config && thumbKey ? createMediaReadUrl(config, thumbKey) : Promise.resolve(""),
+        config ? createMediaReadUrl(config, row.objectKey, row.mimeType) : Promise.resolve(""),
+        config && thumbKey ? createMediaReadUrl(config, thumbKey, "image/webp") : Promise.resolve(""),
       ]);
       if (!itemsByTask[taskId]) itemsByTask[taskId] = [];
       itemsByTask[taskId].push({ ...row, url, thumbnailUrl });
@@ -759,7 +904,8 @@ storageRoutes.get("/ledger-media/:ledgerId", async (c) => {
     rows.map(async (row) => {
       const thumbKey = typeof row.meta?.thumbObjectKey === "string" ? row.meta.thumbObjectKey : "";
       const thumbTarget = thumbKey || (row.kind === "image" ? row.objectKey : "");
-      const thumbnailUrl = config && thumbTarget ? await createMediaReadUrl(config, thumbTarget) : "";
+      const thumbMime = thumbKey ? "image/webp" : row.mimeType;
+      const thumbnailUrl = config && thumbTarget ? await createMediaReadUrl(config, thumbTarget, thumbMime) : "";
       return {
         ...row,
         url: "",
@@ -787,7 +933,7 @@ storageRoutes.get("/url/:mediaId", async (c) => {
     return c.json({ error: "无权访问该文件" }, 403);
   }
 
-  const url = await createMediaReadUrl(config, media.objectKey);
+  const url = await createMediaReadUrl(config, media.objectKey, media.mimeType);
   return c.json({ mediaId: media.id, url, expiresIn: env.S3_PRESIGN_EXPIRES_SECONDS });
 });
 
@@ -829,6 +975,7 @@ storageRoutes.get("/download/:mediaId", async (c) => {
     "Content-Type": obj.ContentType || media.mimeType || "application/octet-stream",
     "Content-Disposition": `attachment; filename="${asciiName}"; filename*=UTF-8''${encodeURIComponent(filename)}`,
     "Cache-Control": "private, no-store",
+    "X-Content-Type-Options": "nosniff",
   });
   if (typeof obj.ContentLength === "number" && obj.ContentLength > 0) {
     headers.set("Content-Length", String(obj.ContentLength));
@@ -859,8 +1006,8 @@ storageRoutes.post("/urls", zValidator("json", batchUrlsSchema), async (c) => {
       .map(async (row) => {
         const thumbKey = typeof row.meta?.thumbObjectKey === "string" ? row.meta.thumbObjectKey : "";
         const [url, thumbUrl] = await Promise.all([
-          createMediaReadUrl(config, row.objectKey),
-          thumbKey ? createMediaReadUrl(config, thumbKey) : Promise.resolve(""),
+          createMediaReadUrl(config, row.objectKey, row.mimeType),
+          thumbKey ? createMediaReadUrl(config, thumbKey, "image/webp") : Promise.resolve(""),
         ]);
         urls[row.id] = url;
         if (thumbUrl) thumbnailUrls[row.id] = thumbUrl;
@@ -923,65 +1070,99 @@ storageRoutes.post("/webdav/upload", async (c) => {
   const storageKey = String(form?.get("storageKey") || "").trim();
   const rawName = String(form?.get("filename") || file.name || "").trim();
 
-  const [platformWebdav, userRow] = await Promise.all([
-    getPlatformWebdavConfig(),
-    db.query.users.findFirst({
-      where: eq(users.id, authUser.id),
-      columns: { id: true, webdavConfig: true },
-    }),
-  ]);
-
-  const effective = resolveEffectiveUserWebdav(platformWebdav, userRow?.webdavConfig);
-  if (!effective || !effective.enabled) {
-    return c.json({ error: "当前账号尚未开通 WebDAV" }, 400);
-  }
-  if (effective.isExpired) {
-    return c.json({ error: "您的 WebDAV 权限已过期，请联系管理员续期" }, 403);
-  }
-  if (effective.quotaBytes !== null && effective.usedBytes + file.size > effective.quotaBytes) {
-    return c.json({ error: "WebDAV 可用空间不足，无法继续存放生成素材" }, 403);
+  const rawMime = normalizeMimeType(file.type || "application/octet-stream");
+  if (!isSafeUploadFile(rawMime, rawName)) {
+    return c.json({ error: "不支持的文件类型" }, 400);
   }
 
-  const ext =
-    file.type.split("/")[1]?.split(";")[0]?.replace(/[^a-zA-Z0-9]/g, "") ||
-    (kind === "image" ? "png" : kind === "video" ? "mp4" : kind === "audio" ? "mp3" : "bin");
-  const safeBase = (rawName || storageKey || nanoid()).replace(/[^a-zA-Z0-9._-]/g, "_");
-  const finalName = safeBase.includes(".") ? safeBase : `${safeBase}.${ext}`;
-  const day = new Date().toISOString().slice(0, 10);
-  const relativePath = `generated/${kind}s/${day}/${finalName}`;
+  const buffer = Buffer.from(await file.arrayBuffer());
+  let contentType = rawMime;
+  if (kind === "image") {
+    const detectedMime = detectImageMimeFromBuffer(buffer);
+    if (!detectedMime) {
+      return c.json({ error: "图片文件格式无效或不受支持" }, 400);
+    }
+    contentType = detectedMime;
+  }
 
-  const buffer = new Uint8Array(await file.arrayBuffer());
-  const uploaded = await uploadFileToWebdav({
-    url: effective.url,
-    username: effective.username,
-    password: effective.password,
-    directory: effective.directory,
-    relativePath,
-    data: buffer,
-    contentType: file.type || "application/octet-stream",
-  });
-
-  const nextUsedBytes = await db.transaction(async (tx) => {
+  const platformWebdav = await getPlatformWebdavConfig();
+  const reservation = await db.transaction(async (tx) => {
+    await tx.execute(sql`SELECT id FROM users WHERE id = ${authUser.id} FOR UPDATE`);
     const fresh = await tx.query.users.findFirst({
       where: eq(users.id, authUser.id),
       columns: { webdavConfig: true },
     });
+    const effective = resolveEffectiveUserWebdav(platformWebdav, fresh?.webdavConfig);
+    if (!effective || !effective.enabled) {
+      return { status: 400 as const, error: "当前账号尚未开通 WebDAV" };
+    }
+    if (effective.isExpired) {
+      return { status: 403 as const, error: "您的 WebDAV 权限已过期，请联系管理员续期" };
+    }
+    if (effective.quotaBytes !== null && effective.usedBytes + file.size > effective.quotaBytes) {
+      return { status: 403 as const, error: "WebDAV 可用空间不足，无法继续存放生成素材" };
+    }
     const prevCfg = fresh?.webdavConfig;
-    const nextUsed = Math.max(0, Number(prevCfg?.usedBytes ?? 0)) + file.size;
+    const nextUsed = effective.usedBytes + file.size;
     if (prevCfg) {
       await tx
         .update(users)
         .set({ webdavConfig: { ...prevCfg, usedBytes: nextUsed }, updatedAt: new Date() })
         .where(eq(users.id, authUser.id));
     }
-    return nextUsed;
+    return { status: 200 as const, effective, nextUsed, reservedCfg: Boolean(prevCfg) };
   });
+
+  if (reservation.status !== 200) {
+    return c.json({ error: reservation.error }, reservation.status);
+  }
+
+  const ext =
+    contentType.split("/")[1]?.split(";")[0]?.replace(/[^a-zA-Z0-9]/g, "") ||
+    (kind === "image" ? "png" : kind === "video" ? "mp4" : kind === "audio" ? "mp3" : "bin");
+  const safeBase = (rawName || storageKey || nanoid()).replace(/[^a-zA-Z0-9._-]/g, "_");
+  const finalName = safeBase.includes(".") ? safeBase : `${safeBase}.${ext}`;
+  const day = new Date().toISOString().slice(0, 10);
+  const relativePath = `generated/${kind}s/${day}/${finalName}`;
+
+  let uploaded: Awaited<ReturnType<typeof uploadFileToWebdav>>;
+  try {
+    uploaded = await uploadFileToWebdav({
+      url: reservation.effective.url,
+      username: reservation.effective.username,
+      password: reservation.effective.password,
+      directory: reservation.effective.directory,
+      relativePath,
+      data: new Uint8Array(buffer),
+      contentType,
+    });
+  } catch (error) {
+    if (reservation.reservedCfg) {
+      await db
+        .transaction(async (tx) => {
+          await tx.execute(sql`SELECT id FROM users WHERE id = ${authUser.id} FOR UPDATE`);
+          const fresh = await tx.query.users.findFirst({
+            where: eq(users.id, authUser.id),
+            columns: { webdavConfig: true },
+          });
+          const prevCfg = fresh?.webdavConfig;
+          if (!prevCfg) return;
+          const rolledBackUsed = Math.max(0, Number(prevCfg.usedBytes ?? 0) - file.size);
+          await tx
+            .update(users)
+            .set({ webdavConfig: { ...prevCfg, usedBytes: rolledBackUsed }, updatedAt: new Date() })
+            .where(eq(users.id, authUser.id));
+        })
+        .catch(() => undefined);
+    }
+    throw error;
+  }
 
   return c.json({
     ok: true,
     path: uploaded.remotePath,
     bytes: file.size,
-    usedBytes: nextUsedBytes,
-    quotaBytes: effective.quotaBytes,
+    usedBytes: reservation.nextUsed,
+    quotaBytes: reservation.effective.quotaBytes,
   });
 });

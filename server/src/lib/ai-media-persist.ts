@@ -1,4 +1,6 @@
 /** 云端媒体配额校验与服务端 AI 生成结果自动转存对象存储辅助模块。 */
+import { lookup } from "node:dns/promises";
+import { isIP } from "node:net";
 import { eq, sql } from "drizzle-orm";
 import { nanoid } from "nanoid";
 
@@ -18,52 +20,94 @@ export function runMediaPersistTask<T>(fn: () => Promise<T>): Promise<T> {
   return mediaPersistLimiter.run(fn);
 }
 
+function extractIpv4Octets(ip: string): [number, number, number, number] | null {
+  const clean = ip.trim().toLowerCase().split("%")[0];
+  if (isIP(clean) === 4) {
+    const parts = clean.split(".").map(Number);
+    return parts.length === 4 ? [parts[0], parts[1], parts[2], parts[3]] : null;
+  }
+  if (clean.startsWith("::ffff:")) {
+    const mapped = clean.slice(7);
+    if (isIP(mapped) === 4) {
+      const parts = mapped.split(".").map(Number);
+      return parts.length === 4 ? [parts[0], parts[1], parts[2], parts[3]] : null;
+    }
+    const hexMatch = mapped.match(/^([0-9a-f]{1,4}):([0-9a-f]{1,4})$/);
+    if (hexMatch) {
+      const hi = Number.parseInt(hexMatch[1], 16);
+      const lo = Number.parseInt(hexMatch[2], 16);
+      return [(hi >> 8) & 0xff, hi & 0xff, (lo >> 8) & 0xff, lo & 0xff];
+    }
+  }
+  return null;
+}
+
+function isNonPublicIp(ip: string): boolean {
+  const octets = extractIpv4Octets(ip);
+  if (octets) {
+    const [a, b, c] = octets;
+    if (a === 0 || a === 10 || a === 127 || a >= 224) return true;
+    if (a === 100 && b >= 64 && b <= 127) return true;
+    if (a === 169 && b === 254) return true;
+    if (a === 172 && b >= 16 && b <= 31) return true;
+    if (a === 192 && b === 0 && (c === 0 || c === 2)) return true;
+    if (a === 192 && b === 168) return true;
+    if (a === 198 && (b === 18 || b === 19)) return true;
+    if (a === 198 && b === 51 && c === 100) return true;
+    if (a === 203 && b === 0 && c === 113) return true;
+    return false;
+  }
+  const clean = ip.trim().toLowerCase().split("%")[0];
+  if (isIP(clean) !== 6) return true;
+  if (clean === "::" || clean === "::1" || clean === "0:0:0:0:0:0:0:0" || clean === "0:0:0:0:0:0:0:1") return true;
+  if (clean.startsWith("64:ff9b:") || clean.startsWith("100::")) return true;
+  const firstGroup = Number.parseInt(clean.split(":")[0] || "0", 16);
+  return (firstGroup >= 0xfc00 && firstGroup <= 0xfdff) || (firstGroup >= 0xfe80 && firstGroup <= 0xfebf) || firstGroup >= 0xff00;
+}
+
 function isPrivateOrLocalHost(hostname: string): boolean {
-  const host = hostname.trim().toLowerCase().replace(/^\[|\]$/g, "");
+  const host = hostname.trim().toLowerCase().replace(/^\[|\]$/g, "").replace(/\.+$/, "");
   if (!host) return true;
   if (host === "localhost" || host.endsWith(".localhost") || host.endsWith(".local") || host.endsWith(".internal")) {
     return true;
   }
-  const normalizedIpv4 = host.startsWith("::ffff:") ? host.slice(7) : host;
-  const ipv4Match = normalizedIpv4.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
-  if (ipv4Match) {
-    const [a, b] = [Number(ipv4Match[1]), Number(ipv4Match[2])];
-    if (a === 0 || a === 10 || a === 127) return true;
-    if (a === 169 && b === 254) return true;
-    if (a === 172 && b >= 16 && b <= 31) return true;
-    if (a === 192 && b === 168) return true;
-    if (a === 100 && b >= 64 && b <= 127) return true;
-    return false;
-  }
-  if (host === "::" || host === "::1" || host.startsWith("fe80:") || host.startsWith("fc") || host.startsWith("fd")) {
-    return true;
+  if (isIP(host.split("%")[0]) !== 0) {
+    return isNonPublicIp(host);
   }
   return false;
 }
 
-/** 校验远端拉取 URL 协议与目标主机，拦截内网/回环/元数据地址以防 SSRF。 */
-export function assertSafeExternalUrl(rawUrl: string): URL {
+/** 校验远端拉取 URL 协议、IP 字面量及 DNS 解析结果，拦截内网/回环/元数据地址与 DNS 重绑定以防 SSRF。 */
+export async function assertSafeExternalUrl(rawUrl: string): Promise<URL> {
   const parsed = new URL(rawUrl);
   if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
     throw new Error("仅支持 http/https 资源链接");
   }
-  if (isPrivateOrLocalHost(parsed.hostname)) {
+  const host = parsed.hostname.trim().toLowerCase().replace(/^\[|\]$/g, "").replace(/\.+$/, "");
+  if (isPrivateOrLocalHost(host)) {
     throw new Error("禁止拉取内网或本地地址资源");
+  }
+  if (isIP(host.split("%")[0]) === 0) {
+    const resolved = await lookup(host, { all: true, verbatim: true });
+    if (!resolved.length || resolved.some((entry) => isNonPublicIp(entry.address))) {
+      throw new Error("禁止拉取内网或本地地址资源");
+    }
   }
   return parsed;
 }
 
-/** 带超时与最大体积保护拉取远端媒体 Buffer（超限或超时返回 null，不影响上游原始响应返回前端）。 */
+/** 带超时、禁止重定向与最大体积保护拉取远端媒体 Buffer（超限或超时返回 null，不影响上游原始响应返回前端）。 */
 export async function fetchMediaBufferWithLimits(
   url: string,
   init?: RequestInit & { allowPrivateNetwork?: boolean },
 ): Promise<{ buffer: Buffer; mimeType: string } | null> {
   const { allowPrivateNetwork = false, ...fetchInit } = init || {};
   if (!allowPrivateNetwork) {
-    assertSafeExternalUrl(url);
+    await assertSafeExternalUrl(url);
   }
   const res = await fetch(url, {
     ...fetchInit,
+    redirect: "error",
     signal: AbortSignal.timeout(env.MEDIA_FETCH_TIMEOUT_MS),
   });
   if (!res.ok) return null;

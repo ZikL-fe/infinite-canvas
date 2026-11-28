@@ -10,6 +10,7 @@ const envSchema = z.object({
   JWT_REFRESH_EXPIRES_DAYS: z.coerce.number().int().positive().default(30),
   S3_PRESIGN_EXPIRES_SECONDS: z.coerce.number().int().positive().default(900),
   CORS_ORIGIN: z.string().optional().default(""),
+  TRUSTED_PROXY_IPS: z.string().optional().default(""),
   S3_PROVIDER: z.enum(["s3", "r2", "oss", "cos"]).optional().default("s3"),
   S3_ENDPOINT: z.string().optional().default(""),
   S3_REGION: z.string().optional().default("auto"),

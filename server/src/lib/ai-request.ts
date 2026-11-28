@@ -318,18 +318,21 @@ export async function readAiGenerationRequest(request: Request, route: AiGenerat
   }
   validatePricing(channelModel, requestedImageCount, resolutionTier, sizeStr, seconds, referenceVideoSeconds ?? 0);
 
+  let estimatedInputTokens = 0;
   let estimatedReserveCredits = 0;
+  if (channelModel.capability === "text") {
+    const inputPayload = json.input ?? json.messages ?? json.contents ?? "";
+    estimatedInputTokens = Math.max(1, Math.ceil(Buffer.byteLength(JSON.stringify(inputPayload)) / 4));
+  }
   if (channelModel.pricing && hasNonZeroPricing(channelModel.pricing)) {
     if (channelModel.capability === "text") {
       const textPricing = channelModel.pricing as TextModelPricing;
-      const inputPayload = json.input ?? json.messages ?? json.contents ?? "";
-      const estInput = Math.max(1, Math.ceil(Buffer.byteLength(JSON.stringify(inputPayload)) / 4));
       const rawMaxOutput = json.max_completion_tokens ?? json.max_tokens ?? json.max_output_tokens ??
         (isRecord(json.generationConfig) ? json.generationConfig.maxOutputTokens : undefined);
       const estOutput = typeof rawMaxOutput === "number" && Number.isFinite(rawMaxOutput) && rawMaxOutput > 0
         ? Math.min(65536, Math.ceil(rawMaxOutput))
         : 4096;
-      const est = roundCredits((estInput * textPricing.inputPerMillion + estOutput * textPricing.outputPerMillion) / 1_000_000);
+      const est = roundCredits((estimatedInputTokens * textPricing.inputPerMillion + estOutput * textPricing.outputPerMillion) / 1_000_000);
       estimatedReserveCredits = Math.max(0.0001, est);
     } else if (channelModel.capability === "audio") {
       const audioPricing = channelModel.pricing as AudioModelPricing;
@@ -342,6 +345,6 @@ export async function readAiGenerationRequest(request: Request, route: AiGenerat
   return {
     modelName, channelModel, rawBody: form ?? JSON.stringify(json), contentType: form ? "" : "application/json", promptText,
     requestedImageCount, resolutionTier, sizeStr, seconds, hasReferenceVideo: Boolean(references.length), referenceVideoSeconds,
-    streaming, audioResponseFormat, estimatedReserveCredits,
+    streaming, audioResponseFormat, estimatedInputTokens, estimatedReserveCredits,
   };
 }

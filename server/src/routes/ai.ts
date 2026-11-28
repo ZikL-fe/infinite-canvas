@@ -137,7 +137,7 @@ async function fetchWithSafeRedirect(url: string, init: RequestInit, trustedOrig
     if (!location) return res;
     const next = new URL(location, url);
     if (next.origin !== trustedOrigin) {
-      assertSafeExternalUrl(next.toString());
+      await assertSafeExternalUrl(next.toString());
     }
     const headers = new Headers(init.headers);
     if (next.origin !== trustedOrigin) {
@@ -1243,7 +1243,17 @@ aiRoutes.all("/proxy/:channelId/*", async (c) => {
           settlePromise = (async () => {
             const durationMs = Math.max(1, Date.now() - startedAt);
             const firstTokenMs = Math.min(durationMs, Math.max(1, firstContentMs ?? firstChunkMs ?? durationMs));
-            if ((shouldBill && !usage) || (abortedOrErrored && !usage && failReason)) {
+            const hasStreamedContent = resultText.length > 0 || firstContentMs !== undefined;
+            const effectiveUsage: UsageTotals | null =
+              usage ??
+              (shouldBill && hasStreamedContent
+                ? {
+                    inputTokens: Math.max(1, generation?.estimatedInputTokens ?? 1),
+                    cachedInputTokens: 0,
+                    outputTokens: Math.max(1, Math.ceil(Buffer.byteLength(resultText, "utf8") / 4)),
+                  }
+                : null);
+            if ((shouldBill && !effectiveUsage) || (abortedOrErrored && !effectiveUsage && failReason)) {
               await finishFailedBilling(failReason || "上游未返回可验证的 Token 用量", {
                 isStream: true,
                 firstTokenMs,
@@ -1252,7 +1262,7 @@ aiRoutes.all("/proxy/:channelId/*", async (c) => {
               });
               return;
             }
-            const credits = usage && pricing ? calculateTextCharge(pricing as TextModelPricing, usage) : 0;
+            const credits = effectiveUsage && pricing ? calculateTextCharge(pricing as TextModelPricing, effectiveUsage) : 0;
             if (credits === null) {
               await finishFailedBilling("文本计费数值超出可计算范围", {
                 isStream: true,
@@ -1264,11 +1274,12 @@ aiRoutes.all("/proxy/:channelId/*", async (c) => {
             }
             await settleReserved(credits, {
               model: modelName,
-              ...(usage ?? {}),
+              ...(effectiveUsage ?? {}),
+              ...(effectiveUsage && !usage ? { usageEstimated: true } : {}),
               isStream: true,
               durationMs,
               firstTokenMs,
-              ...(usage ? { tokensPerSecond: calcTokensPerSecond(usage.outputTokens, durationMs, firstTokenMs) } : {}),
+              ...(effectiveUsage ? { tokensPerSecond: calcTokensPerSecond(effectiveUsage.outputTokens, durationMs, firstTokenMs) } : {}),
               ...(clientAborted || abortedOrErrored ? { clientAborted: true } : {}),
               ...(resultText ? { resultText } : {}),
               taskStatus: "completed",

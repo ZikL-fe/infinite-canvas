@@ -13,6 +13,45 @@ import { nanoid } from "nanoid";
 import { env } from "../env.ts";
 import type { S3StorageConfig } from "./settings.ts";
 
+export const INLINE_SAFE_MEDIA_MIMES = new Set([
+  "image/png",
+  "image/jpeg",
+  "image/jpg",
+  "image/webp",
+  "image/gif",
+  "image/avif",
+  "image/bmp",
+  "image/x-icon",
+  "image/vnd.microsoft.icon",
+  "video/mp4",
+  "video/webm",
+  "video/quicktime",
+  "audio/mpeg",
+  "audio/mp3",
+  "audio/wav",
+  "audio/x-wav",
+  "audio/ogg",
+  "audio/webm",
+  "audio/aac",
+  "audio/flac",
+  "audio/mp4",
+]);
+
+const ATTACHMENT_FORCED_EXTS = new Set(["svg", "html", "htm", "xhtml", "xml", "js", "mjs", "cjs", "pdf", "json", "txt", "zip", "bin"]);
+
+export function normalizeMimeType(mimeType: string): string {
+  return mimeType.split(";")[0]?.trim().toLowerCase() || "";
+}
+
+function shouldForceAttachmentDisposition(objectKey: string, mimeType?: string): boolean {
+  if (mimeType) {
+    const normalized = normalizeMimeType(mimeType);
+    if (!INLINE_SAFE_MEDIA_MIMES.has(normalized)) return true;
+  }
+  const ext = objectKey.split(".").pop()?.toLowerCase() || "";
+  return ATTACHMENT_FORCED_EXTS.has(ext);
+}
+
 let cachedS3Fingerprint = "";
 let cachedS3Client: S3Client | null = null;
 
@@ -60,19 +99,25 @@ function getReusableS3Client(config: S3StorageConfig) {
   return cachedS3Client;
 }
 
-/** 生成浏览器直传对象存储的预签名 PUT URL。 */
-export async function createPresignedUploadUrl(config: S3StorageConfig, objectKey: string, contentType: string) {
+/** 生成浏览器直传对象存储的预签名 PUT URL（绑定 ContentType 与 ContentLength 防止越权篡改文件大小）。 */
+export async function createPresignedUploadUrl(
+  config: S3StorageConfig,
+  objectKey: string,
+  contentType: string,
+  contentLength?: number,
+) {
   const client = getReusableS3Client(config);
   const command = new PutObjectCommand({
     Bucket: config.bucket,
     Key: objectKey,
     ContentType: contentType,
+    ...(typeof contentLength === "number" && contentLength > 0 ? { ContentLength: contentLength } : {}),
   });
   return getSignedUrl(client, command, { expiresIn: env.S3_PRESIGN_EXPIRES_SECONDS });
 }
 
-/** 生成媒体读取地址：配置了自定义公网域名时直接拼接，否则返回签名 GET URL。 */
-export async function createMediaReadUrl(config: S3StorageConfig, objectKey: string) {
+/** 生成媒体读取地址：配置了自定义公网域名时直接拼接，否则返回签名 GET URL（非安全内联媒体强制 attachment 下载）。 */
+export async function createMediaReadUrl(config: S3StorageConfig, objectKey: string, mimeType?: string) {
   if (config.publicBaseUrl) {
     return `${config.publicBaseUrl.replace(/\/+$/, "")}/${objectKey}`;
   }
@@ -80,6 +125,7 @@ export async function createMediaReadUrl(config: S3StorageConfig, objectKey: str
   const command = new GetObjectCommand({
     Bucket: config.bucket,
     Key: objectKey,
+    ...(shouldForceAttachmentDisposition(objectKey, mimeType) ? { ResponseContentDisposition: "attachment" } : {}),
   });
   return getSignedUrl(client, command, { expiresIn: env.S3_PRESIGN_EXPIRES_SECONDS });
 }

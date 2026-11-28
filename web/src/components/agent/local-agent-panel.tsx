@@ -6,7 +6,7 @@ import { Bot, History, MessageSquare, PanelRightClose, PlugZap, Plus, Sparkles, 
 import { useTranslation } from "react-i18next";
 
 import i18n from "@/i18n";
-import { readAgentUrlBootstrap } from "@/lib/agent/agent-url-bootstrap";
+import { isLoopbackAgentUrl, readAgentUrlBootstrap } from "@/lib/agent/agent-url-bootstrap";
 import { canvasThemes } from "@/lib/canvas-theme";
 import { upscaleDataUrl } from "@/lib/canvas/canvas-image-data";
 import { imageMetadata } from "@/lib/canvas/canvas-node-factory";
@@ -911,6 +911,14 @@ export function LocalAgentPanel({ embedded, headless, autoConnect }: { embedded?
         }
         const urlToken = searchParams.get("agentToken") || "";
         const urlEndpoint = searchParams.get("agentUrl") || "";
+        if (urlEndpoint && !isLoopbackAgentUrl(urlEndpoint)) {
+            const text = rt("invalidAddress");
+            if (!silent) {
+                setAgentState({ connectError: text });
+                if (!headless) message.warning(text);
+            }
+            return;
+        }
         const discovered = urlToken ? null : await discoverAgentConfig(endpoint || DEFAULT_AGENT_URL);
         const nextEndpoint = (urlEndpoint || discovered?.url || endpoint || DEFAULT_AGENT_URL).trim().replace(/\/$/, "");
         const nextToken = (urlToken || token.trim() || discovered?.token || "").trim();
@@ -942,7 +950,7 @@ export function LocalAgentPanel({ embedded, headless, autoConnect }: { embedded?
             return;
         }
         errorLoggedRef.current = false;
-        setAgentState({ url: nextEndpoint, token: nextToken, enabled: true, connected: false, silentConnect: silent, fragmentBootstrap: false, activity: rt("connecting"), connectError: "", activeTab: "setup" });
+        setAgentState({ url: nextEndpoint, token: nextToken, enabled: true, connected: false, silentConnect: silent, fragmentBootstrap: false, ...(urlEndpoint && urlToken ? { confirmTools: true } : {}), activity: rt("connecting"), connectError: "", activeTab: "setup" });
     };
 
     useLayoutEffect(() => {
@@ -954,27 +962,26 @@ export function LocalAgentPanel({ embedded, headless, autoConnect }: { embedded?
             useAgentStore.getState().openPanel();
             return;
         }
-        try {
-            const parsed = new URL(bootstrap.url);
-            if (parsed.protocol !== "http:" && parsed.protocol !== "https:") throw new Error("invalid protocol");
-        } catch {
-            setAgentState({ fragmentBootstrap: false, activeTab: "setup", connectError: rt("invalidAddress") });
+        if (!isLoopbackAgentUrl(bootstrap.url)) {
+            setAgentState({ enabled: false, connected: false, silentConnect: false, fragmentBootstrap: false, confirmTools: true, activeTab: "setup", connectError: rt("invalidAddress") });
             useAgentStore.getState().openPanel();
             return;
         }
         errorLoggedRef.current = false;
-        setAgentState({ url: bootstrap.url.replace(/\/$/, ""), token: bootstrap.token, enabled: true, connected: false, silentConnect: true, fragmentBootstrap: true, confirmTools: false, activity: rt("connecting"), connectError: "", activeTab: "setup" });
+        setAgentState({ url: bootstrap.url.replace(/\/$/, ""), token: bootstrap.token, enabled: true, connected: false, silentConnect: true, fragmentBootstrap: true, confirmTools: true, activity: rt("connecting"), connectError: "", activeTab: "setup" });
     }, [hash, navigate, setAgentState]);
 
     useEffect(() => {
-        if (urlAgentAutoConnect && confirmTools) setAgentState({ confirmTools: false });
-    }, [confirmTools, setAgentState, urlAgentAutoConnect]);
-
-    useEffect(() => {
         if ((!autoConnect && !urlAgentAutoConnect) || autoConnectRef.current || enabled || connected) return;
+        if (urlAgentAutoConnect && !isLoopbackAgentUrl(searchParams.get("agentUrl") || "")) {
+            autoConnectRef.current = true;
+            setAgentState({ enabled: false, connected: false, silentConnect: false, fragmentBootstrap: false, confirmTools: true, activeTab: "setup", connectError: rt("invalidAddress") });
+            useAgentStore.getState().openPanel();
+            return;
+        }
         autoConnectRef.current = true;
         void toggleAgentConnection({ silent: true });
-    }, [autoConnect, connected, enabled, urlAgentAutoConnect]);
+    }, [autoConnect, connected, enabled, searchParams, setAgentState, urlAgentAutoConnect]);
 
     function clearAgentSession(patch: Parameters<typeof setAgentState>[0] = {}) {
         loadThreadsSequenceRef.current += 1;

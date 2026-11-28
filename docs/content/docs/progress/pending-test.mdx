@@ -7,6 +7,14 @@ description: Implemented changes that still need manual verification
 
 The current release needs manual verification in these areas:
 
+- 服务端计费、存储配额、限流、上传安全、SSRF 与本地 Agent URL 引导安全加固：
+  - **流式文本中断兜底计费**：发起付费文本 SSE 对话并在收到部分输出后、最终 `usage` 返回前主动中止连接，确认服务端按预估输入与已输出字符数结算扣费；在首个内容分片到达前立刻中止时仍正常退还预留额度；
+  - **对象存储配额与存储兑换码限流**：验证 `/api/storage/presign-upload` 拒绝 `bytes <= 0` 或缺失大小并绑定 S3 `Content-Length`，`/api/storage/confirm` 拒绝重复确认已 `active` 的记录（`409`）且并发 `/confirm`、`/thumbnail/:mediaId`、`POST /webdav/upload` 均受事务行锁约束无法超额写入；连续请求 `POST /api/storage/redeem` 确认正常触发限流返回 `429`；
+  - **IP 限流可信代理与内存上限**：直连（非可信代理）携带伪造 `X-Real-IP` / `X-Forwarded-For` 请求认证/验证码接口时确认无法绕过 IP 限流（配置 `TRUSTED_PROXY_IPS` 后可正确解析反代最右侧非可信客户端 IP）；
+  - **上传 MIME/魔数校验与响应头**：尝试向 `/presign-upload`、`/confirm`、`POST /thumbnail/:mediaId` 或 `POST /webdav/upload` 上传 `image/svg+xml`、`text/html`、`.html`/`.svg` 等高危类型或伪造非图片魔数的缩略图，确认返回 `400` 拦截；验证 `/api/storage/download/:mediaId` 与 `/api/storage/thumbnail/*` 返回 `X-Content-Type-Options: nosniff`，非内联安全文件签发带 `attachment` 处置头的预签名地址；
+  - **远端媒体拉取 SSRF 防护**：验证远端媒体转存拒绝 `3xx` 重定向以及指向内网/回环/CGNAT/保留地址（含 IPv4 映射 IPv6 与 DNS 解析结果）的 URL；
+  - **本地 Agent `#agentUrl` / `?agentUrl` 引导安全**：携带非环回地址（如 `https://evil.example`）的 `#agentUrl` 或 `?agentUrl` 访问画布时，确认自动拦截并停留在配置页报错而不发起连接；使用 `http://127.0.0.1` 等环回地址引导连接后，确认工具写入仍保持人工确认开启（`confirmTools: true`）。
+
 - 全站能力模型隔离与就绪校验一致性修复：
   - 在仅配置文本或视频模型、未配置任何生图模型时打开 `/image`，确认桌面模型选择器显示「选择模型」（点击打开配置弹层）、移动端摘要不出现孤立前导 `·`，点击生成时弹出配置引导提示并打开设置弹窗（不再误用其他能力模型发起生图请求）；
   - 在画布 `/canvas/:id` 重试已保存的生图节点且当前无可用生图模型时，确认同样阻断并弹出配置引导，且 Agent 站点工具 `getImageConfig` / `getVideoConfig` 在对应能力未配置时返回空模型而非回退到通用 `config.model`。

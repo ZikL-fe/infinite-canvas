@@ -2,6 +2,7 @@
 import type { Context, MiddlewareHandler } from "hono";
 import { getConnInfo } from "hono/bun";
 
+import { env } from "../env.ts";
 import { getAuthPolicy, type AuthRateLimitPolicy } from "./settings.ts";
 
 type WindowBucket = {
@@ -11,6 +12,26 @@ type WindowBucket = {
 const WINDOW_MS = 60_000;
 const MAX_STORED_KEYS = 10_000;
 const store = new Map<string, WindowBucket>();
+
+function normalizeIp(ip: string): string {
+  const trimmed = ip.trim().toLowerCase().replace(/^\[|\]$/g, "");
+  return trimmed.startsWith("::ffff:") ? trimmed.slice(7) : trimmed;
+}
+
+const TRUSTED_PROXIES = new Set(
+  [
+    "127.0.0.1",
+    "::1",
+    ...env.TRUSTED_PROXY_IPS.split(",")
+      .map((item) => normalizeIp(item))
+      .filter(Boolean),
+  ],
+);
+
+function isTrustedProxy(remoteIp: string): boolean {
+  if (!remoteIp) return false;
+  return TRUSTED_PROXIES.has(normalizeIp(remoteIp));
+}
 
 function pruneExpired(now: number) {
   const cutoff = now - WINDOW_MS;
@@ -29,19 +50,29 @@ const cleanupTimer = setInterval(() => {
 }, WINDOW_MS);
 cleanupTimer.unref?.();
 
-/** 按反代头与底层连接依次解析客户端真实 IP。 */
+/** 优先取底层 socket IP；仅当直连来源为可信反代时解析代理转发头中的最右侧非可信客户端 IP。 */
 export function getClientIp(c: Context): string {
-  const realIp = c.req.header("X-Real-IP")?.trim();
-  if (realIp) return realIp;
-  const forwarded = c.req.header("X-Forwarded-For")?.split(",")[0]?.trim();
-  if (forwarded) return forwarded;
+  let remoteIp = "";
   try {
     const conn = getConnInfo(c);
-    if (conn.remote.address) return conn.remote.address;
+    remoteIp = conn.remote.address?.trim() || "";
   } catch {
     // 非 Bun 运行环境（如单测）忽略 connInfo 异常
   }
-  return "unknown";
+  if (!remoteIp) return "unknown";
+  if (!isTrustedProxy(remoteIp)) return remoteIp;
+
+  const forwarded = c.req.header("X-Forwarded-For");
+  if (forwarded) {
+    const parts = forwarded.split(",").map((item) => item.trim()).filter(Boolean);
+    for (let i = parts.length - 1; i >= 0; i -= 1) {
+      if (!isTrustedProxy(parts[i])) return parts[i];
+    }
+    if (parts[0]) return parts[0];
+  }
+  const realIp = c.req.header("X-Real-IP")?.trim();
+  if (realIp) return realIp;
+  return remoteIp;
 }
 
 /** 对指定限流桶和键执行 1 分钟滑动窗口检查，超限时返回 429 响应。 */
@@ -53,6 +84,11 @@ export function checkSlidingWindowLimit(bucketName: string, key: string, limitPe
 
   if (store.size >= MAX_STORED_KEYS && !store.has(fullKey)) {
     pruneExpired(now);
+    while (store.size >= MAX_STORED_KEYS) {
+      const oldestKey = store.keys().next().value;
+      if (oldestKey === undefined) break;
+      store.delete(oldestKey);
+    }
   }
 
   let bucket = store.get(fullKey);
