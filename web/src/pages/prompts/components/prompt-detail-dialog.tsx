@@ -45,8 +45,8 @@ export function PromptDetailDialog({ prompt, onClose, onCopy, onSaveAsset }: { p
                 <div ref={contentRef} className="flex h-full min-h-0 flex-col">
                     <div className="shrink-0 space-y-3 pb-4">
                         {showCover ? (
-                            <div className="h-48 w-full overflow-hidden rounded-lg sm:h-56">
-                                <img src={prompt.coverUrl} alt={prompt.title} referrerPolicy="no-referrer" onError={() => markFailed(prompt.coverUrl)} className="h-full w-full object-cover" />
+                            <div className="flex max-h-48 w-full items-center justify-center overflow-hidden rounded-lg bg-stone-100 dark:bg-stone-900 sm:max-h-56">
+                                <img src={prompt.coverUrl} alt={prompt.title} referrerPolicy="no-referrer" onError={() => markFailed(prompt.coverUrl)} className="max-h-48 w-auto max-w-full object-contain sm:max-h-56" />
                             </div>
                         ) : (
                             <div className="grid h-48 w-full place-items-center rounded-lg bg-stone-100 text-stone-400 dark:bg-stone-900 dark:text-stone-600 sm:h-56">

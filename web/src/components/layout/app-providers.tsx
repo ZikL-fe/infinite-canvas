@@ -43,7 +43,7 @@ export function AppProviders({ children }: { children: ReactNode }) {
 
     return (
         <ConfigProvider locale={locale === "zh-CN" ? zhCN : enUS} theme={getAntThemeConfig(dark)}>
-            <App>
+            <App message={{ top: 64 }}>
                 <QueryClientProvider client={queryClient}>
                     <ClientRootInit>{children}</ClientRootInit>
                 </QueryClientProvider>

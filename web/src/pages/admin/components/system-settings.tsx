@@ -438,7 +438,7 @@ export function AdminSystemSettingsPanel({ section }: { section: SystemSettingsS
                                 <Switch />
                             </Form.Item>
                             <Row gutter={16}>
-                                <Col xs={24} md={12} xl={6}>
+                                <Col xs={24} md={12}>
                                     <Form.Item
                                         name="loginPerMinute"
                                         label={t("admin.settingsTab.auth.rateLimitLoginLabel")}
@@ -447,7 +447,7 @@ export function AdminSystemSettingsPanel({ section }: { section: SystemSettingsS
                                         <InputNumber min={0} max={1000} precision={0} className="w-full" />
                                     </Form.Item>
                                 </Col>
-                                <Col xs={24} md={12} xl={6}>
+                                <Col xs={24} md={12}>
                                     <Form.Item
                                         name="registerPerMinute"
                                         label={t("admin.settingsTab.auth.rateLimitRegisterLabel")}
@@ -456,7 +456,7 @@ export function AdminSystemSettingsPanel({ section }: { section: SystemSettingsS
                                         <InputNumber min={0} max={1000} precision={0} className="w-full" />
                                     </Form.Item>
                                 </Col>
-                                <Col xs={24} md={12} xl={6}>
+                                <Col xs={24} md={12}>
                                     <Form.Item
                                         name="emailCodePerMinute"
                                         label={t("admin.settingsTab.auth.rateLimitEmailCodeLabel")}
@@ -465,7 +465,7 @@ export function AdminSystemSettingsPanel({ section }: { section: SystemSettingsS
                                         <InputNumber min={0} max={1000} precision={0} className="w-full" />
                                     </Form.Item>
                                 </Col>
-                                <Col xs={24} md={12} xl={6}>
+                                <Col xs={24} md={12}>
                                     <Form.Item
                                         name="redeemPerMinute"
                                         label={t("admin.settingsTab.auth.rateLimitRedeemLabel")}
@@ -748,22 +748,22 @@ export function AdminSystemSettingsPanel({ section }: { section: SystemSettingsS
                         onFinish={handleSaveStorageExpiryPolicy}
                     >
                         <Row gutter={16}>
-                            <Col xs={24} md={6}>
+                            <Col xs={24} md={12}>
                                 <Form.Item name="enabled" label={t("admin.settingsTab.storageExpiry.enabledLabel")} valuePropName="checked">
                                     <Switch />
                                 </Form.Item>
                             </Col>
-                            <Col xs={24} md={6}>
+                            <Col xs={24} md={12}>
                                 <Form.Item name="exemptAdmins" label={t("admin.settingsTab.storageExpiry.exemptAdminsLabel")} valuePropName="checked">
                                     <Switch />
                                 </Form.Item>
                             </Col>
-                            <Col xs={24} md={6}>
+                            <Col xs={24} md={12}>
                                 <Form.Item name="cleanupOverQuotaWithoutExpiry" label={t("admin.settingsTab.storageExpiry.cleanupOverQuotaLabel")} valuePropName="checked">
                                     <Switch />
                                 </Form.Item>
                             </Col>
-                            <Col xs={24} md={6}>
+                            <Col xs={24} md={12}>
                                 <Form.Item name="cleanupWorkspaceData" label={t("admin.settingsTab.storageExpiry.cleanupWorkspaceLabel")} valuePropName="checked">
                                     <Switch />
                                 </Form.Item>

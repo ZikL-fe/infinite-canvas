@@ -304,7 +304,7 @@ export function AdminUsersPanel() {
                         {
                             title: t("admin.usersTab.colUserId"),
                             dataIndex: "id",
-                            width: 210,
+                            width: 195,
                             render: (id: string) => (
                                 <Space size={4}>
                                     <Typography.Text type="secondary" code className="text-xs">
@@ -323,9 +323,9 @@ export function AdminUsersPanel() {
                         {
                             title: t("admin.usersTab.colAccount"),
                             key: "displayName",
-                            width: 145,
+                            width: 125,
                             render: (_, record) => (
-                                <div className="flex max-w-[135px] items-center gap-1.5">
+                                <div className="flex max-w-[115px] items-center gap-1.5">
                                     <button
                                         type="button"
                                         className="cursor-pointer truncate border-0 bg-transparent p-0 text-left font-medium hover:underline"
@@ -342,9 +342,9 @@ export function AdminUsersPanel() {
                         {
                             title: t("admin.usersTab.colUsername"),
                             dataIndex: "username",
-                            width: 120,
+                            width: 105,
                             render: (username: string) => (
-                                <Typography.Text type="secondary" className="block max-w-[110px] truncate text-xs">
+                                <Typography.Text type="secondary" className="block max-w-[95px] truncate text-xs">
                                     @{username}
                                 </Typography.Text>
                             ),
@@ -352,10 +352,10 @@ export function AdminUsersPanel() {
                         {
                             title: t("admin.usersTab.colEmail"),
                             dataIndex: "email",
-                            width: 170,
+                            width: 145,
                             render: (email?: string | null) =>
                                 email ? (
-                                    <Typography.Text type="secondary" ellipsis={{ tooltip: email }} className="block max-w-[155px] text-xs">
+                                    <Typography.Text type="secondary" ellipsis={{ tooltip: email }} className="block max-w-[130px] text-xs">
                                         {email}
                                     </Typography.Text>
                                 ) : (
@@ -365,7 +365,7 @@ export function AdminUsersPanel() {
                         {
                             title: t("admin.usersTab.colInviter"),
                             key: "invitedBy",
-                            width: 175,
+                            width: 130,
                             render: (_, record) => {
                                 const inviter = record.invitedBy;
                                 if (!inviter) {
@@ -384,7 +384,7 @@ export function AdminUsersPanel() {
                                         <Tooltip title={tooltipText}>
                                             <button
                                                 type="button"
-                                                className="max-w-[130px] cursor-pointer truncate border-0 bg-transparent p-0 text-left text-xs font-medium hover:underline"
+                                                className="max-w-[95px] cursor-pointer truncate border-0 bg-transparent p-0 text-left text-xs font-medium hover:underline"
                                                 onClick={() => setDetailUserId(inviter.id)}
                                             >
                                                 {label}
@@ -406,7 +406,7 @@ export function AdminUsersPanel() {
                         {
                             title: t("admin.usersTab.colRole"),
                             dataIndex: "role",
-                            width: 85,
+                            width: 72,
                             render: (role: string) => (
                                 <Tag color={role === "admin" ? "blue" : "default"} style={{ marginInlineEnd: 0 }}>
                                     {role === "admin" ? t("admin.usersTab.roleAdmin") : t("admin.usersTab.roleUser")}
@@ -416,7 +416,7 @@ export function AdminUsersPanel() {
                         {
                             title: t("admin.usersTab.colStatus"),
                             dataIndex: "status",
-                            width: 78,
+                            width: 68,
                             render: (status: string) => (
                                 <Tag color={status === "active" ? "green" : "red"} style={{ marginInlineEnd: 0 }}>
                                     {status === "active" ? t("admin.usersTab.statusActive") : t("admin.usersTab.statusDisabled")}
@@ -426,7 +426,7 @@ export function AdminUsersPanel() {
                         {
                             title: t("admin.usersTab.colCredits"),
                             dataIndex: "creditBalance",
-                            width: 95,
+                            width: 82,
                             render: (balance?: number) => (
                                 <Tooltip title={t("admin.usersTab.exactBalanceTip", { value: formatExactCredits(balance ?? 0) })}>
                                     <Tag color="gold" style={{ marginInlineEnd: 0 }}>
@@ -438,25 +438,25 @@ export function AdminUsersPanel() {
                         {
                             title: t("admin.usersTab.colCanvasCount"),
                             dataIndex: "projectCount",
-                            width: 68,
+                            width: 58,
                             render: (v?: number) => <span className="tabular-nums">{v ?? 0}</span>,
                         },
                         {
                             title: t("admin.usersTab.colMediaCount"),
                             dataIndex: "mediaCount",
-                            width: 68,
+                            width: 58,
                             render: (v?: number) => <span className="tabular-nums">{v ?? 0}</span>,
                         },
                         {
                             title: t("admin.usersTab.colUsedStorage"),
                             dataIndex: "storageUsedBytes",
-                            width: 95,
+                            width: 85,
                             render: (used?: number) => <span className="whitespace-nowrap tabular-nums">{formatBytes(used ?? 0)}</span>,
                         },
                         {
                             title: t("admin.usersTab.colQuotaLimit"),
                             key: "storageQuotaLimit",
-                            width: 135,
+                            width: 120,
                             render: (_, record) => {
                                 const used = record.storageUsedBytes ?? 0;
                                 const quota = record.storageQuotaBytes ?? 0;
@@ -481,7 +481,7 @@ export function AdminUsersPanel() {
                         {
                             title: t("admin.usersTab.colQuotaExpiry"),
                             key: "storageExpiry",
-                            width: 145,
+                            width: 125,
                             render: (_, record) => {
                                 const expirySummary = `${
                                     record.storageQuotaExpiresAt
@@ -491,7 +491,7 @@ export function AdminUsersPanel() {
                                         : t("admin.usersTab.permanent")
                                 }${record.activeGrantCount ? t("admin.usersTab.activeGrantsSuffix", { count: record.activeGrantCount }) : ""}`;
                                 return (
-                                    <Typography.Text type="secondary" ellipsis={{ tooltip: expirySummary }} className="block max-w-[135px] text-xs">
+                                    <Typography.Text type="secondary" ellipsis={{ tooltip: expirySummary }} className="block max-w-[115px] text-xs">
                                         {expirySummary}
                                     </Typography.Text>
                                 );
@@ -501,7 +501,7 @@ export function AdminUsersPanel() {
                             title: t("admin.channelsTab.colActions"),
                             key: "actions",
                             fixed: "right",
-                            width: 150,
+                            width: 140,
                             render: (_, record) => (
                                 <TableRowActions
                                     items={[
@@ -545,6 +545,8 @@ export function AdminUsersPanel() {
 
             <Modal
                 open={Boolean(quotaUser)}
+                centered
+                styles={{ body: { maxHeight: "calc(100vh - 180px)", overflowY: "auto" } }}
                 zIndex={1020}
                 title={
                     quotaUser
@@ -732,6 +734,8 @@ export function AdminUsersPanel() {
 
             <Modal
                 open={Boolean(creditUser)}
+                centered
+                styles={{ body: { maxHeight: "calc(100vh - 180px)", overflowY: "auto" } }}
                 zIndex={1020}
                 title={
                     creditUser

@@ -335,10 +335,10 @@ export function AdminRedeemCodesPanel() {
                             {
                                 title: t("admin.redeemTab.colName"),
                                 dataIndex: "name",
-                                width: 150,
+                                width: 125,
                                 render: (name: string) =>
                                     name ? (
-                                        <Typography.Text ellipsis={{ tooltip: name }} className="block max-w-[135px] font-medium">
+                                        <Typography.Text ellipsis={{ tooltip: name }} className="block max-w-[110px] font-medium">
                                             {name}
                                         </Typography.Text>
                                     ) : (
@@ -348,7 +348,7 @@ export function AdminRedeemCodesPanel() {
                             {
                                 title: t("admin.redeemTab.colCode"),
                                 dataIndex: "code",
-                                width: 280,
+                                width: 245,
                                 render: (code: string) => (
                                     <Space size={4}>
                                         <Typography.Text code>{code}</Typography.Text>
@@ -359,7 +359,7 @@ export function AdminRedeemCodesPanel() {
                             {
                                 title: t("admin.redeemTab.colReward"),
                                 key: "reward",
-                                width: 165,
+                                width: 135,
                                 render: (_, record) =>
                                     record.kind === "storage" ? (
                                         <Tag color="cyan" style={{ marginInlineEnd: 0 }}>
@@ -377,7 +377,7 @@ export function AdminRedeemCodesPanel() {
                             {
                                 title: t("admin.redeemTab.colState"),
                                 key: "state",
-                                width: 85,
+                                width: 74,
                                 render: (_, record) => {
                                     if (record.usedCount > 0 || record.usedCount >= record.maxUses) {
                                         return (
@@ -410,7 +410,8 @@ export function AdminRedeemCodesPanel() {
                             {
                                 title: t("admin.redeemTab.colRedeemUser"),
                                 key: "redeemUser",
-                                width: 120,
+                                width: 100,
+                                ellipsis: true,
                                 render: (_, record) =>
                                     record.redemption ? (
                                         <span className="font-medium">
@@ -423,7 +424,7 @@ export function AdminRedeemCodesPanel() {
                             {
                                 title: t("admin.redeemTab.colRedeemUserId"),
                                 key: "redeemUserId",
-                                width: 215,
+                                width: 195,
                                 render: (_, record) =>
                                     record.redemption ? (
                                         <Space size={4}>
@@ -445,7 +446,7 @@ export function AdminRedeemCodesPanel() {
                             {
                                 title: t("admin.redeemTab.colRedeemTime"),
                                 key: "redeemTime",
-                                width: 160,
+                                width: 145,
                                 render: (_, record) =>
                                     record.redemption ? (
                                         new Date(record.redemption.redeemedAt).toLocaleString(locale)
@@ -456,15 +457,15 @@ export function AdminRedeemCodesPanel() {
                             {
                                 title: t("admin.redeemTab.colExpiresAt"),
                                 dataIndex: "expiresAt",
-                                width: 160,
+                                width: 145,
                                 render: (v?: string | null) => (v ? new Date(v).toLocaleString(locale) : t("admin.redeemTab.neverExpires")),
                             },
                             {
                                 title: t("admin.redeemTab.colNote"),
                                 dataIndex: "note",
-                                width: 160,
+                                width: 125,
                                 render: (v: string) => (
-                                    <Typography.Text ellipsis={{ tooltip: v || "—" }} className="block max-w-[145px]">
+                                    <Typography.Text ellipsis={{ tooltip: v || "—" }} className="block max-w-[110px]">
                                         {v || "—"}
                                     </Typography.Text>
                                 ),
@@ -473,7 +474,7 @@ export function AdminRedeemCodesPanel() {
                                 title: t("admin.channelsTab.colActions"),
                                 key: "actions",
                                 fixed: "right",
-                                width: 100,
+                                width: 92,
                                 render: (_, record) => (
                                     <TableRowActions
                                         items={[
@@ -502,6 +503,8 @@ export function AdminRedeemCodesPanel() {
 
             <Modal
                 open={createOpen}
+                centered
+                styles={{ body: { maxHeight: "calc(100vh - 180px)", overflowY: "auto" } }}
                 title={t("admin.modals.redeem.title")}
                 onCancel={() => setCreateOpen(false)}
                 onOk={() => createForm.submit()}

@@ -194,6 +194,7 @@ export function AnalyticsDashboardPanel({ scope }: { scope: "all" | "self" }) {
                   },
                   yAxis: {
                       type: "value",
+                      minInterval: 1,
                       splitLine: { lineStyle: { color: splitLineColor, type: "dashed" } },
                       axisLabel: {
                           color: secondaryColor,
@@ -220,6 +221,7 @@ export function AnalyticsDashboardPanel({ scope }: { scope: "all" | "self" }) {
                   grid: { left: 160, right: 56, top: 10, bottom: 20 },
                   xAxis: {
                       type: "value",
+                      minInterval: 1,
                       splitLine: { lineStyle: { color: splitLineColor, type: "dashed" } },
                       axisLabel: {
                           color: secondaryColor,

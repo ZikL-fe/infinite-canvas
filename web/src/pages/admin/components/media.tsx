@@ -331,38 +331,38 @@ export function AdminMediaMonitorPanel() {
                                         {
                                             title: t("admin.mediaTab.colPreview"),
                                             key: "preview",
-                                            width: 64,
+                                            width: 52,
                                             render: (_, record) => <MediaPreviewThumb record={record} />,
                                         },
                                         {
                                             title: t("admin.mediaTab.colObjectKey"),
                                             dataIndex: "objectKey",
-                                            width: 220,
+                                            width: 170,
                                             render: (objectKey: string) => (
-                                                <Typography.Text ellipsis={{ tooltip: objectKey }} className="block max-w-[205px] font-mono text-xs">
+                                                <Typography.Text ellipsis={{ tooltip: objectKey }} className="block max-w-[155px] font-mono text-xs">
                                                     {objectKey}
                                                 </Typography.Text>
                                             ),
                                         },
-                                        { title: t("admin.mediaTab.colOwner"), dataIndex: "username", width: 110, ellipsis: true },
+                                        { title: t("admin.mediaTab.colOwner"), dataIndex: "username", width: 90, ellipsis: true },
                                         {
                                             title: t("admin.mediaTab.colModule"),
                                             key: "modules",
-                                            width: 155,
+                                            width: 115,
                                             render: (_, record) => <MediaModuleTags modules={record.modules} />,
                                         },
                                         {
                                             title: t("admin.mediaTab.colKind"),
                                             dataIndex: "kind",
-                                            width: 80,
+                                            width: 68,
                                             render: (kind: string) => <Tag style={{ marginInlineEnd: 0 }}>{getKindLabel(kind, t)}</Tag>,
                                         },
                                         {
                                             title: t("admin.mediaTab.colMimeType"),
                                             dataIndex: "mimeType",
-                                            width: 120,
+                                            width: 105,
                                             render: (mimeType: string) => (
-                                                <Typography.Text type="secondary" ellipsis={{ tooltip: mimeType }} className="block max-w-[105px] font-mono text-xs">
+                                                <Typography.Text type="secondary" ellipsis={{ tooltip: mimeType }} className="block max-w-[90px] font-mono text-xs">
                                                     {mimeType}
                                                 </Typography.Text>
                                             ),
@@ -370,13 +370,13 @@ export function AdminMediaMonitorPanel() {
                                         {
                                             title: t("admin.mediaTab.colSize"),
                                             dataIndex: "bytes",
-                                            width: 95,
+                                            width: 82,
                                             render: (bytes: number) => <span className="whitespace-nowrap">{formatBytes(bytes)}</span>,
                                         },
                                         {
                                             title: t("admin.mediaTab.colThumbSize"),
                                             key: "thumbBytes",
-                                            width: 100,
+                                            width: 85,
                                             render: (_, record: MediaItem) => {
                                                 const thumbBytes = getMediaThumbBytes(record.meta);
                                                 return <span className="whitespace-nowrap">{thumbBytes > 0 ? formatBytes(thumbBytes) : "—"}</span>;
@@ -385,14 +385,14 @@ export function AdminMediaMonitorPanel() {
                                         {
                                             title: t("admin.mediaTab.colUploadedAt"),
                                             dataIndex: "createdAt",
-                                            width: 165,
+                                            width: 145,
                                             render: (value: string) => new Date(value).toLocaleString(locale),
                                         },
                                         {
                                             title: t("admin.channelsTab.colActions"),
                                             key: "actions",
                                             fixed: "right",
-                                            width: 100,
+                                            width: 92,
                                             render: (_, record) => (
                                                 <TableRowActions
                                                     items={[
@@ -459,30 +459,30 @@ export function AdminMediaMonitorPanel() {
                                         {
                                             title: tabCfg.key === "canvas" ? t("admin.mediaTab.colCanvasTitle") : t("admin.mediaTab.colPromptTitle"),
                                             key: "title",
-                                            width: 260,
+                                            width: 220,
                                             render: (_, rec) => (
-                                                <div className="max-w-[245px] truncate" title={rec.prompt || rec.title}>
+                                                <div className="max-w-[205px] truncate" title={rec.prompt || rec.title}>
                                                     {rec.prompt || rec.title}
                                                 </div>
                                             ),
                                         },
-                                        { title: t("admin.mediaTab.colOwner"), dataIndex: "username", width: 115, ellipsis: true },
+                                        { title: t("admin.mediaTab.colOwner"), dataIndex: "username", width: 95, ellipsis: true },
                                         tabCfg.key === "canvas"
-                                            ? { title: t("admin.mediaTab.colNodes"), dataIndex: "nodeCount", width: 85 }
-                                            : { title: t("admin.mediaTab.colModel"), dataIndex: "model", width: 160, ellipsis: true },
-                                        { title: t("admin.mediaTab.colLinkedMedia"), dataIndex: "mediaCount", width: 90, render: (v: number) => t("admin.mediaTab.linkedMediaCount", { count: v ?? 0 }) },
+                                            ? { title: t("admin.mediaTab.colNodes"), dataIndex: "nodeCount", width: 72 }
+                                            : { title: t("admin.mediaTab.colModel"), dataIndex: "model", width: 135, ellipsis: true },
+                                        { title: t("admin.mediaTab.colLinkedMedia"), dataIndex: "mediaCount", width: 82, render: (v: number) => t("admin.mediaTab.linkedMediaCount", { count: v ?? 0 }) },
                                         {
                                             title: t("admin.mediaTab.colDataSize"),
                                             key: "mediaBytes",
-                                            width: 140,
+                                            width: 120,
                                             render: (_, rec) => <WorkspaceSizeCell mediaBytes={rec.mediaBytes} dataBytes={rec.dataBytes} />,
                                         },
-                                        { title: t("admin.mediaTab.colUpdatedAt"), dataIndex: "updatedAt", width: 165, render: (v: string) => new Date(v).toLocaleString(locale) },
+                                        { title: t("admin.mediaTab.colUpdatedAt"), dataIndex: "updatedAt", width: 145, render: (v: string) => new Date(v).toLocaleString(locale) },
                                         {
                                             title: t("admin.channelsTab.colActions"),
                                             key: "actions",
                                             fixed: "right",
-                                            width: 85,
+                                            width: 72,
                                             render: (_, rec) => (
                                                 <TableRowActions
                                                     items={[

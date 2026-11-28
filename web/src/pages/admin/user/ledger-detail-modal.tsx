@@ -163,6 +163,8 @@ export function LedgerDetailModal({
     return (
         <Modal
             open={Boolean(item)}
+            centered
+            styles={{ body: { maxHeight: "calc(100vh - 180px)", overflowY: "auto" } }}
             title={t("userPanels.ledgerDetail.title")}
             onCancel={onClose}
             footer={
@@ -569,6 +571,7 @@ export function LedgerDetailModal({
             ) : null}
             <Modal
                 open={Boolean(previewMedia)}
+                centered
                 title={t("userPanels.ledgerDetail.previewModalTitle")}
                 onCancel={() => {
                     setPreviewMedia(null);

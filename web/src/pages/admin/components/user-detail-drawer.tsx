@@ -381,7 +381,7 @@ export function UserDetailDrawer({
                                                     <Typography.Text strong>@{u.username}</Typography.Text>
                                                 </Descriptions.Item>
                                                 <Descriptions.Item label={t("userDetail.fields.userId")}>
-                                                    <Typography.Text copyable className="font-mono text-xs">
+                                                    <Typography.Text copyable className="whitespace-nowrap font-mono text-xs">
                                                         {u.id}
                                                     </Typography.Text>
                                                 </Descriptions.Item>

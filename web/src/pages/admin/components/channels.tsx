@@ -132,14 +132,14 @@ export function AdminChannelsPanel() {
                         {
                             title: t("admin.channelsTab.colName"),
                             dataIndex: "name",
-                            width: 150,
+                            width: 120,
                             ellipsis: true,
                             render: (name: string) => <span className="font-medium">{name}</span>,
                         },
                         {
                             title: t("admin.channelsTab.colAlias"),
                             dataIndex: "alias",
-                            width: 140,
+                            width: 105,
                             ellipsis: true,
                             render: (alias: string | undefined) =>
                                 alias?.trim() ? (
@@ -153,9 +153,9 @@ export function AdminChannelsPanel() {
                         {
                             title: t("admin.channelsTab.colBaseUrl"),
                             dataIndex: "baseUrl",
-                            width: 220,
+                            width: 180,
                             render: (baseUrl: string) => (
-                                <Typography.Text type="secondary" ellipsis={{ tooltip: baseUrl }} className="block max-w-[205px] text-xs">
+                                <Typography.Text type="secondary" ellipsis={{ tooltip: baseUrl }} className="block max-w-[165px] text-xs">
                                     {baseUrl || t("admin.channelsTab.noBaseUrl")}
                                 </Typography.Text>
                             ),
@@ -163,13 +163,13 @@ export function AdminChannelsPanel() {
                         {
                             title: t("admin.channelsTab.colFormat"),
                             dataIndex: "apiFormat",
-                            width: 88,
+                            width: 76,
                             render: (fmt: string) => <Tag style={{ marginInlineEnd: 0 }}>{fmt === "gemini" ? "Gemini" : "OpenAI"}</Tag>,
                         },
                         {
                             title: t("admin.channelsTab.colKeyStatus"),
                             key: "apiKey",
-                            width: 135,
+                            width: 115,
                             render: (_, record) =>
                                 record.hasApiKey ? (
                                     <Tag color="green" style={{ marginInlineEnd: 0 }}>
@@ -184,13 +184,13 @@ export function AdminChannelsPanel() {
                         {
                             title: t("admin.channelsTab.colModels"),
                             key: "models",
-                            width: 80,
+                            width: 72,
                             render: (_, record) => t("admin.channelsTab.modelsCount", { count: record.models.length }),
                         },
                         {
                             title: t("admin.channelsTab.colEnabled"),
                             dataIndex: "enabled",
-                            width: 72,
+                            width: 60,
                             render: (enabled: boolean, record) => (
                                 <Switch size="small" checked={enabled} loading={saving} onChange={(checked) => void handleToggleChannelEnabled(record.id, checked)} />
                             ),
@@ -199,7 +199,7 @@ export function AdminChannelsPanel() {
                             title: t("admin.channelsTab.colActions"),
                             key: "actions",
                             fixed: "right",
-                            width: 100,
+                            width: 92,
                             render: (_, record) => (
                                 <TableRowActions
                                     items={[

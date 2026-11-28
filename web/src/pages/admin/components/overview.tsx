@@ -136,39 +136,34 @@ export function AdminOverviewPanel({ onManageAnnouncements }: { onManageAnnounce
                 </Col>
             </Row>
 
-            <Row gutter={[16, 16]}>
-                <Col xs={24} lg={15}>
-                    <ConsumptionTrendCard
-                        title={t("admin.overviewTab.trendTitle")}
-                        days={days}
-                        onDaysChange={(nextDays) => {
-                            const next = nextDays as 7 | 14 | 30;
-                            setDays(next);
-                            void loadOverview(next, { trendOnly: true });
-                        }}
-                        dailyTrend={overview?.dailyTrend ?? []}
-                        topModels={overview?.topModels ?? []}
-                        rangeConsumedCredits={overview?.rangeConsumedCredits ?? 0}
-                        rangeCalls={overview?.rangeCalls ?? 0}
-                        loading={loading || trendLoading}
-                    />
-                </Col>
-                <Col xs={24} lg={9}>
-                    <AnnouncementsCard
-                        items={overview?.announcements ?? []}
-                        loading={loading}
-                        extra={
-                            <Button
-                                type="link"
-                                size="small"
-                                onClick={() => (onManageAnnouncements ? onManageAnnouncements() : navigate("/admin/settings-announcements"))}
-                            >
-                                {t("admin.overviewTab.manageAnnouncements")}
-                            </Button>
-                        }
-                    />
-                </Col>
-            </Row>
+            <ConsumptionTrendCard
+                title={t("admin.overviewTab.trendTitle")}
+                days={days}
+                onDaysChange={(nextDays) => {
+                    const next = nextDays as 7 | 14 | 30;
+                    setDays(next);
+                    void loadOverview(next, { trendOnly: true });
+                }}
+                dailyTrend={overview?.dailyTrend ?? []}
+                topModels={overview?.topModels ?? []}
+                rangeConsumedCredits={overview?.rangeConsumedCredits ?? 0}
+                rangeCalls={overview?.rangeCalls ?? 0}
+                loading={loading || trendLoading}
+            />
+
+            <AnnouncementsCard
+                items={overview?.announcements ?? []}
+                loading={loading}
+                extra={
+                    <Button
+                        type="link"
+                        size="small"
+                        onClick={() => (onManageAnnouncements ? onManageAnnouncements() : navigate("/admin/settings-announcements"))}
+                    >
+                        {t("admin.overviewTab.manageAnnouncements")}
+                    </Button>
+                }
+            />
 
             <Row gutter={[16, 16]}>
                 <Col xs={24} sm={12}>

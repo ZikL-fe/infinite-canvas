@@ -89,12 +89,13 @@ export function ConsumptionTrendCard({
                         </span>
                     }
                     extra={
-                        <Space wrap>
-                            <Typography.Text type="secondary" className="text-xs">
+                        <div className="flex flex-wrap items-center justify-end gap-2">
+                            <Typography.Text type="secondary" className="whitespace-nowrap text-xs">
                                 {t("userPanels.trendCard.rangeSummary", { credits: rangeConsumedCredits, calls: rangeCalls })}
                             </Typography.Text>
                             <Segmented
                                 size="small"
+                                className="shrink-0 whitespace-nowrap"
                                 value={days}
                                 onChange={(val) => onDaysChange(Number(val))}
                                 options={[
@@ -103,14 +104,22 @@ export function ConsumptionTrendCard({
                                     { label: t("userPanels.trendCard.daysOption", { days: 30 }), value: 30 },
                                 ]}
                             />
-                        </Space>
+                        </div>
                     }
                 >
                     {dailyTrend.length ? (
                         <div className="overflow-x-auto pb-1">
-                            <div className={`flex h-48 items-end gap-1.5 pt-4 ${dailyTrend.length > 14 ? "min-w-[380px]" : ""}`}>
-                                {dailyTrend.map((item) => {
+                            <div className={`flex h-48 items-end pt-4 ${dailyTrend.length > 14 ? "min-w-[340px] gap-1" : "gap-1.5"}`}>
+                                {dailyTrend.map((item, index) => {
                                     const heightPct = item.credits > 0 ? Math.max(6, Math.round((item.credits / maxCredits) * 100)) : 2;
+                                    const labelStep = dailyTrend.length > 20 ? 5 : dailyTrend.length > 10 ? 2 : 1;
+                                    const showLabel =
+                                        labelStep === 1 ||
+                                        index === 0 ||
+                                        index === dailyTrend.length - 1 ||
+                                        (index % labelStep === 0 && dailyTrend.length - 1 - index >= Math.max(2, Math.ceil(labelStep / 2)));
+                                    const labelAlignClass =
+                                        index === 0 ? "left-0" : index === dailyTrend.length - 1 ? "right-0" : "left-1/2 -translate-x-1/2";
                                     return (
                                         <Tooltip
                                             key={item.date}
@@ -131,9 +140,16 @@ export function ConsumptionTrendCard({
                                                         }}
                                                     />
                                                 </div>
-                                                <span className="truncate text-[10px]" style={{ color: token.colorTextSecondary }}>
-                                                    {item.date.slice(5)}
-                                                </span>
+                                                <div className="relative h-4 w-full">
+                                                    {showLabel ? (
+                                                        <span
+                                                            className={`absolute top-0 whitespace-nowrap text-[10px] leading-4 ${labelAlignClass}`}
+                                                            style={{ color: token.colorTextSecondary }}
+                                                        >
+                                                            {item.date.slice(5)}
+                                                        </span>
+                                                    ) : null}
+                                                </div>
                                             </div>
                                         </Tooltip>
                                     );

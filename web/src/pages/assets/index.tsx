@@ -534,6 +534,8 @@ export default function AssetsPage() {
                 title={editingAsset ? t("assets.edit") : t("assets.add")}
                 open={isAssetOpen}
                 width={980}
+                centered
+                styles={{ body: { maxHeight: "calc(100vh - 180px)", overflowY: "auto" } }}
                 onCancel={() => setIsAssetOpen(false)}
                 onOk={() => void saveAsset()}
                 okText={t("common.save")}

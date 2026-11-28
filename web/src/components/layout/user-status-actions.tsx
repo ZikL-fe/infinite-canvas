@@ -165,6 +165,7 @@ export function UserStatusActions({ variant = "default", onOpenShortcuts, onOpen
                     <Popover
                         trigger="hover"
                         placement="bottomRight"
+                        mouseEnterDelay={0.25}
                         arrow={false}
                         content={
                             <div className="w-64 space-y-3 py-0.5">
